@@ -41,16 +41,42 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
 - node-local-dns enabled at platform layer
 - Platform prerequisites are provided as Terraform in `platform-prerequisites/terraform`.
   - Use the temporary manual wrapper at `platform-prerequisites/terraform/examples/dev`.
+- Confirm Kubernetes context and namespace access before bootstrap/apply:
+  - `kubectl config current-context`
+  - `kubectl get serviceaccount default -n mongodb`
 - Run the dev secret bootstrap script before manifest apply/build:
   - `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh`
   - The script checks namespace/secret state, reuses local escrow key when present, and only generates a new key when needed.
 
 ## Apply Order (GitOps)
-0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`).
+0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`):
+   - `scripts/run-platform-prereq.sh`
+  - `(cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan)`
 1. Bootstrap dev secret state: `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh`.
 2. Apply `gitops/operators/base`.
 3. Apply `policies/kyverno`.
 4. Apply the dev overlay: `k8s/overlays/dev`.
+
+## Connecting to the Database
+- Username: `clusterAdmin`
+- Retrieve the auto-generated password:
+  - `kubectl get secret psmdb-secrets -n mongodb -o jsonpath='{.data.MONGODB_CLUSTER_ADMIN_PASSWORD}' | base64 --decode`
+- Use this username/password with MongoDB Compass or application connection settings.
+
+## Secret Handling (No Git Leakage)
+- You do not type a password into README commands. The bootstrap script handles key material automatically.
+- If cluster secret `psmdb-encryption-key` already exists, the script exits without changing cryptographic state.
+- If cluster secret is missing and local escrow file exists, the script reuses local escrow key.
+- If both are missing, the script generates a new key using `openssl rand -base64 32`.
+- Generated key is saved only to local file `.local-dev-encryption-key.txt` with mode `600`.
+- `.local-dev-encryption-key.txt` is added to `.gitignore` automatically and is never committed.
+- Key is sent to Kubernetes through stdin (`--from-file=encryptionKey=/dev/stdin`), so it is not exposed as a CLI argument.
+- Use `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh` for audit logging; the log records the command, not secret content.
+
+## Secret Recovery Warning
+- This repository uses retained EBS volumes.
+- If old encrypted data volumes remain but both Kubernetes secret and local escrow key are lost, old data cannot be decrypted.
+- For disposable dev data, delete orphaned volumes and bootstrap fresh state.
 
 ## Notes on Encryption at Rest
 The base CR references `psmdb-encryption-key` for database engine encryption bootstrap material. If your platform standard requires AWS KMS or Vault-backed key management, replace the base encryption configuration with your approved Percona-at-rest encryption backend and keep the same secret authority boundaries.
