@@ -1,0 +1,85 @@
+apiVersion: psmdb.percona.com/v1
+kind: PerconaServerMongoDB
+metadata:
+  name: psmdb
+  namespace: mongodb
+  labels:
+    app.kubernetes.io/name: percona-server-mongodb
+spec:
+  crVersion: 1.18.0
+  image: percona/percona-server-mongodb:7.0.12-7
+  imagePullPolicy: IfNotPresent
+  pause: false
+  unmanaged: false
+  tls:
+    mode: requireTLS
+    allowInvalidCertificates: false
+  secrets:
+    users: psmdb-secrets
+    encryptionKey: psmdb-encryption-key
+    ssl: psmdb-ssl
+    sslInternal: psmdb-ssl-internal
+  replsets:
+    - name: rs0
+      serviceAccountName: psmdb-db
+      size: 3
+      podDisruptionBudget:
+        maxUnavailable: 1
+      affinity:
+        antiAffinityTopologyKey: topology.kubernetes.io/zone
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: percona-server-mongodb
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 4Gi
+      volumeSpec:
+        persistentVolumeClaim:
+          storageClassName: gp3-mongodb
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 200Gi
+      # Sidecar resource fencing for PBM-intensive operations.
+      sidecars:
+        - name: pbm-agent
+          image: percona/percona-backup-mongodb:2.6.0
+          command: ["pbm-agent"]
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+  backup:
+    enabled: true
+    image: percona/percona-backup-mongodb:2.6.0
+    storages:
+      s3-main:
+        type: s3
+        s3:
+          bucket: CHANGE_ME_BACKUP_BUCKET
+          prefix: psmdb
+          region: CHANGE_ME_AWS_REGION
+    tasks:
+      - name: daily-full
+        enabled: true
+        schedule: "0 2 * * *"
+        keep: 7
+        storageName: s3-main
+    pitr:
+      enabled: true
+      oplogOnly: false
+      compressionType: gzip
+      compressionLevel: 6
+      oplogSpanMin: 10
+      storageName: s3-main

@@ -1,0 +1,28 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pbm-sidecar-resource-fencing
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: validate-pbm-sidecar-resources
+      match:
+        any:
+          - resources:
+              kinds:
+                - PerconaServerMongoDB
+      validate:
+        message: "PerconaServerMongoDB must define pbm-agent sidecar requests and limits."
+        foreach:
+          - list: request.object.spec.replsets
+            pattern:
+              sidecars:
+                - name: pbm-agent
+                  resources:
+                    requests:
+                      cpu: "?*"
+                      memory: "?*"
+                    limits:
+                      cpu: "?*"
+                      memory: "?*"

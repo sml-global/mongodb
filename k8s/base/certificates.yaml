@@ -1,0 +1,65 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: mongodb-selfsigned
+  namespace: mongodb
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: psmdb-ssl
+  namespace: mongodb
+spec:
+  secretName: psmdb-ssl
+  duration: 2160h
+  renewBefore: 360h
+  commonName: psmdb
+  dnsNames:
+    - psmdb-rs0
+    - psmdb-rs0.mongodb
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    kind: Issuer
+    name: mongodb-selfsigned
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: psmdb-ssl-internal
+  namespace: mongodb
+spec:
+  secretName: psmdb-ssl-internal
+  duration: 2160h
+  renewBefore: 360h
+  commonName: psmdb-internal
+  dnsNames:
+    - "*.psmdb-rs0.mongodb.svc.cluster.local"
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    kind: Issuer
+    name: mongodb-selfsigned
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mongodb-app-client
+  namespace: mongodb
+spec:
+  secretName: mongodb-app-client-cert
+  duration: 720h
+  renewBefore: 120h
+  commonName: app-client
+  usages:
+    - client auth
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    kind: Issuer
+    name: mongodb-selfsigned

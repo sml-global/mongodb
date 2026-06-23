@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - require-wffc-storageclass.yaml
+  - block-app-mongo-password-secrets.yaml
+  - require-pbm-sidecar-resources.yaml

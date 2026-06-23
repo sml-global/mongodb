@@ -1,0 +1,95 @@
+# MongoDB on EKS (Declarative, Free-Tool Stack)
+
+This repository deploys MongoDB on EKS using a fully declarative GitOps model:
+- Flux HelmRelease for tenant-scoped operator installation
+- Percona Operator for MongoDB for database lifecycle
+- Percona Backup for MongoDB (PBM) for authoritative logical backup and restore
+- cert-manager for X.509 auth and TLS
+- Kyverno for policy enforcement
+- Kustomize overlay for dev
+
+## Guardrails
+- No imperative scripts for Kubernetes state changes.
+- Operator CRDs control database topology and lifecycle.
+- PBM logical restore is the only authoritative multi-node restore path.
+- Infrastructure snapshots are compliance/forensics artifacts, not replica-set restore authority.
+- EFS is not allowed for MongoDB data volumes; this repository uses EBS-backed storage.
+
+## Folder Layout
+- `gitops/operators/base`: tenant-scoped Percona operator installation via Flux HelmRelease
+- `k8s/base`: shared MongoDB and platform resources
+- `k8s/overlays/dev`: dev settings and native bootstrap secrets
+- `policies/kyverno`: policy-as-code guardrails
+
+## Secret Authority Boundaries
+- cert-manager authority:
+  - member-to-member TLS certificates
+  - app client X.509 certificate issuance
+- Dev bootstrap secret (`psmdb-encryption-key`) is managed by `scripts/bootstrap-dev-secrets.sh` and created directly in-cluster.
+
+## Prerequisites
+- Existing multi-AZ EKS cluster
+- Flux controllers installed (`source-controller`, `helm-controller`, `kustomize-controller`)
+- `mongodb` namespace provisioned by platform infrastructure (either existing or via `platform-prerequisites/terraform`)
+- `mongodb` namespace contains required ServiceAccounts before apply:
+  - `psmdb-db` (or your configured workload ServiceAccount) with AWS Pod Identity/IRSA for backup and encryption integrations
+  - `default` (or app-specific ServiceAccounts) with only required least-privilege access
+- cert-manager installed cluster-wide
+- Kyverno installed cluster-wide if policy enforcement from this repo will be applied
+- EKS Pod Identity configured for tenant workloads as needed
+- AWS EBS CSI driver available with support for `ebs.csi.aws.com`
+- node-local-dns enabled at platform layer
+- Platform prerequisites are provided as Terraform in `platform-prerequisites/terraform`.
+  - Use the temporary manual wrapper at `platform-prerequisites/terraform/examples/dev`.
+- Run the dev secret bootstrap script before manifest apply/build:
+  - `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh`
+  - The script checks namespace/secret state, reuses local escrow key when present, and only generates a new key when needed.
+
+## Apply Order (GitOps)
+0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`).
+1. Bootstrap dev secret state: `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh`.
+2. Apply `gitops/operators/base`.
+3. Apply `policies/kyverno`.
+4. Apply the dev overlay: `k8s/overlays/dev`.
+
+## Notes on Encryption at Rest
+The base CR references `psmdb-encryption-key` for database engine encryption bootstrap material. If your platform standard requires AWS KMS or Vault-backed key management, replace the base encryption configuration with your approved Percona-at-rest encryption backend and keep the same secret authority boundaries.
+
+## Platform Boundary
+- This repository does not install cluster-wide cert-manager, Kyverno, or namespaces.
+- This repository assumes those platform services already exist where required.
+- This repository keeps a MongoDB-specific StorageClass manifest to avoid accidental fallback to a cluster default such as EFS.
+
+## ADR: Percona Over Bitnami
+- Decision: Use Percona Operator for MongoDB instead of Bitnami MongoDB chart.
+- Status: Accepted.
+- Context: This platform requires declarative day-2 operations, PITR-backed restores, and Kubernetes-native lifecycle management in multi-AZ EKS.
+- Why Percona:
+  - Operator control loop for lifecycle operations on top of MongoDB consensus behavior.
+  - Native PBM integration for logical backups and point-in-time recovery.
+  - Better fit for CRD-driven GitOps operations where backup/restore and upgrades are first-class.
+- Why not Bitnami for this repo:
+  - Primarily chart-templated deployment path with less integrated operator-level day-2 control for this target architecture.
+  - Would require additional custom operational glue to match PITR and lifecycle expectations already modeled here.
+- Consequences:
+  - Dev keeps replica-set topology parity (3 members).
+  - Dev cost is reduced by lower resource requests and disabled scheduled backups, not by changing topology.
+
+## Validation
+Use local repeatable scripts for validation. CI/CD is intentionally not part of this repository scope.
+
+## Repeatable Scripts and Command Recording
+- Operational commands are provided in `scripts/` and should be used instead of ad-hoc one-offs.
+- Run `scripts/record-command.sh -- <your command>` to execute and append an auditable entry to `docs/operations/command-log.md`.
+- For platform bootstrap, use `scripts/run-platform-prereq.sh`.
+- For secret bootstrap, use `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh`.
+- For manifest render checks, use `scripts/validate-dev-render.sh`.
+
+## Terraform Merge Strategy
+- `platform-prerequisites/terraform` is a reusable module (no provider/backend blocks).
+- `platform-prerequisites/terraform/examples/dev` is a temporary local-state wrapper for manual-first deployment.
+- After dev validation, merge the module into your main Terraform project and discard the wrapper.
+
+## Execution Tracking
+- Current execution snapshot: `docs/operations/execution-status-2026-06-23.md`.
+- This snapshot records implemented scope, pending decisions, and missing execution steps before further changes.

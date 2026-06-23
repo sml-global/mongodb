@@ -1,0 +1,20 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-wffc-for-mongodb-storageclass
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: validate-gp3-mongodb-storageclass
+      match:
+        any:
+          - resources:
+              kinds:
+                - StorageClass
+              names:
+                - gp3-mongodb
+      validate:
+        message: "gp3-mongodb must use WaitForFirstConsumer."
+        pattern:
+          volumeBindingMode: WaitForFirstConsumer

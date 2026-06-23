@@ -1,0 +1,13 @@
+cluster_name    = "my-eks-cluster"
+pbm_bucket_name = "my-mongodb-pbm-backups"
+mongodb_workload_service_account_name = "psmdb-db"
+
+# Keep true for EKS Pod Identity.
+use_pod_identity = true
+
+# Only needed for IRSA mode (when use_pod_identity=false).
+oidc_provider_arn = ""
+oidc_provider_url = ""
+
+# Optional, only if PBM or encryption flow requires KMS key access.
+kms_key_arn = ""
