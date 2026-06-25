@@ -1,2 +1,3 @@
 .local-dev-encryption-key.txt
 docs/operations/command-log.md
+k8s/overlays/dev/patch-psmdb-injected.yaml

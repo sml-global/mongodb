@@ -47,6 +47,11 @@
   - reduced resources and retention windows
   - no scheduled backups and PITR disabled for cost control while preserving topology parity
 
+## Dev Overlay Injection
+- The dev MongoDB patch is authored as a tracked template and rendered into an ignored generated file.
+- Terraform outputs provide the PBM S3 bucket name and region for injection before any dev render/apply.
+- Validation and apply workflows must invoke the injection step first so the generated overlay exists before Kustomize runs.
+
 ## Reliability and Recovery
 - Replica set size 3 distributed across AZs.
 - PDB prevents quorum loss from voluntary disruptions.
