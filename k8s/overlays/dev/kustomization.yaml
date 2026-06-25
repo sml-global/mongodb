@@ -5,4 +5,4 @@ resources:
   - ../../base
 
 patches:
-  - path: patch-psmdb.yaml
+  - path: patch-psmdb-injected.yaml

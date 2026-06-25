@@ -30,6 +30,10 @@ Current posture for that example:
 - Dev phase uses manual credentials from local `terraform.tfvars` (no IAM DB auth in this phase).
 - Future production should use managed credentials (for example Secrets Manager-backed workflow).
 
+The dev overlay injector expects these outputs from the manual-first wrapper:
+- `backup_bucket_name`
+- `backup_bucket_region`
+
 ## Access Requirement (Important)
 The IAM identity running Terraform must have Kubernetes API authorization in the target EKS cluster.
 

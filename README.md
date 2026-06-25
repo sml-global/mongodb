@@ -48,14 +48,21 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
   - `scripts/bootstrap-dev-secrets.sh`
   - The script checks namespace/secret state, reuses local escrow key when present, and only generates a new key when needed.
 
+## Dev Overlay Injection
+- After Terraform apply and before any `kustomize build`, run:
+  - `scripts/inject-dev-db-values.sh`
+- This generates `k8s/overlays/dev/patch-psmdb-injected.yaml` from the tracked template.
+- Skipping this step will cause the dev overlay to fail to build by design.
+
 ## Apply Order (GitOps)
 0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`):
    - `scripts/run-platform-prereq.sh`
   - `(cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan)`
 1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
-2. Apply `gitops/operators/base`.
-3. Apply `policies/kyverno`.
-4. Apply the dev overlay: `k8s/overlays/dev`.
+2. Run dev overlay injection: `scripts/inject-dev-db-values.sh`.
+3. Apply `gitops/operators/base`.
+4. Apply `policies/kyverno`.
+5. Apply the dev overlay: `k8s/overlays/dev`.
 
 ## Connecting to the Database
 - Username: `clusterAdmin`
@@ -107,6 +114,7 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 - Operational commands are provided in `scripts/` and should be used instead of ad-hoc one-offs.
 - For platform bootstrap, use `scripts/run-platform-prereq.sh`.
 - For secret bootstrap, use `scripts/bootstrap-dev-secrets.sh`.
+- For dev overlay injection, use `scripts/inject-dev-db-values.sh`.
 - For manifest render checks, use `scripts/validate-dev-render.sh`.
 
 ## Terraform Merge Strategy

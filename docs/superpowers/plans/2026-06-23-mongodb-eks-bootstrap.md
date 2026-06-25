@@ -64,10 +64,16 @@
 **Files:**
 - Use existing scripts under `scripts/`.
 
-- [ ] Run `scripts/validate-dev-render.sh`.
-- [ ] Run validation scripts and preserve outputs as needed in your execution workflow.
+- [x] Run `scripts/validate-dev-render.sh`.
+- [x] Run validation scripts as part of the local dev workflow.
 
-### Task 7: Documentation and usage
+### Task 7: Dev overlay injection workflow
+- [x] Convert the dev Mongo patch into a tracked template.
+- [x] Generate the injected overlay from Terraform outputs before render/apply.
+- [x] Keep the generated overlay ignored by git.
+- [x] Make dev render validation invoke the injector first.
+
+### Task 8: Documentation and usage
 **Files:**
 - Create: `README.md`
 
