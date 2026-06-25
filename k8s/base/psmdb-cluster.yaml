@@ -67,9 +67,7 @@ spec:
       s3-main:
         type: s3
         s3:
-          bucket: CHANGE_ME_BACKUP_BUCKET
           prefix: psmdb
-          region: CHANGE_ME_AWS_REGION
     tasks:
       - name: daily-full
         enabled: true
