@@ -21,6 +21,11 @@ scripts/run-platform-prereq.sh
 
 The script runs `terraform init`, `fmt`, `validate`, and `plan` in one go against `examples/dev`.
 
+## Additional Example: Dev PostgreSQL (RDS)
+For a cost-focused dev PostgreSQL 18 form (RDS `db.t4g.small`) using existing subnets, see:
+
+- `platform-prerequisites/terraform/examples/dev-postgresql`
+
 ## Access Requirement (Important)
 The IAM identity running Terraform must have Kubernetes API authorization in the target EKS cluster.
 

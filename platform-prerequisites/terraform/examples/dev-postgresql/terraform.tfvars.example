@@ -1,0 +1,24 @@
+aws_region = "ap-southeast-1"
+vpc_id     = "vpc-xxxxxxxx"
+
+# Use your existing private subnets. No subnet resources are created by this example.
+private_subnet_ids = [
+  "subnet-aaaaaaaa",
+  "subnet-bbbbbbbb"
+]
+
+# Preferred: allow inbound from your app/workload security group.
+allowed_source_security_group_id = "sg-cccccccc"
+
+# Keep empty unless temporary CIDR-based access is needed.
+allowed_cidr_blocks = []
+
+db_identifier       = "pg18-dev"
+engine_version      = "18"
+instance_class      = "db.t4g.small"
+allocated_storage   = 20
+max_allocated_storage = 30
+
+db_name             = "app"
+db_master_username  = "pgadmin"
+db_master_password  = "CHANGE_ME_STRONG_DEV_PASSWORD"
