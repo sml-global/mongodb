@@ -27,5 +27,10 @@ Create a reusable Terraform example that provisions dev PostgreSQL 18 on RDS `db
 
 ### Task 3: Operator handoff docs
 - [x] Document that subnets are reused and not created.
-- [x] Document no-Secrets-Manager credential path and state-file tradeoff.
+- [x] Document dev manual-credential path, state-file tradeoff, and future production Secrets Manager direction.
 - [x] Provide copy-edit-run steps for `terraform.tfvars` workflow.
+
+### Task 4: Authentication posture decision (this phase)
+- [x] Keep IAM DB authentication out of scope for this phase.
+- [x] Keep static dev credentials as explicit temporary tradeoff.
+- [x] Record production direction to managed credentials in docs/spec.

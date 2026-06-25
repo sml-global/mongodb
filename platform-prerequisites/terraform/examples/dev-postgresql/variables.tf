@@ -74,7 +74,7 @@ variable "db_master_username" {
 }
 
 variable "db_master_password" {
-  description = "Master password for the database (stored in terraform state)."
+  description = "Master password for the dev database (stored in terraform state). Keep local only."
   type        = string
   sensitive   = true
 }
