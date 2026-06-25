@@ -65,7 +65,7 @@
 - Use existing scripts under `scripts/`.
 
 - [ ] Run `scripts/validate-dev-render.sh`.
-- [ ] Record validation commands in `docs/operations/command-log.md`.
+- [ ] Run validation scripts and preserve outputs as needed in your execution workflow.
 
 ### Task 7: Documentation and usage
 **Files:**

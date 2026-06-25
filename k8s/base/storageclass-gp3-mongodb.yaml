@@ -7,8 +7,6 @@ parameters:
   type: gp3
   encrypted: "true"
   fsType: xfs
-  iops: "6000"
-  throughput: "250"
 reclaimPolicy: Retain
 allowVolumeExpansion: true
 volumeBindingMode: WaitForFirstConsumer

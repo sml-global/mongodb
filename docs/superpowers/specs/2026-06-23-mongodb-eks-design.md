@@ -13,7 +13,7 @@
 - Application authentication must use X.509 certificates.
 - cert-manager owns application and intra-cluster TLS material issuance.
 - External Secrets Operator (ESO) is limited to infrastructure bootstrap secrets only.
-- EBS StorageClass must use WaitForFirstConsumer and explicit gp3 IOPS/throughput.
+- EBS StorageClass must use WaitForFirstConsumer with default gp3 baseline performance.
 - Multi-AZ topology spread and anti-affinity are mandatory.
 - Sidecar resource fencing for PBM is mandatory.
 - All controls must be declarative and GitOps-compatible.
