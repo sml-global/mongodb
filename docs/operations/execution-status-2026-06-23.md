@@ -15,7 +15,7 @@ This file records what has been implemented, what remains open, and which items 
 - Dev overlay includes explicit backup storage block placeholders.
 - Terraform platform prerequisites added under `platform-prerequisites/terraform`.
 - Repeatable scripts added under `scripts/`.
-- Command execution logging added in `docs/operations/command-log.md`.
+- Scripted validation and operational helpers are present under `scripts/`.
 - Workload ServiceAccount (`psmdb-db`) is explicitly set in the dev overlay to keep pod identity mapping deterministic.
 - Terraform README now documents EKS API authorization requirement for the runner identity.
 - Terraform was refactored into a pure module (`platform-prerequisites/terraform`) plus temporary manual wrapper (`platform-prerequisites/terraform/examples/dev`).
@@ -62,7 +62,7 @@ This file records what has been implemented, what remains open, and which items 
   - no static PBM credentials secret reference
   - memory request/limit pinning for Guaranteed QoS in current overlays
   - dev storage block placeholders present
-- Evidence commands and timestamps are recorded in `docs/operations/command-log.md`.
+- Evidence has been validated through local render checks and script-based execution.
 
 ## Next Step Gate
 No additional architectural behavior changes should be made until manual-first runtime validation is executed and recorded.

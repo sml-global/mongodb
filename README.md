@@ -45,14 +45,14 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
   - `kubectl config current-context`
   - `kubectl get serviceaccount default -n mongodb`
 - Run the dev secret bootstrap script before manifest apply/build:
-  - `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh`
+  - `scripts/bootstrap-dev-secrets.sh`
   - The script checks namespace/secret state, reuses local escrow key when present, and only generates a new key when needed.
 
 ## Apply Order (GitOps)
 0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`):
    - `scripts/run-platform-prereq.sh`
   - `(cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan)`
-1. Bootstrap dev secret state: `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh`.
+1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
 2. Apply `gitops/operators/base`.
 3. Apply `policies/kyverno`.
 4. Apply the dev overlay: `k8s/overlays/dev`.
@@ -71,7 +71,6 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
 - Generated key is saved only to local file `.local-dev-encryption-key.txt` with mode `600`.
 - `.local-dev-encryption-key.txt` is added to `.gitignore` automatically and is never committed.
 - Key is sent to Kubernetes through stdin (`--from-file=encryptionKey=/dev/stdin`), so it is not exposed as a CLI argument.
-- Use `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh` for audit logging; the log records the command, not secret content.
 
 ## Secret Recovery Warning
 - This repository uses retained EBS volumes.
@@ -106,9 +105,8 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 
 ## Repeatable Scripts and Command Recording
 - Operational commands are provided in `scripts/` and should be used instead of ad-hoc one-offs.
-- Run `scripts/record-command.sh -- <your command>` to execute and append an auditable entry to `docs/operations/command-log.md`.
 - For platform bootstrap, use `scripts/run-platform-prereq.sh`.
-- For secret bootstrap, use `scripts/record-command.sh -- scripts/bootstrap-dev-secrets.sh`.
+- For secret bootstrap, use `scripts/bootstrap-dev-secrets.sh`.
 - For manifest render checks, use `scripts/validate-dev-render.sh`.
 
 ## Terraform Merge Strategy
