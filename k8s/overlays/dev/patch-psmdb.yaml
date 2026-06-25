@@ -33,6 +33,3 @@ spec:
     tasks:
       - name: daily-full
         enabled: false
-        schedule: "0 3 * * *"
-        keep: 3
-        storageName: s3-main
