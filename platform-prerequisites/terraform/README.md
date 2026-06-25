@@ -26,6 +26,10 @@ For a cost-focused dev PostgreSQL 18 form (RDS `db.t4g.small`) using existing su
 
 - `platform-prerequisites/terraform/examples/dev-postgresql`
 
+Current posture for that example:
+- Dev phase uses manual credentials from local `terraform.tfvars` (no IAM DB auth in this phase).
+- Future production should use managed credentials (for example Secrets Manager-backed workflow).
+
 ## Access Requirement (Important)
 The IAM identity running Terraform must have Kubernetes API authorization in the target EKS cluster.
 
