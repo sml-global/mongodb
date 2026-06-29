@@ -9,7 +9,12 @@ This catalog is the source of truth for embedded configuration in this repositor
 Process and operator workflow references:
 - `platform-prerequisites/terraform/README.md`:
   - `Operator Onboarding Flow`
+  - `Operator Readiness Gates`
   - `Script Execution Flows`
+
+Boundary note:
+- This catalog explains configuration inventory only.
+- Operator sequencing, gates, and script control flow are maintained in the Terraform README.
 
 ## Configuration Policy
 - Tracked workload manifests are static for dev. No runtime manifest mutation is used.
