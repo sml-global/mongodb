@@ -6,14 +6,6 @@ output "pbm_bucket_name" {
   value = module.mongodb_prerequisites.pbm_bucket_name
 }
 
-output "backup_bucket_name" {
-  value = module.mongodb_prerequisites.pbm_bucket_name
-}
-
-output "backup_bucket_region" {
-  value = var.aws_region
-}
-
 output "operator_iam_role_arn" {
   value = module.mongodb_prerequisites.operator_iam_role_arn
 }

@@ -9,11 +9,16 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
 - Kustomize overlay for dev
 
 ## Guardrails
-- No imperative scripts for Kubernetes state changes.
+- No imperative scripts for workload manifest mutation.
 - Operator CRDs control database topology and lifecycle.
 - PBM logical restore is the only authoritative multi-node restore path.
 - Infrastructure snapshots are compliance/forensics artifacts, not replica-set restore authority.
 - EFS is not allowed for MongoDB data volumes; this repository uses EBS-backed storage.
+
+## Configuration Catalog
+- Complete YAML/TF/SH configuration inventory is maintained in:
+  - `docs/operations/dev-configuration-catalog.md`
+- Update that catalog whenever embedded configuration is added or changed.
 
 ## Folder Layout
 - `gitops/operators/base`: tenant-scoped Percona operator installation via Flux HelmRelease
@@ -46,37 +51,43 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
   - `kubectl get serviceaccount default -n mongodb`
 - Run the dev secret bootstrap script before manifest apply/build:
   - `scripts/bootstrap-dev-secrets.sh`
-  - The script checks namespace/secret state, reuses local escrow key when present, and only generates a new key when needed.
+  - The script only creates missing secrets and reuses local escrow files when present.
 
-## Dev Overlay Injection
-- After Terraform apply and before any `kustomize build`, run:
-  - `scripts/inject-dev-db-values.sh`
-- This generates `k8s/overlays/dev/patch-psmdb-injected.yaml` from the tracked template.
-- Skipping this step will cause the dev overlay to fail to build by design.
+## Dev Overlay Configuration
+- The dev patch is static and tracked in git at `k8s/overlays/dev/patch-psmdb.yaml`.
+- Backup bucket and region are intentionally hardcoded for deterministic dev behavior:
+  - bucket: `sml-oms-mongodb-backup-dev`
+  - region: `us-east-1`
+- No unresolved placeholders are permitted in tracked MongoDB dev manifests.
 
 ## Apply Order (GitOps)
 0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`):
    - `scripts/run-platform-prereq.sh`
   - `(cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan)`
 1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
-2. Run dev overlay injection: `scripts/inject-dev-db-values.sh`.
-3. Apply `gitops/operators/base`.
-4. Apply `policies/kyverno`.
-5. Apply the dev overlay: `k8s/overlays/dev`.
+2. Apply `gitops/operators/base`.
+3. Apply `policies/kyverno`.
+4. Apply the dev overlay: `k8s/overlays/dev`.
 
 ## Connecting to the Database
 - Username: `clusterAdmin`
-- Retrieve the auto-generated password:
+- Retrieve the bootstrap password:
   - `kubectl get secret psmdb-secrets -n mongodb -o jsonpath='{.data.MONGODB_CLUSTER_ADMIN_PASSWORD}' | base64 --decode`
 - Use this username/password with MongoDB Compass or application connection settings.
 
 ## Secret Handling (No Git Leakage)
 - You do not type a password into README commands. The bootstrap script handles key material automatically.
-- If cluster secret `psmdb-encryption-key` already exists, the script exits without changing cryptographic state.
+- If cluster secret `psmdb-encryption-key` already exists, the script skips creation.
+- If cluster secret `psmdb-secrets` already exists, the script skips creation.
 - If cluster secret is missing and local escrow file exists, the script reuses local escrow key.
-- If both are missing, the script generates a new key using `openssl rand -base64 32`.
+- If admin secret is missing and local escrow password exists, the script reuses it.
+- If escrow files are missing, the script generates:
+  - encryption key via `openssl rand -base64 32`
+  - admin password via `openssl rand -base64 24`
 - Generated key is saved only to local file `.local-dev-encryption-key.txt` with mode `600`.
+- Generated admin password is saved only to local file `.local-dev-admin-password.txt` with mode `600`.
 - `.local-dev-encryption-key.txt` is added to `.gitignore` automatically and is never committed.
+- `.local-dev-admin-password.txt` is added to `.gitignore` automatically and is never committed.
 - Key is sent to Kubernetes through stdin (`--from-file=encryptionKey=/dev/stdin`), so it is not exposed as a CLI argument.
 
 ## Secret Recovery Warning
@@ -114,7 +125,6 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 - Operational commands are provided in `scripts/` and should be used instead of ad-hoc one-offs.
 - For platform bootstrap, use `scripts/run-platform-prereq.sh`.
 - For secret bootstrap, use `scripts/bootstrap-dev-secrets.sh`.
-- For dev overlay injection, use `scripts/inject-dev-db-values.sh`.
 - For manifest render checks, use `scripts/validate-dev-render.sh`.
 
 ## Terraform Merge Strategy

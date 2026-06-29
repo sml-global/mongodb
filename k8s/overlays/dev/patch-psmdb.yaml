@@ -36,5 +36,5 @@ spec:
       s3-main:
         type: s3
         s3:
-          bucket: CHANGE_ME_DEV_BACKUP_BUCKET
-          region: CHANGE_ME_AWS_REGION
+          bucket: sml-oms-mongodb-backup-dev
+          region: us-east-1

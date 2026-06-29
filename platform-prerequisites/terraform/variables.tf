@@ -18,6 +18,7 @@ variable "mongodb_workload_service_account_name" {
 variable "pbm_bucket_name" {
   description = "S3 bucket name used by PBM for backups."
   type        = string
+  default     = "sml-oms-mongodb-backup-dev"
 }
 
 variable "iam_role_name" {
