@@ -13,12 +13,12 @@ This file records what has been implemented, what remains open, and which items 
 - Dev overlay backup subsystem enabled with scheduled backup tasks disabled.
 - Dev overlay explicitly disables PITR (`backup.pitr.enabled: false`) to avoid continuous oplog upload costs.
 - Dev overlay now uses static deterministic backup storage values (bucket/region).
-- Terraform platform prerequisites added under `platform-prerequisites/terraform`.
+- Terraform platform prerequisites added under `platform-prerequisites/terraform` (reusable layer at `platform-prerequisites/terraform/reusable`).
 - Repeatable scripts added under `scripts/`.
 - Scripted validation and operational helpers are present under `scripts/`.
 - Workload ServiceAccount (`psmdb-db`) is explicitly set in the dev overlay to keep pod identity mapping deterministic.
 - Terraform README now documents EKS API authorization requirement for the runner identity.
-- Terraform was refactored into a pure module (`platform-prerequisites/terraform`) plus manual runnable root (`platform-prerequisites/terraform/dev`).
+- Terraform was refactored into a pure module (`platform-prerequisites/terraform/reusable`) plus manual runnable root (`platform-prerequisites/terraform/dev`).
 - Dev hardcoded MongoDB user/password bootstrap secret was removed; operator can generate internal user credentials.
 - Dev bootstrap secrets now include both:
   - `psmdb-encryption-key` (encryption key)

@@ -35,7 +35,7 @@ What this setup is not for:
 
 | Folder | Purpose |
 |---|---|
-| `platform-prerequisites/terraform` | Reusable Terraform layer (no provider/backend lock-in). |
+| `platform-prerequisites/terraform/reusable` | Reusable Terraform layer (no provider/backend lock-in). |
 | `platform-prerequisites/terraform/dev` | Manual-first MongoDB prerequisite root used by local operators. |
 | `platform-prerequisites/terraform/dev-postgresql` | Manual-first Aurora PostgreSQL root used by local operators. |
 
@@ -52,17 +52,17 @@ Why this value:
 - `aw-gb0-d-oms-gen-s3-01` follows the 7-segment model
 
 ## Why Separate Roots Exist
-Short answer: `platform-prerequisites/terraform` is intentionally a reusable Terraform layer, while `dev/*` roots are runnable Terraform entrypoints.
+Short answer: `platform-prerequisites/terraform/reusable` is intentionally a reusable Terraform layer, while `dev/*` roots are runnable Terraform entrypoints.
 
 Why it is split:
-- Reusable Terraform layer (`platform-prerequisites/terraform`):
+- Reusable Terraform layer (`platform-prerequisites/terraform/reusable`):
   - keeps resources portable and easy to merge into a central platform repo
   - avoids locking this module to one local backend/provider/runtime shape
 - Runnable roots (`dev`, `dev-postgresql`):
   - provides providers and concrete root-level execution context
   - gives operators a ready-to-run manual workflow for this repo
 
-Can we run directly from `platform-prerequisites/terraform`?
+Can we run directly from `platform-prerequisites/terraform/reusable`?
 - Not recommended in current layout.
 - You would have to turn it into a root stack (provider/backend/root inputs), which reduces reusability.
 - If you want that model, we can flatten it in a follow-up change and drop the wrappers.
@@ -164,10 +164,10 @@ cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan
 
 | File | Category | Editable Settings | How To Change |
 |---|---|---|---|
-| `platform-prerequisites/terraform/variables.tf` | Module defaults | Namespace, SA name, PBM bucket, IAM role defaults, identity mode flags | Edit tracked defaults in git (shared baseline). |
+| `platform-prerequisites/terraform/reusable/variables.tf` | Module defaults | Namespace, SA name, PBM bucket, IAM role defaults, identity mode flags | Edit tracked defaults in git (shared baseline). |
 | `platform-prerequisites/terraform/dev/variables.tf` | MongoDB root defaults | `aws_region`, bucket default, namespace/SA defaults | Edit tracked defaults in git for repo baseline. |
 | `platform-prerequisites/terraform/dev/terraform.tfvars` | Local runtime values | Per-operator/per-environment overrides | Local file edit (not committed). |
-| `platform-prerequisites/terraform/main.tf` | Module resources | IAM/S3/Kubernetes resources and wiring | Change only when infrastructure architecture changes. |
+| `platform-prerequisites/terraform/reusable/main.tf` | Module resources | IAM/S3/Kubernetes resources and wiring | Change only when infrastructure architecture changes. |
 | `platform-prerequisites/terraform/dev/main.tf` | MongoDB root wiring | Provider setup + module input mapping | Change when root wiring changes. |
 | `platform-prerequisites/terraform/dev/outputs.tf` | MongoDB root outputs | Exposed values after apply | Change when additional outputs are required. |
 | `platform-prerequisites/terraform/dev-postgresql/variables.tf` | PostgreSQL root defaults | DB sizing/version/network/security defaults | Edit tracked defaults in git for PostgreSQL baseline. |

@@ -34,7 +34,7 @@ provider "kubernetes" {
 }
 
 module "mongodb_prerequisites" {
-  source = ".."
+  source = "../reusable"
 
   cluster_name                         = var.cluster_name
   mongodb_namespace                    = var.mongodb_namespace

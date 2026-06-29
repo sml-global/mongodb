@@ -62,7 +62,7 @@ Change method: manual YAML edit in git.
 ## Terraform Configuration
 
 ### Reusable Module Defaults
-File: `platform-prerequisites/terraform/variables.tf`
+File: `platform-prerequisites/terraform/reusable/variables.tf`
 
 - `mongodb_namespace` default: `mongodb`
 - `mongodb_workload_service_account_name` default: `psmdb-db`

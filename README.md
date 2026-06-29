@@ -39,7 +39,7 @@ MongoDB deployment model in this repo:
 ## Prerequisites
 - Existing multi-AZ EKS cluster
 - Flux controllers installed (`source-controller`, `helm-controller`, `kustomize-controller`)
-- `mongodb` namespace provisioned by platform infrastructure (either existing or via `platform-prerequisites/terraform`)
+- `mongodb` namespace provisioned by platform infrastructure (either existing or via Terraform roots in `platform-prerequisites/terraform/dev`)
 - `mongodb` namespace contains required ServiceAccounts before apply:
   - `psmdb-db` (or your configured workload ServiceAccount) with AWS Pod Identity/IRSA for backup and encryption integrations
   - `default` (or app-specific ServiceAccounts) with only required least-privilege access
@@ -48,7 +48,8 @@ MongoDB deployment model in this repo:
 - EKS Pod Identity configured for tenant workloads as needed
 - AWS EBS CSI driver available with support for `ebs.csi.aws.com`
 - node-local-dns enabled at platform layer
-- Platform prerequisites are provided as Terraform in `platform-prerequisites/terraform`.
+- Platform prerequisites are provided as Terraform under `platform-prerequisites/terraform`.
+  - Reusable layer path: `platform-prerequisites/terraform/reusable`.
   - Use MongoDB root at `platform-prerequisites/terraform/dev`.
   - Use PostgreSQL root at `platform-prerequisites/terraform/dev-postgresql`.
 - Confirm Kubernetes context and namespace access before bootstrap/apply:
@@ -137,7 +138,7 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 - For manifest render checks, use `scripts/validate-dev-render.sh`.
 
 ## Terraform Merge Strategy
-- `platform-prerequisites/terraform` is a reusable Terraform layer (no provider/backend blocks).
+- `platform-prerequisites/terraform/reusable` is the reusable Terraform layer (no provider/backend blocks).
 - `platform-prerequisites/terraform/dev` and `platform-prerequisites/terraform/dev-postgresql` are local execution roots for manual-first deployment.
 - After dev validation, merge the module into your main Terraform project and discard the wrapper.
 
