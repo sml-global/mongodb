@@ -44,13 +44,13 @@ variable "engine_version" {
 }
 
 variable "instance_class" {
-  description = "Aurora provisioned instance class for the single writer (for example db.t4g.medium)."
+  description = "Aurora provisioned instance class for the single writer (such as db.t4g.medium)."
   type        = string
   default     = "db.t4g.medium"
 }
 
 variable "writer_availability_zone" {
-  description = "Optional AZ for the only writer instance (for example ap-southeast-1a). Leave empty for AWS placement."
+  description = "Optional AZ for the only writer instance (such as ap-southeast-1a). Leave empty for AWS placement."
   type        = string
   default     = ""
 }

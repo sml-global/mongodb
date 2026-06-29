@@ -18,7 +18,7 @@ This file records what has been implemented, what remains open, and which items 
 - Scripted validation and operational helpers are present under `scripts/`.
 - Workload ServiceAccount (`psmdb-db`) is explicitly set in the dev overlay to keep pod identity mapping deterministic.
 - Terraform README now documents EKS API authorization requirement for the runner identity.
-- Terraform was refactored into a pure module (`platform-prerequisites/terraform`) plus temporary manual wrapper (`platform-prerequisites/terraform/examples/dev`).
+- Terraform was refactored into a pure module (`platform-prerequisites/terraform`) plus manual runnable root (`platform-prerequisites/terraform/dev`).
 - Dev hardcoded MongoDB user/password bootstrap secret was removed; operator can generate internal user credentials.
 - Dev bootstrap secrets now include both:
   - `psmdb-encryption-key` (encryption key)
