@@ -137,7 +137,7 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 - For manifest render checks, use `scripts/validate-dev-render.sh`.
 
 ## Terraform Merge Strategy
-- `platform-prerequisites/terraform` is a reusable module (no provider/backend blocks).
+- `platform-prerequisites/terraform` is a reusable Terraform layer (no provider/backend blocks).
 - `platform-prerequisites/terraform/dev` and `platform-prerequisites/terraform/dev-postgresql` are local execution roots for manual-first deployment.
 - After dev validation, merge the module into your main Terraform project and discard the wrapper.
 
