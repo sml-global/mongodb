@@ -62,6 +62,7 @@ scripts/validate-dev-render.sh
   - [Audience And Primary Tasks](#audience-and-primary-tasks)
   - [Operator Onboarding Flow](#operator-onboarding-flow)
   - [Operator Readiness Gates](#operator-readiness-gates)
+  - [Remote State Flow (Human Narrative)](#remote-state-flow-human-narrative)
   - [Quick Start (Unified Apply)](#quick-start-unified-apply)
   - [Runbook Commands](#runbook-commands)
   - [Troubleshooting](#troubleshooting)
@@ -124,12 +125,33 @@ flowchart TD
 
 ## Operator Onboarding Flow
 
-This section defines the minimum complete path from first access to first successful platform apply.
+This section is intentionally written in human language.
+Read and execute this from top to bottom before your first apply.
 
-Onboarding phases:
-- Phase 0: environment and access readiness.
-- Phase 1: Terraform planning and apply.
-- Phase 2: MongoDB operational readiness checks.
+Step 1: Confirm you can operate the target environment.
+- Verify your AWS identity has the required permissions.
+- Verify your Kubernetes identity can access namespace mongodb.
+
+Step 2: Confirm tools are installed and available.
+- Required: terraform, aws, kubectl, kustomize, rg, openssl.
+
+Step 3: Prepare runtime configuration.
+- Copy the sample vars file to runtime vars file.
+- Fill real values for cluster, VPC, subnets, and database credentials.
+
+Step 4: Decide state mode.
+- Recommended: remote S3 state.
+- Acceptable for quick local testing: local state.
+
+Step 5: Run plan and apply.
+- Run the unified runner script.
+- Review the generated plan.
+- Apply only after you understand the plan.
+
+Step 6: Complete MongoDB readiness checks.
+- Run secret bootstrap.
+- Run render validation.
+- Run identity verification after MongoDB pods are running.
 
 ```mermaid
 flowchart TD
@@ -166,6 +188,10 @@ Definition of done for onboarding:
 
 ## Operator Readiness Gates
 
+This is the paranoid section.
+Do not skip these gates in shared, persistent, or production-like environments.
+Skipping gates can lead to broken access, fragmented state, or unrecoverable encrypted data.
+
 | Gate | Required Evidence | Stop Condition |
 |---|---|---|
 | Access Gate | `kubectl get serviceaccount default -n mongodb` succeeds and AWS identity has required rights | Any Unauthorized/Forbidden result |
@@ -174,6 +200,33 @@ Definition of done for onboarding:
 | Plan Gate | `scripts/run-platform-prereq.sh` finishes and writes `tfplan` | Init/validate/plan error |
 | Apply Gate | `terraform apply tfplan` succeeds | Partial or failed apply |
 | MongoDB Readiness Gate | `scripts/bootstrap-dev-secrets.sh` and `scripts/validate-dev-render.sh` succeed | Secret/bootstrap/render validation error |
+
+## Remote State Flow (Human Narrative)
+
+Yes, your understanding is correct.
+If you choose remote state, the logical first-run flow is:
+
+1. Set remote state environment variables (`TF_STATE_BUCKET`, `TF_STATE_REGION`, `TF_STATE_KEY`).
+2. Run `scripts/run-platform-prereq.sh`.
+3. The script detects that `TF_STATE_BUCKET` is set.
+4. It calls `scripts/bootstrap-terraform-s3-backend.sh`.
+5. Backend bootstrap then:
+  - checks whether the bucket exists
+  - creates the bucket if missing
+  - applies baseline controls (versioning, encryption, public access block)
+  - checks whether remote state object exists
+  - if remote state exists: uses remote state directly
+  - if remote state is missing and local state exists: migrates local state once
+  - if both are missing: initializes fresh remote backend
+6. Runner continues with fmt, validate, and plan.
+
+After first successful remote setup:
+- future runs with the same bucket/key will reuse remote state
+- migration is not repeated
+
+Important safety rule:
+- changing `TF_STATE_KEY` creates a different state location and can split ownership
+- keep key stable unless you are intentionally migrating state
 
 ## Quick Start (Unified Apply)
 1. Prepare local variables:
