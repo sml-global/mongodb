@@ -61,40 +61,56 @@ resource "aws_vpc_security_group_egress_rule" "all_outbound" {
   description       = "Allow all outbound"
 }
 
-resource "aws_db_instance" "this" {
-  identifier             = var.db_identifier
-  engine                 = "postgres"
-  engine_version         = var.engine_version
-  instance_class         = var.instance_class
-  allocated_storage      = var.allocated_storage
-  max_allocated_storage  = var.max_allocated_storage
-  storage_type           = "gp3"
-  storage_encrypted      = true
+resource "aws_rds_cluster" "this" {
+  cluster_identifier = var.db_identifier
+  engine             = "aurora-postgresql"
+  engine_version     = var.engine_version
 
-  db_name                = var.db_name
-  username               = var.db_master_username
-  password               = var.db_master_password
+  database_name   = var.db_name
+  master_username = var.db_master_username
+  master_password = var.db_master_password
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.db.id]
-  publicly_accessible    = false
-  multi_az               = false
 
-  backup_retention_period    = 1
-  copy_tags_to_snapshot      = true
-  auto_minor_version_upgrade = true
-
-  performance_insights_enabled = false
-  monitoring_interval          = 0
+  backup_retention_period         = 1
+  copy_tags_to_snapshot           = true
+  deletion_protection             = false
+  skip_final_snapshot             = true
+  storage_encrypted               = true
+  apply_immediately               = true
   enabled_cloudwatch_logs_exports = []
 
-  deletion_protection = false
-  skip_final_snapshot = true
-
-  apply_immediately = true
+  serverlessv2_scaling_configuration {
+    min_capacity = var.serverlessv2_min_acu
+    max_capacity = var.serverlessv2_max_acu
+  }
 
   tags = {
     Name        = var.db_identifier
+    Environment = "dev"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_rds_cluster_instance" "writer" {
+  identifier         = "${var.db_identifier}-writer"
+  cluster_identifier = aws_rds_cluster.this.id
+  engine             = aws_rds_cluster.this.engine
+  engine_version     = aws_rds_cluster.this.engine_version
+  instance_class     = "db.serverless"
+
+  publicly_accessible          = false
+  auto_minor_version_upgrade   = true
+  performance_insights_enabled = false
+  monitoring_interval          = 0
+  apply_immediately            = true
+
+  # Aurora storage remains distributed; this pins the only instance placement.
+  availability_zone = var.writer_availability_zone == "" ? null : var.writer_availability_zone
+
+  tags = {
+    Name        = "${var.db_identifier}-writer"
     Environment = "dev"
     ManagedBy   = "terraform"
   }

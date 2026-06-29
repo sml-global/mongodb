@@ -135,9 +135,9 @@ File: `scripts/verify-dev-identity.sh`
   - this is expected and must be set locally by operator before apply.
 
 ## PostgreSQL Example Configuration
-- PostgreSQL dev defaults and sizing live in:
+- Aurora PostgreSQL dev defaults and sizing live in:
   - `platform-prerequisites/terraform/examples/dev-postgresql/variables.tf`
-- PostgreSQL dev infrastructure resources live in:
+- Aurora PostgreSQL dev infrastructure resources live in:
   - `platform-prerequisites/terraform/examples/dev-postgresql/main.tf`
-- PostgreSQL dev outputs live in:
+- Aurora PostgreSQL dev outputs live in:
   - `platform-prerequisites/terraform/examples/dev-postgresql/outputs.tf`

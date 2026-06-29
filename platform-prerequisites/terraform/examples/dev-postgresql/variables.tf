@@ -1,5 +1,5 @@
 variable "aws_region" {
-  description = "AWS region for the RDS instance."
+  description = "AWS region for the Aurora PostgreSQL resources."
   type        = string
 }
 
@@ -32,33 +32,33 @@ variable "allowed_cidr_blocks" {
 }
 
 variable "db_identifier" {
-  description = "RDS instance identifier."
+  description = "Aurora cluster identifier."
   type        = string
   default     = "pg18-dev"
 }
 
 variable "engine_version" {
-  description = "PostgreSQL engine version."
+  description = "Aurora PostgreSQL engine version. Set null to let AWS select a default for the region."
   type        = string
-  default     = "18"
+  default     = null
 }
 
-variable "instance_class" {
-  description = "RDS instance class."
+variable "serverlessv2_min_acu" {
+  description = "Aurora Serverless v2 minimum ACU (1 ACU is approximately 2 GiB memory)."
+  type        = number
+  default     = 1
+}
+
+variable "serverlessv2_max_acu" {
+  description = "Aurora Serverless v2 maximum ACU for the single writer instance."
+  type        = number
+  default     = 1
+}
+
+variable "writer_availability_zone" {
+  description = "Optional AZ for the only writer instance (for example ap-southeast-1a). Leave empty for AWS placement."
   type        = string
-  default     = "db.t4g.small"
-}
-
-variable "allocated_storage" {
-  description = "Initial allocated storage in GB (RDS PostgreSQL minimum is 20)."
-  type        = number
-  default     = 20
-}
-
-variable "max_allocated_storage" {
-  description = "Autoscaling storage ceiling in GB."
-  type        = number
-  default     = 30
+  default     = ""
 }
 
 variable "db_name" {

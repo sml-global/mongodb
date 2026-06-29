@@ -2,7 +2,7 @@
 
 This repository supports dev provisioning for both:
 - MongoDB on EKS (primary workload path in this repo)
-- PostgreSQL on RDS (dev example under Terraform examples)
+- PostgreSQL on Aurora PostgreSQL (dev example under Terraform examples)
 
 MongoDB deployment model in this repo:
 - Flux HelmRelease for tenant-scoped operator installation
@@ -50,7 +50,7 @@ MongoDB deployment model in this repo:
 - node-local-dns enabled at platform layer
 - Platform prerequisites are provided as Terraform in `platform-prerequisites/terraform`.
   - Use the temporary manual wrapper at `platform-prerequisites/terraform/examples/dev`.
-  - For PostgreSQL dev RDS, use `platform-prerequisites/terraform/examples/dev-postgresql`.
+  - For PostgreSQL dev Aurora, use `platform-prerequisites/terraform/examples/dev-postgresql`.
 - Confirm Kubernetes context and namespace access before bootstrap/apply:
   - `kubectl config current-context`
   - `kubectl get serviceaccount default -n mongodb`
@@ -69,7 +69,7 @@ MongoDB deployment model in this repo:
 0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`):
    - `scripts/run-platform-prereq.sh`
   - `(cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan)`
-0b. Optional PostgreSQL dev RDS provisioning (`platform-prerequisites/terraform/examples/dev-postgresql`):
+0b. Optional PostgreSQL dev Aurora provisioning (`platform-prerequisites/terraform/examples/dev-postgresql`):
   - `scripts/run-platform-prereq-postgresql.sh`
   - `(cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply tfplan)`
 1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
