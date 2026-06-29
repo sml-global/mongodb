@@ -123,14 +123,6 @@ File: `scripts/run-platform-prereq.sh`
   - `TF_STATE_REGION` (default `us-east-1`)
   - `TF_STATE_KEY` (default `mongodb/platform-prerequisites/dev/terraform.tfstate`)
 
-### PostgreSQL Compatibility Runner
-File: `scripts/run-platform-prereq-postgresql.sh`
-
-- Compatibility shim that delegates to:
-  - `scripts/run-platform-prereq.sh`
-- Purpose:
-  - preserve old command entrypoint while enforcing unified root/state workflow
-
 ### Terraform S3 Backend Bootstrap
 File: `scripts/bootstrap-terraform-s3-backend.sh`
 
