@@ -8,9 +8,10 @@ This catalog is the source of truth for embedded configuration in this repositor
 
 Process and operator workflow references:
 - `platform-prerequisites/terraform/README.md`:
-  - `First-Time Operator Onboarding`
+  - `Read This First`
+  - `Standard Operator Procedure`
   - `Required Safety Gates`
-  - `Remote State First-Run Flow`
+  - `Remote State Behavior`
   - `Script Execution Flows`
 
 Boundary note:
