@@ -66,18 +66,19 @@ MongoDB deployment model in this repo:
 - No unresolved placeholders are permitted in tracked MongoDB dev manifests.
 
 ## Apply Order (GitOps)
-0. Provision platform prerequisites for MongoDB + PostgreSQL (`platform-prerequisites/terraform/dev`):
+1. Provision platform prerequisites for MongoDB + PostgreSQL (`platform-prerequisites/terraform/dev`):
    - `scripts/run-platform-prereq.sh`
    - `(cd platform-prerequisites/terraform/dev && terraform apply tfplan)`
-1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
-2. Apply `gitops/operators/base`.
-3. Apply `policies/kyverno`.
-4. Apply the dev overlay: `k8s/overlays/dev`.
+2. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
+3. Apply `gitops/operators/base`.
+4. Apply `policies/kyverno`.
+5. Apply the dev overlay: `k8s/overlays/dev`.
 
 Operator onboarding and script internals are documented in:
 - `platform-prerequisites/terraform/README.md`
-  - `Operator Onboarding Flow`
-  - `Operator Readiness Gates`
+  - `First-Time Operator Onboarding`
+  - `Required Safety Gates`
+  - `Remote State First-Run Flow`
   - `Script Execution Flows`
 
 ## Connecting to the Database
