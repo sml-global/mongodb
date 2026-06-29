@@ -77,6 +77,7 @@ MongoDB deployment model in this repo:
 Operator onboarding and script internals are documented in:
 - `platform-prerequisites/terraform/README.md`
   - `Operator Onboarding Flow`
+  - `Operator Readiness Gates`
   - `Script Execution Flows`
 
 ## Connecting to the Database

@@ -25,12 +25,14 @@ It does not provision:
   - [Architecture Summary](#architecture-summary)
   - [Architecture Flow Chart](#architecture-flow-chart)
   - [Operator Onboarding Flow](#operator-onboarding-flow)
+  - [Operator Readiness Gates](#operator-readiness-gates)
   - [Repository Structure](#repository-structure)
   - [Design Decisions And Boundaries](#design-decisions-and-boundaries)
   - [Access And Permissions Model](#access-and-permissions-model)
   - [State Backend Strategy](#state-backend-strategy)
   - [Quick Start (Unified Apply)](#quick-start-unified-apply)
   - [Runbook Commands](#runbook-commands)
+  - [Script Contracts](#script-contracts)
   - [Script Execution Flows](#script-execution-flows)
   - [Configuration Reference](#configuration-reference)
   - [Security Posture](#security-posture)
@@ -85,30 +87,48 @@ flowchart TD
 
 This section is operator-focused only. It defines the minimum complete path from first access to first successful platform apply.
 
-Onboarding checklist:
-- Access: verify AWS IAM permissions and EKS API authorization for target cluster.
-- Tooling: verify `terraform`, `aws`, `kubectl`, `kustomize`, `rg`, `openssl` are available.
-- Config: create `platform-prerequisites/terraform/dev/terraform.tfvars` from sample and fill required values.
-- State mode: choose remote S3 backend (recommended) or local state.
-- Plan/apply: run unified Terraform plan/apply.
-- MongoDB readiness: run secret bootstrap and render checks.
+Onboarding phases:
+- Phase 0: environment and access readiness.
+- Phase 1: Terraform planning and apply.
+- Phase 2: MongoDB operational readiness checks.
 
 ```mermaid
 flowchart TD
-  A[Confirm AWS IAM and EKS API access] --> B[Verify required CLI tools installed]
-  B --> C[Copy dev/terraform.tfvars.sample to dev/terraform.tfvars]
-  C --> D[Set cluster VPC subnet and DB values]
-  D --> E{Remote S3 backend?}
-  E -->|Yes| F[Export TF_STATE_BUCKET TF_STATE_REGION TF_STATE_KEY]
-  E -->|No| G[Proceed with local state]
-  F --> H[Run scripts/run-platform-prereq.sh]
-  G --> H
-  H --> I[Review generated tfplan]
-  I --> J[Apply terraform apply tfplan]
-  J --> K[Run scripts/bootstrap-dev-secrets.sh]
-  K --> L[Run scripts/validate-dev-render.sh]
-  L --> M[Run scripts/verify-dev-identity.sh when pods are running]
+  A[Phase 0: Verify IAM + EKS API auth] --> B{Access ready?}
+  B -->|No| C[Fix IAM RBAC Access Entry]
+  C --> A
+  B -->|Yes| D[Verify required CLI tools]
+  D --> E{Tooling ready?}
+  E -->|No| F[Install missing tools]
+  F --> D
+  E -->|Yes| G[Phase 1: Prepare dev/terraform.tfvars]
+  G --> H[Set cluster VPC subnet DB values]
+  H --> I{Use remote state?}
+  I -->|Yes| J[Export TF_STATE_* env vars]
+  I -->|No| K[Use local state]
+  J --> L[Run scripts/run-platform-prereq.sh]
+  K --> L
+  L --> M{Plan generated?}
+  M -->|No| N[Fix input or permission errors]
+  N --> L
+  M -->|Yes| O[Review tfplan and apply]
+  O --> P[Phase 2: Run bootstrap-dev-secrets.sh]
+  P --> Q[Run validate-dev-render.sh]
+  Q --> R{MongoDB pods running?}
+  R -->|Yes| S[Run verify-dev-identity.sh]
+  R -->|No| T[Continue GitOps deployment]
 ```
+
+## Operator Readiness Gates
+
+| Gate | Required Evidence | Stop Condition |
+|---|---|---|
+| Access Gate | `kubectl get serviceaccount default -n mongodb` succeeds and AWS identity has required rights | Any Unauthorized/Forbidden result |
+| Tooling Gate | `terraform`, `aws`, `kubectl`, `kustomize`, `rg`, `openssl` are available in PATH | Any required tool missing |
+| Config Gate | `platform-prerequisites/terraform/dev/terraform.tfvars` exists and required fields are set (`cluster_name`, `vpc_id`, `private_subnet_ids`, `db_master_password`) | Empty or placeholder critical values |
+| Plan Gate | `scripts/run-platform-prereq.sh` finishes and writes `tfplan` | Init/validate/plan error |
+| Apply Gate | `terraform apply tfplan` succeeds | Partial or failed apply |
+| MongoDB Readiness Gate | `scripts/bootstrap-dev-secrets.sh` and `scripts/validate-dev-render.sh` succeed | Secret/bootstrap/render validation error |
 
 ## Repository Structure
 
@@ -216,6 +236,16 @@ scripts/validate-dev-render.sh
 | `scripts/validate-dev-render.sh` | Confirms MongoDB dev overlay renders correctly. | Pre-commit and pre-apply safety check. |
 | `scripts/verify-dev-identity.sh` | Checks expected ServiceAccount usage at runtime. | Post-deploy identity verification. |
 
+## Script Contracts
+
+| Script | Inputs | Outputs | Exit Behavior |
+|---|---|---|---|
+| `scripts/run-platform-prereq.sh` | Optional `TF_STATE_BUCKET`, `TF_STATE_REGION`, `TF_STATE_KEY`; Terraform files in `platform-prerequisites/terraform/dev` | `tfplan` in unified root | Non-zero on backend/init/validate/plan failure |
+| `scripts/bootstrap-terraform-s3-backend.sh` | `--tf-dir`, `--bucket`, `--region`, `--key`; AWS + Terraform CLI access | Backend configured for remote state or migrated state | Non-zero on arg/preflight/AWS/Terraform failures |
+| `scripts/bootstrap-dev-secrets.sh` | Kubernetes access to namespace `mongodb`; optional local escrow files | Secrets `psmdb-encryption-key` and `psmdb-secrets`; local escrow files if generated | Non-zero on RBAC/tool/validation/secret creation failure |
+| `scripts/validate-dev-render.sh` | `kustomize` and `rg`; `k8s/overlays/dev` present | `/tmp/mongodb-dev.yaml` and structural checks output | Non-zero when render/checks fail |
+| `scripts/verify-dev-identity.sh` | Optional args: `namespace`, `expected SA`; running MongoDB pods | SA verification output by pod | `0` success, `1` no pods, `2` SA mismatch |
+
 ## Script Execution Flows
 
 These diagrams describe script internals. Use this section when debugging behavior or onboarding maintainers.
@@ -230,8 +260,12 @@ flowchart TD
   C --> E[terraform fmt -recursive]
   D --> E
   E --> F[terraform validate]
-  F --> G[terraform plan -out=tfplan]
-  G --> H[Print apply command]
+  F --> G{Validate passed?}
+  G -->|No| X[Exit non-zero]
+  G -->|Yes| H[terraform plan -out=tfplan]
+  H --> I{Plan succeeded?}
+  I -->|No| X
+  I -->|Yes| J[Print apply command]
 ```
 
 ### scripts/bootstrap-terraform-s3-backend.sh
@@ -248,6 +282,9 @@ flowchart TD
   F -->|No| H{Local terraform.tfstate exists?}
   H -->|Yes| I[terraform init -migrate-state]
   H -->|No| J[terraform init -reconfigure fresh backend]
+  G --> K[Return success]
+  I --> K
+  J --> K
 ```
 
 ### scripts/bootstrap-dev-secrets.sh
@@ -269,6 +306,8 @@ flowchart TD
   H --> L[Bootstrap complete]
   J --> L
   K --> L
+  E --> G
+  C --> G
 ```
 
 ### scripts/validate-dev-render.sh
