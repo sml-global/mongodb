@@ -3,15 +3,27 @@
 ## Purpose
 This catalog is the source of truth for embedded configuration in this repository.
 
-- Scope: unified MongoDB + PostgreSQL dev workflow files in YAML, Terraform, and shell scripts.
-- Goal: make every editable setting discoverable and explicit.
+## Read This First
+
+| Question | Answer |
+|---|---|
+| What does this catalog cover? | Embedded dev configuration in Kubernetes YAML, Terraform, and shell scripts. |
+| Why does it exist? | To make editable values discoverable without reading every file first. |
+| When should it change? | Whenever a tracked default, hardcoded value, script constant, or local operator template changes. |
+| Where is operator sequencing documented? | `platform-prerequisites/terraform/README.md`. |
+| Who should use it? | Operators, maintainers, and reviewers checking configuration drift. |
+
+Scope: unified MongoDB + PostgreSQL dev workflow files in YAML, Terraform, and shell scripts.
 
 Process and operator workflow references:
 - `platform-prerequisites/terraform/README.md`:
+  - `Workstation Setup`
   - `Read This First`
   - `Standard Operator Procedure`
   - `Required Safety Gates`
   - `Remote State Behavior`
+  - `Common Problems For New Operators`
+  - `Troubleshooting`
   - `Script Execution Flows`
 
 Boundary note:
@@ -86,7 +98,7 @@ File: `platform-prerequisites/terraform/reusable/variables.tf`
   - `oidc_provider_url`
   - `kms_key_arn`
 
-### MongoDB Root Defaults
+### Unified Root Defaults
 File: `platform-prerequisites/terraform/dev/variables.tf`
 
 - `aws_region` default: `us-east-1`

@@ -1,5 +1,15 @@
 # MongoDB on EKS (Declarative, Free-Tool Stack)
 
+## Read This First
+
+| Question | Answer |
+|---|---|
+| What is this repository for? | MongoDB workload manifests on EKS plus dev platform prerequisites for MongoDB and Aurora PostgreSQL. |
+| Where should a new operator start? | `platform-prerequisites/terraform/README.md`, starting with `Workstation Setup`. |
+| What must run before MongoDB manifests? | Unified Terraform prerequisites, then dev secret bootstrap. |
+| What is the main Terraform root? | `platform-prerequisites/terraform/dev`. |
+| Where is troubleshooting documented? | `platform-prerequisites/terraform/README.md`, under `Common Problems For New Operators` and `Troubleshooting`. |
+
 This repository supports dev provisioning for both:
 - MongoDB on EKS (primary workload path in this repo)
 - PostgreSQL on Aurora PostgreSQL (dev path under Terraform)
@@ -37,12 +47,13 @@ MongoDB deployment model in this repo:
 - Dev bootstrap secret (`psmdb-encryption-key`) is managed by `scripts/bootstrap-dev-secrets.sh` and created directly in-cluster.
 
 ## Prerequisites
+
+Before Terraform prerequisites:
 - Existing multi-AZ EKS cluster
+- AWS CLI SSO access and workstation tooling configured as documented in `platform-prerequisites/terraform/README.md`
+- AWS identity allowed to manage required IAM, S3, EKS discovery, RDS, VPC security group, and Kubernetes resources
+- VPC ID and private subnet IDs for Aurora PostgreSQL
 - Flux controllers installed (`source-controller`, `helm-controller`, `kustomize-controller`)
-- `mongodb` namespace provisioned by platform infrastructure (either existing or via Terraform roots in `platform-prerequisites/terraform/dev`)
-- `mongodb` namespace contains required ServiceAccounts before apply:
-  - `psmdb-db` (or your configured workload ServiceAccount) with AWS Pod Identity/IRSA for backup and encryption integrations
-  - `default` (or app-specific ServiceAccounts) with only required least-privilege access
 - cert-manager installed cluster-wide
 - Kyverno installed cluster-wide if policy enforcement from this repo will be applied
 - EKS Pod Identity configured for tenant workloads as needed
@@ -51,7 +62,13 @@ MongoDB deployment model in this repo:
 - Platform prerequisites are provided as Terraform under `platform-prerequisites/terraform`.
   - Reusable layer path: `platform-prerequisites/terraform/reusable`.
   - Use unified root at `platform-prerequisites/terraform/dev` for MongoDB + PostgreSQL.
-- Confirm Kubernetes context and namespace access before bootstrap/apply:
+
+After Terraform prerequisites and before MongoDB manifest apply:
+- `mongodb` namespace exists.
+- `mongodb` namespace contains required ServiceAccounts:
+  - `psmdb-db` (or your configured workload ServiceAccount) with AWS Pod Identity/IRSA for backup and encryption integrations
+  - `default` (or app-specific ServiceAccounts) with only required least-privilege access
+- Confirm Kubernetes context and namespace access:
   - `kubectl config current-context`
   - `kubectl get serviceaccount default -n mongodb`
 - Run the dev secret bootstrap script before manifest apply/build:
@@ -76,10 +93,13 @@ MongoDB deployment model in this repo:
 
 Operator onboarding and script internals are documented in:
 - `platform-prerequisites/terraform/README.md`
+  - `Workstation Setup`
   - `Read This First`
   - `Standard Operator Procedure`
   - `Required Safety Gates`
   - `Remote State Behavior`
+  - `Common Problems For New Operators`
+  - `Troubleshooting`
   - `Script Execution Flows`
 
 ## Connecting to the Database
@@ -143,7 +163,7 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 ## Terraform Merge Strategy
 - `platform-prerequisites/terraform/reusable` is the reusable Terraform layer (no provider/backend blocks).
 - `platform-prerequisites/terraform/dev` is the local execution root for manual-first deployment.
-- After dev validation, merge the module into your main Terraform project and discard the wrapper.
+- After dev validation, central platform Terraform can absorb the reusable layer and replace the local dev root with the platform-owned entry point.
 
 ## Execution Tracking
 - Current execution snapshot: `docs/operations/execution-status-2026-06-23.md`.

@@ -1,5 +1,10 @@
 # Execution Status - 2026-06-23
 
+## Document Status
+This is a historical execution snapshot. It records the state of work on 2026-06-23 and is not the current operator runbook.
+
+Current operator workflow, workstation setup, remote state behavior, and troubleshooting are maintained in `platform-prerequisites/terraform/README.md`.
+
 ## Purpose
 This file records what has been implemented, what remains open, and which items require explicit agreement before further code changes.
 

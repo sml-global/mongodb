@@ -1,10 +1,15 @@
 # MongoDB on EKS Design (Free-Tool, Production Hardened)
 
+## Document Status
+This is a historical design document for the MongoDB EKS bootstrap work.
+
+Current operator workflow, workstation setup, Terraform state behavior, and troubleshooting are maintained in `platform-prerequisites/terraform/README.md`. Current embedded configuration inventory is maintained in `docs/operations/dev-configuration-catalog.md`.
+
 ## Scope
 - Deploy MongoDB to the existing EKS cluster with current phase scoped to Dev only.
 - Use only free/open-source tooling for Kubernetes control plane integrations.
-- Keep deployment fully declarative (YAML/Helm/Kustomize/GitOps).
-- No imperative scripts for Kubernetes state changes.
+- Keep workload manifests fully declarative (YAML/Helm/Kustomize/GitOps).
+- Do not mutate tracked workload manifests at runtime. Current dev-only helper scripts may create missing cluster secrets directly, as documented in the Terraform README and configuration catalog.
 
 ## Non-Negotiable Constraints
 - Use a MongoDB operator (Percona Operator for MongoDB).
@@ -73,8 +78,8 @@
 - Enforce least privilege for ESO and backup identity.
 
 ## GitOps and Policy
-- Declarative apply only.
-- No imperative scripts for state mutation.
+- Declarative workload apply only.
+- No runtime mutation of tracked workload manifests.
 - CI runs policy dry-runs using the same policy set as runtime admission.
 - Admission controllers remain final guardrails.
 
