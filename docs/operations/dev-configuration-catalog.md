@@ -18,6 +18,7 @@ Scope: unified MongoDB + PostgreSQL dev workflow files in YAML, Terraform, and s
 Process and operator workflow references:
 - `platform-prerequisites/terraform/README.md`:
   - `Workstation Setup`
+  - `Provisioned Resource Inventory`
   - `Read This First`
   - `Standard Operator Procedure`
   - `Required Safety Gates`

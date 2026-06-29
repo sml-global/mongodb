@@ -45,6 +45,7 @@ The workflow has three phases. Keep them separate when debugging.
   - [Read This First](#read-this-first)
   - [Scope](#scope)
   - [Operating Model](#operating-model)
+  - [Provisioned Resource Inventory](#provisioned-resource-inventory)
   - [Workstation Setup](#workstation-setup)
   - [Standard Operator Procedure](#standard-operator-procedure)
   - [Audience And Primary Tasks](#audience-and-primary-tasks)
@@ -70,6 +71,58 @@ The workflow has three phases. Keep them separate when debugging.
   - [Change Flow (Day-2)](#change-flow-day-2)
   - [Change Management Rules](#change-management-rules)
   - [Handoff To Central Platform Terraform](#handoff-to-central-platform-terraform)
+
+## Provisioned Resource Inventory
+
+This table answers what gets created and which file or script owns it. Use it during plan review, troubleshooting, and change review.
+
+### AWS Resources
+
+| Resource | Purpose | Owner | Applied By |
+|---|---|---|---|
+| PBM S3 bucket | Stores Percona Backup for MongoDB backup objects. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket.pbm`) | `scripts/run-platform-prereq.sh`, then `terraform apply tfplan` |
+| PBM S3 bucket versioning | Keeps object versions for backup bucket safety. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket_versioning.pbm`) | Terraform apply |
+| PBM S3 bucket encryption | Enables AES256 server-side encryption on the PBM bucket. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket_server_side_encryption_configuration.pbm`) | Terraform apply |
+| PBM S3 public access block | Blocks public ACLs/policies on the PBM bucket. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket_public_access_block.pbm`) | Terraform apply |
+| MongoDB PBM IAM role | Role assumed by the MongoDB workload ServiceAccount for S3/KMS access. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_iam_role.mongodb_pbm`) | Terraform apply |
+| MongoDB PBM IAM inline policy | Grants PBM S3 access and optional KMS actions. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_iam_role_policy.mongodb_pbm`) | Terraform apply |
+| EKS Pod Identity association | Binds the MongoDB workload ServiceAccount to the PBM IAM role when `use_pod_identity = true`. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_eks_pod_identity_association.mongodb_workload`) | Terraform apply |
+| Terraform state S3 bucket | Stores Terraform state for the unified dev root when remote state is enabled. | `scripts/bootstrap-terraform-s3-backend.sh` | `scripts/run-platform-prereq.sh` when `TF_STATE_BUCKET` is set |
+| Terraform state bucket controls | Applies versioning, AES256 encryption, and public access block to a newly created backend bucket. | `scripts/bootstrap-terraform-s3-backend.sh` | Backend bootstrap script |
+| Aurora PostgreSQL subnet group | Places Aurora PostgreSQL in existing private subnets. | `platform-prerequisites/terraform/dev/main.tf` (`aws_db_subnet_group.postgresql`) | Terraform apply |
+| Aurora PostgreSQL security group | Controls network access to PostgreSQL. | `platform-prerequisites/terraform/dev/main.tf` (`aws_security_group.postgresql`) | Terraform apply |
+| PostgreSQL ingress rules | Allows port `5432` from the configured app security group and/or approved CIDRs. | `platform-prerequisites/terraform/dev/main.tf` (`aws_vpc_security_group_ingress_rule.*`) | Terraform apply |
+| PostgreSQL egress rule | Allows outbound traffic from the PostgreSQL security group. | `platform-prerequisites/terraform/dev/main.tf` (`aws_vpc_security_group_egress_rule.postgresql_all_outbound`) | Terraform apply |
+| Aurora PostgreSQL cluster | Creates the dev Aurora PostgreSQL cluster. | `platform-prerequisites/terraform/dev/main.tf` (`aws_rds_cluster.postgresql`) | Terraform apply |
+| Aurora PostgreSQL writer instance | Creates the single provisioned writer instance for dev. | `platform-prerequisites/terraform/dev/main.tf` (`aws_rds_cluster_instance.postgresql_writer`) | Terraform apply |
+
+### Kubernetes Resources
+
+| Resource | Purpose | Owner | Applied By |
+|---|---|---|---|
+| `mongodb` namespace | Namespace for MongoDB workload and secrets. | `platform-prerequisites/terraform/reusable/main.tf` (`kubernetes_namespace.mongodb`) | Terraform apply |
+| MongoDB workload ServiceAccount | ServiceAccount used by MongoDB pods for AWS workload identity. | `platform-prerequisites/terraform/reusable/main.tf` (`kubernetes_service_account.mongodb_workload`) | Terraform apply |
+| `psmdb-encryption-key` secret | MongoDB encryption bootstrap material. | `scripts/bootstrap-dev-secrets.sh` | Secret bootstrap script |
+| `psmdb-secrets` secret | MongoDB `clusterAdmin` bootstrap password. | `scripts/bootstrap-dev-secrets.sh` | Secret bootstrap script |
+| Percona HelmRepository | Points Flux to the Percona chart repository. | `gitops/operators/base/helmrepositories.yaml` | GitOps/manual apply of `gitops/operators/base` |
+| Percona Operator HelmRelease | Installs the Percona Server for MongoDB Operator. | `gitops/operators/base/helmreleases.yaml` | Flux Helm controller after operator layer apply |
+| MongoDB StorageClass | Defines EBS-backed `gp3-mongodb` storage with MongoDB-specific defaults. | `k8s/base/storageclass-gp3-mongodb.yaml` | Apply `k8s/overlays/dev` |
+| MongoDB certificates and issuer | Provides cert-manager issuer/certificates for MongoDB TLS/client identity. | `k8s/base/certificates.yaml` | Apply `k8s/overlays/dev` |
+| MongoDB PerconaServerMongoDB CR | Defines the MongoDB replica set, storage, TLS, backup settings, and runtime topology. | `k8s/base/psmdb-cluster.yaml` and `k8s/overlays/dev/patch-psmdb.yaml` | Apply `k8s/overlays/dev` |
+| MongoDB PodDisruptionBudget | Protects replica-set availability during voluntary disruption. | `k8s/base/pdb.yaml` | Apply `k8s/overlays/dev` |
+| Kyverno policy: storage class guardrail | Requires WaitForFirstConsumer behavior for MongoDB storage. | `policies/kyverno/require-wffc-storageclass.yaml` | Apply `policies/kyverno` |
+| Kyverno policy: app password secret guardrail | Blocks app-managed MongoDB password secrets where policy applies. | `policies/kyverno/block-app-mongo-password-secrets.yaml` | Apply `policies/kyverno` |
+| Kyverno policy: PBM sidecar resources | Requires PBM sidecar resource fencing. | `policies/kyverno/require-pbm-sidecar-resources.yaml` | Apply `policies/kyverno` |
+
+### Local-Only Files Created By Scripts
+
+| File | Purpose | Owner |
+|---|---|---|
+| `platform-prerequisites/terraform/dev/tfplan` | Reviewed Terraform plan artifact. | `scripts/run-platform-prereq.sh` |
+| `platform-prerequisites/terraform/dev/terraform.tfstate` | Local Terraform state when remote state is not configured. | Terraform CLI |
+| `.local-dev-encryption-key.txt` | Local escrow copy for the MongoDB encryption key. | `scripts/bootstrap-dev-secrets.sh` |
+| `.local-dev-admin-password.txt` | Local escrow copy for the MongoDB cluster admin password. | `scripts/bootstrap-dev-secrets.sh` |
+| `/tmp/mongodb-dev.yaml` | Rendered dev overlay used for local validation. | `scripts/validate-dev-render.sh` |
 
 ## Workstation Setup
 

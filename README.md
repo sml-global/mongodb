@@ -8,6 +8,7 @@
 | Where should a new operator start? | `platform-prerequisites/terraform/README.md`, starting with `Workstation Setup`. |
 | What must run before MongoDB manifests? | Unified Terraform prerequisites, then dev secret bootstrap. |
 | What is the main Terraform root? | `platform-prerequisites/terraform/dev`. |
+| Where can I see what gets created? | `platform-prerequisites/terraform/README.md`, under `Provisioned Resource Inventory`. |
 | Where is troubleshooting documented? | `platform-prerequisites/terraform/README.md`, under `Common Problems For New Operators` and `Troubleshooting`. |
 
 This repository supports dev provisioning for both:
@@ -94,6 +95,7 @@ After Terraform prerequisites and before MongoDB manifest apply:
 Operator onboarding and script internals are documented in:
 - `platform-prerequisites/terraform/README.md`
   - `Workstation Setup`
+  - `Provisioned Resource Inventory`
   - `Read This First`
   - `Standard Operator Procedure`
   - `Required Safety Gates`
