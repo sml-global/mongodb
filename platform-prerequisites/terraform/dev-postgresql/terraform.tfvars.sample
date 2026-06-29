@@ -1,7 +1,7 @@
 aws_region = "ap-southeast-1"
 vpc_id     = "vpc-xxxxxxxx"
 
-# Use your existing private subnets. No subnet resources are created by this example.
+# Use your existing private subnets. No subnet resources are created by this root.
 private_subnet_ids = [
   "subnet-aaaaaaaa",
   "subnet-bbbbbbbb"

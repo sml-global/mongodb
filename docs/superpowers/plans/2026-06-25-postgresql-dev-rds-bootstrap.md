@@ -1,19 +1,19 @@
 # PostgreSQL Dev Aurora Bootstrap Plan
 
-> For this phase, implement only a Terraform example form for cost-focused dev Aurora PostgreSQL.
+> For this phase, implement only a Terraform root form for cost-focused dev Aurora PostgreSQL.
 
 ## Goal
-Create a reusable Terraform example that provisions dev Aurora PostgreSQL with a single writer and provisioned instance class using existing network subnets.
+Create a reusable Terraform root that provisions dev Aurora PostgreSQL with a single writer and provisioned instance class using existing network subnets.
 
 ## Tasks
 
-### Task 1: Add Terraform example scaffold
+### Task 1: Add Terraform root scaffold
 **Files:**
-- Create: `platform-prerequisites/terraform/examples/dev-postgresql/main.tf`
-- Create: `platform-prerequisites/terraform/examples/dev-postgresql/variables.tf`
-- Create: `platform-prerequisites/terraform/examples/dev-postgresql/outputs.tf`
-- Create: `platform-prerequisites/terraform/examples/dev-postgresql/terraform.tfvars.example`
-- Create: `platform-prerequisites/terraform/examples/dev-postgresql/README.md`
+- Create: `platform-prerequisites/terraform/dev-postgresql/main.tf`
+- Create: `platform-prerequisites/terraform/dev-postgresql/variables.tf`
+- Create: `platform-prerequisites/terraform/dev-postgresql/outputs.tf`
+- Create: `platform-prerequisites/terraform/dev-postgresql/terraform.tfvars.sample`
+- Create: `platform-prerequisites/terraform/dev-postgresql/README.md`
 
 - [x] Provision `aws_rds_cluster` + single `aws_rds_cluster_instance` writer.
 - [x] Configure provisioned writer instance class (`db.t4g.medium` default).
