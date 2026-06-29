@@ -52,6 +52,7 @@ The workflow has three phases. Keep them separate when debugging.
   - [Required Safety Gates](#required-safety-gates)
   - [Remote State Behavior](#remote-state-behavior)
   - [Runbook Commands](#runbook-commands)
+  - [Common Problems For New Operators](#common-problems-for-new-operators)
   - [Troubleshooting](#troubleshooting)
   - [Architecture Summary](#architecture-summary)
   - [Terraform Provisioning Model](#terraform-provisioning-model)
@@ -274,15 +275,69 @@ Important rules:
 | `scripts/validate-dev-render.sh` | Renders `k8s/overlays/dev` and checks expected manifest structure. | Before applying MongoDB workload manifests. | Render succeeds and structural checks pass. |
 | `scripts/verify-dev-identity.sh` | Checks that running MongoDB pods use the expected ServiceAccount. | After MongoDB pods are running. | Exits 0 when all checked pods match the expected ServiceAccount. |
 
+## Common Problems For New Operators
+
+Most failures are caused by missing context, not by Terraform syntax. Check these before debugging the scripts.
+
+| What Was Missed | Why It Matters | How To Check | Fix |
+|---|---|---|---|
+| Wrong AWS account or region | Terraform may create resources in the wrong place or fail to find the EKS/VPC inputs. | `aws sts get-caller-identity`; `aws configure get region` | Switch AWS profile/region before running the scripts. |
+| Wrong Kubernetes context | Secret bootstrap and pod checks may target the wrong cluster. | `kubectl config current-context`; `kubectl get ns mongodb` | Update kubeconfig for the target EKS cluster. |
+| `terraform.tfvars` not created | Terraform plan cannot resolve required environment inputs. | `test -f platform-prerequisites/terraform/dev/terraform.tfvars && echo ok` | Copy the sample file and fill real values. |
+| Placeholder values left in `terraform.tfvars` | Plan may fail or create unusable infrastructure. | Review `cluster_name`, `vpc_id`, `private_subnet_ids`, and `db_master_password`. | Replace placeholders with real environment values. |
+| Remote state bucket/key not decided | Different operators may create separate states for the same environment. | `echo "$TF_STATE_BUCKET" "$TF_STATE_REGION" "$TF_STATE_KEY"` | Set stable `TF_STATE_*` values before the first shared run. |
+| Missing CLI tools | Scripts fail before doing useful work. | `command -v terraform aws kubectl kustomize rg openssl` | Install missing tools and rerun from the repository root. |
+| No Kubernetes RBAC in `mongodb` namespace | Secret bootstrap fails even if AWS auth works. | `kubectl auth can-i get secrets -n mongodb`; `kubectl auth can-i create secrets -n mongodb` | Fix EKS Access Entry/RBAC for the operator identity. |
+| Running pod identity verification too early | `scripts/verify-dev-identity.sh` exits `1` when no MongoDB pods exist yet. | `kubectl get pods -n mongodb -l app.kubernetes.io/name=percona-server-mongodb` | Apply the workload manifests first, then rerun after pods are created. |
+
 ## Troubleshooting
 
-| Symptom | Likely Cause | Action |
-|---|---|---|
-| `Unauthorized` or `Forbidden` for Kubernetes resources | Runner lacks EKS API authorization/RBAC mapping | Confirm EKS Access Entry or RBAC mapping for runner identity. |
-| Backend init/migration does not use S3 | `TF_STATE_BUCKET` not set or incorrect bucket/key | Export backend env vars and rerun `scripts/run-platform-prereq.sh`. |
-| Backend bucket creation fails | Missing S3 permissions or region mismatch | Validate IAM permissions and `TF_STATE_REGION`. |
-| PostgreSQL resources fail on networking inputs | Invalid `vpc_id` or `private_subnet_ids` | Correct VPC/subnet values in `dev/terraform.tfvars`. |
-| Terraform CLI fails before validate in this environment | Local `tfenv` is not configured | Fix local tfenv version configuration or use direct Terraform binary. |
+Use the symptom text first, then run the check command to confirm the cause before changing files or state.
+
+### Preflight And Tooling
+
+| Symptom | Likely Cause | Confirm With | Fix |
+|---|---|---|---|
+| `required command not found` | A required CLI is missing from PATH. | `command -v terraform aws kubectl kustomize rg openssl` | Install the missing command and open a new shell if PATH changed. |
+| `terraform` fails before init/validate with a local version error | Local Terraform version manager is misconfigured. | `terraform version` | Fix the local version manager or use a direct Terraform binary. |
+| Script cannot find repository paths | Command was run from an unexpected location or the checkout is incomplete. | `pwd`; `test -d platform-prerequisites/terraform/dev && echo ok` | Run from the repository root and verify the checkout is complete. |
+
+### Terraform Plan And Inputs
+
+| Symptom | Likely Cause | Confirm With | Fix |
+|---|---|---|---|
+| Plan asks for variables or fails on required inputs | `terraform.tfvars` is missing or incomplete. | `ls platform-prerequisites/terraform/dev/terraform.tfvars` | Create the file from the sample and fill required values. |
+| Plan references the wrong cluster | `cluster_name` points to the wrong EKS cluster or AWS profile/region is wrong. | `aws eks describe-cluster --name <cluster_name>` | Correct `cluster_name`, AWS profile, or region. |
+| PostgreSQL subnet group or security group creation fails | `vpc_id` or `private_subnet_ids` do not belong together. | `aws ec2 describe-subnets --subnet-ids <ids>` | Use private subnet IDs from the same VPC as `vpc_id`. |
+| PostgreSQL password validation fails | `db_master_password` is empty, weak, or placeholder text. | Review `db_master_password` in local `terraform.tfvars`. | Set a strong dev password and keep the file uncommitted. |
+
+### Remote State And Backend
+
+| Symptom | Likely Cause | Confirm With | Fix |
+|---|---|---|---|
+| Runner says it is using local state | `TF_STATE_BUCKET` is not set. | `echo "$TF_STATE_BUCKET"` | Export `TF_STATE_BUCKET`, `TF_STATE_REGION`, and `TF_STATE_KEY`, then rerun. |
+| Backend bucket creation fails | Missing S3 permissions, invalid bucket name, or wrong region. | `aws s3api head-bucket --bucket "$TF_STATE_BUCKET"` | Use a valid globally unique bucket name and an identity allowed to create/configure it. |
+| Backend points at an unexpected state | `TF_STATE_KEY` changed between runs. | `echo "$TF_STATE_KEY"`; check `s3://$TF_STATE_BUCKET/$TF_STATE_KEY` | Restore the intended key before planning. Do not apply from an accidental new state. |
+| Terraform asks about migrating state unexpectedly | Local state exists and remote state is missing at the configured key. | `ls platform-prerequisites/terraform/dev/terraform.tfstate`; `aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY"` | Confirm this is the first remote-state run before accepting migration. |
+
+### Kubernetes Access And Secrets
+
+| Symptom | Likely Cause | Confirm With | Fix |
+|---|---|---|---|
+| `Unauthorized` or `Forbidden` from Kubernetes | AWS identity is authenticated but not authorized in EKS/RBAC. | `kubectl auth can-i get secrets -n mongodb` | Add/fix EKS Access Entry or RBAC mapping for the operator identity. |
+| `namespace-scoped preflight failed for 'mongodb'` | Terraform prerequisites were not applied, wrong cluster is selected, or namespace access is missing. | `kubectl config current-context`; `kubectl get ns mongodb` | Select the correct cluster, apply Terraform prerequisites, or fix namespace access. |
+| `cannot create secrets` | Identity can read namespace resources but cannot create secrets. | `kubectl auth can-i create secrets -n mongodb` | Grant create permission for secrets in namespace `mongodb`. |
+| Escrow file is invalid | `.local-dev-encryption-key.txt` was edited or corrupted. | `wc -c .local-dev-encryption-key.txt`; rerun `scripts/bootstrap-dev-secrets.sh` | Restore the original escrow file if existing encrypted volumes depend on it. For a fresh dev environment only, remove the bad escrow and regenerate. |
+| Admin password escrow is empty | `.local-dev-admin-password.txt` exists but has no password. | `wc -c .local-dev-admin-password.txt` | Restore the original password file, or delete it only for a fresh environment where regenerating is acceptable. |
+
+### Render And Post-Deploy Checks
+
+| Symptom | Likely Cause | Confirm With | Fix |
+|---|---|---|---|
+| `kustomize build` fails | Overlay path, resource reference, or manifest syntax is invalid. | `kustomize build k8s/overlays/dev` | Fix the reported manifest path or syntax error. |
+| Render validation writes `/tmp/mongodb-dev.yaml` but `rg` finds nothing | Expected MongoDB markers are missing from the rendered overlay. | `rg -n "kind: PerconaServerMongoDB|size: 3|backup:" /tmp/mongodb-dev.yaml` | Check overlay patches and resource inclusion. |
+| `scripts/verify-dev-identity.sh` exits `1` | MongoDB pods do not exist yet. | `kubectl get pods -n mongodb -l app.kubernetes.io/name=percona-server-mongodb` | Apply the operator and workload manifests, wait for pods, then rerun. |
+| `scripts/verify-dev-identity.sh` exits `2` | MongoDB pods use a different ServiceAccount than expected. | `kubectl get pod <pod> -n mongodb -o jsonpath='{.spec.serviceAccountName}'` | Fix the workload ServiceAccount reference or pass the expected ServiceAccount as the second script argument. |
 
 ## Architecture Summary
 The Terraform layout separates reusable resource logic from the runnable dev root.
