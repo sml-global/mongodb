@@ -15,8 +15,7 @@ allowed_cidr_blocks = []
 
 db_identifier       = "pg18-dev"
 engine_version      = null
-serverlessv2_min_acu = 1
-serverlessv2_max_acu = 1
+instance_class      = "db.t4g.medium"
 
 # Optional: pin the only writer instance to a specific AZ.
 writer_availability_zone = ""

@@ -3,7 +3,7 @@
 This example provisions a low-cost dev Aurora PostgreSQL cluster:
 - Engine: Aurora PostgreSQL (`aurora-postgresql`)
 - Topology: single writer instance (no readers)
-- Capacity: Aurora Serverless v2 with `min_acu = 1`, `max_acu = 1` (approximately 2 GiB equivalent memory)
+- Capacity: provisioned Aurora instance class (`db.t4g.medium` default)
 - Networking: existing VPC + existing private subnets
 - Security: dedicated DB security group
 

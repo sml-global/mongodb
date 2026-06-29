@@ -81,11 +81,6 @@ resource "aws_rds_cluster" "this" {
   apply_immediately               = true
   enabled_cloudwatch_logs_exports = []
 
-  serverlessv2_scaling_configuration {
-    min_capacity = var.serverlessv2_min_acu
-    max_capacity = var.serverlessv2_max_acu
-  }
-
   tags = {
     Name        = var.db_identifier
     Environment = "dev"
@@ -98,7 +93,7 @@ resource "aws_rds_cluster_instance" "writer" {
   cluster_identifier = aws_rds_cluster.this.id
   engine             = aws_rds_cluster.this.engine
   engine_version     = aws_rds_cluster.this.engine_version
-  instance_class     = "db.serverless"
+  instance_class     = var.instance_class
 
   publicly_accessible          = false
   auto_minor_version_upgrade   = true

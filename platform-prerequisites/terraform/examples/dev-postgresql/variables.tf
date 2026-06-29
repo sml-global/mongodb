@@ -43,16 +43,10 @@ variable "engine_version" {
   default     = null
 }
 
-variable "serverlessv2_min_acu" {
-  description = "Aurora Serverless v2 minimum ACU (1 ACU is approximately 2 GiB memory)."
-  type        = number
-  default     = 1
-}
-
-variable "serverlessv2_max_acu" {
-  description = "Aurora Serverless v2 maximum ACU for the single writer instance."
-  type        = number
-  default     = 1
+variable "instance_class" {
+  description = "Aurora provisioned instance class for the single writer (for example db.t4g.medium)."
+  type        = string
+  default     = "db.t4g.medium"
 }
 
 variable "writer_availability_zone" {

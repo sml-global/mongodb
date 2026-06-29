@@ -3,7 +3,7 @@
 > For this phase, implement only a Terraform example form for cost-focused dev Aurora PostgreSQL.
 
 ## Goal
-Create a reusable Terraform example that provisions dev Aurora PostgreSQL with single writer and 1 ACU floor/cap using existing network subnets.
+Create a reusable Terraform example that provisions dev Aurora PostgreSQL with a single writer and provisioned instance class using existing network subnets.
 
 ## Tasks
 
@@ -16,7 +16,7 @@ Create a reusable Terraform example that provisions dev Aurora PostgreSQL with s
 - Create: `platform-prerequisites/terraform/examples/dev-postgresql/README.md`
 
 - [x] Provision `aws_rds_cluster` + single `aws_rds_cluster_instance` writer.
-- [x] Configure Serverless v2 capacity floor/cap (`1 -> 1` ACU).
+- [x] Configure provisioned writer instance class (`db.t4g.medium` default).
 - [x] Keep deployment private with single writer topology.
 - [x] Attach dedicated security group.
 

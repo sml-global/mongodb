@@ -8,7 +8,7 @@
 ## Design Decisions
 - Engine: `aurora-postgresql`
 - Engine version: optional input (`null` default to region default)
-- Capacity mode: Aurora Serverless v2 (`min_acu = 1`, `max_acu = 1`, roughly 2 GiB equivalent memory)
+- Capacity mode: Aurora provisioned instance class (`db.t4g.medium` default)
 - Deployment mode: single writer instance, non-public
 - Backups/ops: 1-day retention, no Performance Insights, no Enhanced Monitoring
 - Security group: dedicated DB SG; allow inbound 5432 from app SG and/or approved CIDRs
