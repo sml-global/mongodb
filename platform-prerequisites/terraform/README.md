@@ -18,27 +18,66 @@ It does not provision:
 - MongoDB workload manifests in `k8s/`
 - CI/CD automation (manual-first workflow only)
 
+## Fast Path (Impatient Operator)
+If you need to get to first successful apply quickly, do only this:
+
+1. Create runtime vars file:
+
+```bash
+cp platform-prerequisites/terraform/dev/terraform.tfvars.sample platform-prerequisites/terraform/dev/terraform.tfvars
+```
+
+2. Fill required values in `platform-prerequisites/terraform/dev/terraform.tfvars`:
+- `cluster_name`
+- `vpc_id`
+- `private_subnet_ids`
+- `db_master_password`
+
+3. Optional remote state (recommended):
+
+```bash
+export TF_STATE_BUCKET="your-terraform-state-bucket"
+export TF_STATE_REGION="us-east-1"
+export TF_STATE_KEY="mongodb/platform-prerequisites/dev/terraform.tfstate"
+```
+
+4. Plan and apply:
+
+```bash
+scripts/run-platform-prereq.sh
+cd platform-prerequisites/terraform/dev && terraform apply tfplan
+```
+
+5. MongoDB readiness checks:
+
+```bash
+scripts/bootstrap-dev-secrets.sh
+scripts/validate-dev-render.sh
+```
+
 ## Table Of Contents
 - [Platform Prerequisites Terraform](#platform-prerequisites-terraform)
   - [Purpose](#purpose)
+  - [Fast Path (Impatient Operator)](#fast-path-impatient-operator)
   - [Audience And Primary Tasks](#audience-and-primary-tasks)
-  - [Architecture Summary](#architecture-summary)
-  - [Architecture Flow Chart](#architecture-flow-chart)
   - [Operator Onboarding Flow](#operator-onboarding-flow)
   - [Operator Readiness Gates](#operator-readiness-gates)
+  - [Quick Start (Unified Apply)](#quick-start-unified-apply)
+  - [Runbook Commands](#runbook-commands)
+  - [Troubleshooting](#troubleshooting)
+  - [Architecture Summary](#architecture-summary)
+  - [Architecture Flow Chart](#architecture-flow-chart)
   - [Repository Structure](#repository-structure)
   - [Design Decisions And Boundaries](#design-decisions-and-boundaries)
   - [Access And Permissions Model](#access-and-permissions-model)
+  - [Admin Deep Dive](#admin-deep-dive)
   - [State Backend Strategy](#state-backend-strategy)
-  - [Quick Start (Unified Apply)](#quick-start-unified-apply)
-  - [Runbook Commands](#runbook-commands)
   - [Script Contracts](#script-contracts)
   - [Script Execution Flows](#script-execution-flows)
   - [Configuration Reference](#configuration-reference)
   - [Security Posture](#security-posture)
   - [Operations And Day-2 Maintenance](#operations-and-day-2-maintenance)
   - [Change Flow (Day-2)](#change-flow-day-2)
-  - [Troubleshooting](#troubleshooting)
   - [Change Management Rules](#change-management-rules)
   - [Handoff To Central Platform Terraform](#handoff-to-central-platform-terraform)
 
@@ -85,7 +124,7 @@ flowchart TD
 
 ## Operator Onboarding Flow
 
-This section is operator-focused only. It defines the minimum complete path from first access to first successful platform apply.
+This section defines the minimum complete path from first access to first successful platform apply.
 
 Onboarding phases:
 - Phase 0: environment and access readiness.
@@ -119,6 +158,12 @@ flowchart TD
   R -->|No| T[Continue GitOps deployment]
 ```
 
+Definition of done for onboarding:
+- `scripts/run-platform-prereq.sh` completes and produces `tfplan`
+- `terraform apply tfplan` succeeds for unified root
+- `scripts/bootstrap-dev-secrets.sh` succeeds
+- `scripts/validate-dev-render.sh` succeeds
+
 ## Operator Readiness Gates
 
 | Gate | Required Evidence | Stop Condition |
@@ -129,65 +174,6 @@ flowchart TD
 | Plan Gate | `scripts/run-platform-prereq.sh` finishes and writes `tfplan` | Init/validate/plan error |
 | Apply Gate | `terraform apply tfplan` succeeds | Partial or failed apply |
 | MongoDB Readiness Gate | `scripts/bootstrap-dev-secrets.sh` and `scripts/validate-dev-render.sh` succeed | Secret/bootstrap/render validation error |
-
-## Repository Structure
-
-| Path | Role |
-|---|---|
-| `platform-prerequisites/terraform/reusable` | Reusable Terraform layer for portable module logic. |
-| `platform-prerequisites/terraform/dev` | Unified runnable root for MongoDB prerequisites + PostgreSQL. |
-| `scripts/run-platform-prereq.sh` | Primary plan workflow (init/fmt/validate/plan) for unified root. |
-| `scripts/bootstrap-terraform-s3-backend.sh` | Idempotent S3 backend bootstrap and one-time state migration helper. |
-| `scripts/bootstrap-dev-secrets.sh` | Creates missing MongoDB dev secrets without mutating tracked manifests. |
-| `scripts/validate-dev-render.sh` | Offline Kustomize render checks for MongoDB dev overlay. |
-| `scripts/verify-dev-identity.sh` | Post-deploy ServiceAccount verification helper. |
-
-## Design Decisions And Boundaries
-Naming alignment follows parent convention:
-- source: `naming-convention-design.md` in `tf_generator`
-- pattern: `{provider}-{location}{site}-{env}-{app}-{role}-{type}-{seq}`
-
-Current PBM bucket default:
-- `sml-aw-gb0-d-oms-gen-s3-01`
-
-Boundary decisions:
-- Terraform here prepares platform prerequisites, not workload manifests.
-- Dev posture favors operational simplicity and repeatability.
-- PostgreSQL is provisioned Aurora with single writer for dev.
-- Manual DB credentials are used in this phase (stored in Terraform state).
-- Production direction is managed credentials (Secrets Manager-backed).
-
-## Access And Permissions Model
-The Terraform runner identity must have:
-- AWS permissions for IAM, S3, EKS read/auth discovery, and RDS/VPC resources used by this stack
-- Kubernetes API authorization in the target EKS cluster for resources such as namespace/service account
-
-Without EKS API authorization, AWS authentication can succeed while Kubernetes resources fail with Unauthorized/Forbidden.
-
-For pipeline adoption later:
-- create an EKS Access Entry (or equivalent RBAC mapping) for the pipeline IAM role
-
-For current manual-first flow:
-- use a bastion/admin IAM identity already mapped to required Kubernetes RBAC
-
-## State Backend Strategy
-Backend migration is intentionally idempotent.
-
-Script:
-- `scripts/bootstrap-terraform-s3-backend.sh`
-
-Behavior:
-- creates backend S3 bucket if missing
-- applies bucket baseline controls on create:
-  - versioning enabled
-  - AES256 server-side encryption enabled
-  - public access block enabled
-- if remote state object exists: use remote state
-- if remote is missing and local state exists: migrate local state once
-- if both are missing: initialize fresh remote backend
-
-Default state key for unified root:
-- `mongodb/platform-prerequisites/dev/terraform.tfstate`
 
 ## Quick Start (Unified Apply)
 1. Prepare local variables:
@@ -235,6 +221,98 @@ scripts/validate-dev-render.sh
 | `scripts/bootstrap-dev-secrets.sh` | Ensures MongoDB dev secrets exist. | Before applying MongoDB manifests. |
 | `scripts/validate-dev-render.sh` | Confirms MongoDB dev overlay renders correctly. | Pre-commit and pre-apply safety check. |
 | `scripts/verify-dev-identity.sh` | Checks expected ServiceAccount usage at runtime. | Post-deploy identity verification. |
+
+## Troubleshooting
+
+| Symptom | Likely Cause | Action |
+|---|---|---|
+| `Unauthorized` or `Forbidden` for Kubernetes resources | Runner lacks EKS API authorization/RBAC mapping | Confirm EKS Access Entry or RBAC mapping for runner identity. |
+| Backend init/migration does not use S3 | `TF_STATE_BUCKET` not set or incorrect bucket/key | Export backend env vars and rerun `scripts/run-platform-prereq.sh`. |
+| Backend bucket creation fails | Missing S3 permissions or region mismatch | Validate IAM permissions and `TF_STATE_REGION`. |
+| PostgreSQL resources fail on networking inputs | Invalid `vpc_id` or `private_subnet_ids` | Correct VPC/subnet values in `dev/terraform.tfvars`. |
+| Terraform CLI fails before validate in this environment | Local `tfenv` is not configured | Fix local tfenv version configuration or use direct Terraform binary. |
+
+## Repository Structure
+
+| Path | Role |
+|---|---|
+| `platform-prerequisites/terraform/reusable` | Reusable Terraform layer for portable module logic. |
+| `platform-prerequisites/terraform/dev` | Unified runnable root for MongoDB prerequisites + PostgreSQL. |
+| `scripts/run-platform-prereq.sh` | Primary plan workflow (init/fmt/validate/plan) for unified root. |
+| `scripts/bootstrap-terraform-s3-backend.sh` | Idempotent S3 backend bootstrap and one-time state migration helper. |
+| `scripts/bootstrap-dev-secrets.sh` | Creates missing MongoDB dev secrets without mutating tracked manifests. |
+| `scripts/validate-dev-render.sh` | Offline Kustomize render checks for MongoDB dev overlay. |
+| `scripts/verify-dev-identity.sh` | Post-deploy ServiceAccount verification helper. |
+
+## Design Decisions And Boundaries
+Naming alignment follows parent convention:
+- source: `naming-convention-design.md` in `tf_generator`
+- pattern: `{provider}-{location}{site}-{env}-{app}-{role}-{type}-{seq}`
+
+Current PBM bucket default:
+- `sml-aw-gb0-d-oms-gen-s3-01`
+
+Boundary decisions:
+- Terraform here prepares platform prerequisites, not workload manifests.
+- Dev posture favors operational simplicity and repeatability.
+- PostgreSQL is provisioned Aurora with single writer for dev.
+- Manual DB credentials are used in this phase (stored in Terraform state).
+- Production direction is managed credentials (Secrets Manager-backed).
+
+## Access And Permissions Model
+The Terraform runner identity must have:
+- AWS permissions for IAM, S3, EKS read/auth discovery, and RDS/VPC resources used by this stack
+- Kubernetes API authorization in the target EKS cluster for resources such as namespace/service account
+
+Without EKS API authorization, AWS authentication can succeed while Kubernetes resources fail with Unauthorized/Forbidden.
+
+For pipeline adoption later:
+- create an EKS Access Entry (or equivalent RBAC mapping) for the pipeline IAM role
+
+For current manual-first flow:
+- use a bastion/admin IAM identity already mapped to required Kubernetes RBAC
+
+## Admin Deep Dive
+
+This section is for advanced administrators who need operational depth beyond quick execution.
+
+Control-plane and trust boundaries:
+- Terraform state and execution context: `platform-prerequisites/terraform/dev`
+- Reusable logic boundary: `platform-prerequisites/terraform/reusable`
+- Kubernetes runtime boundary: `mongodb` namespace resources and ServiceAccounts
+
+Data sensitivity map:
+- High sensitivity:
+  - Terraform state (contains PostgreSQL master password in dev posture)
+  - local `terraform.tfvars` values
+  - local escrow files generated by `scripts/bootstrap-dev-secrets.sh`
+- Medium sensitivity:
+  - IAM role and policy metadata
+  - DB endpoint outputs
+
+Operational risk notes:
+- Any identity without EKS API auth can still appear AWS-authenticated while failing Kubernetes resource creation.
+- Incorrect `TF_STATE_KEY` can fragment state and create drift between expected and actual ownership.
+- Lost escrow material with retained encrypted MongoDB volumes prevents recovery of old encrypted data.
+
+## State Backend Strategy
+Backend migration is intentionally idempotent.
+
+Script:
+- `scripts/bootstrap-terraform-s3-backend.sh`
+
+Behavior:
+- creates backend S3 bucket if missing
+- applies bucket baseline controls on create:
+  - versioning enabled
+  - AES256 server-side encryption enabled
+  - public access block enabled
+- if remote state object exists: use remote state
+- if remote is missing and local state exists: migrate local state once
+- if both are missing: initialize fresh remote backend
+
+Default state key for unified root:
+- `mongodb/platform-prerequisites/dev/terraform.tfstate`
 
 ## Script Contracts
 
@@ -306,8 +384,6 @@ flowchart TD
   H --> L[Bootstrap complete]
   J --> L
   K --> L
-  E --> G
-  C --> G
 ```
 
 ### scripts/validate-dev-render.sh
@@ -383,16 +459,6 @@ flowchart TD
   G --> H[Run post-change checks]
   H --> I[Record decisions and rationale in docs]
 ```
-
-## Troubleshooting
-
-| Symptom | Likely Cause | Action |
-|---|---|---|
-| `Unauthorized` or `Forbidden` for Kubernetes resources | Runner lacks EKS API authorization/RBAC mapping | Confirm EKS Access Entry or RBAC mapping for runner identity. |
-| Backend init/migration does not use S3 | `TF_STATE_BUCKET` not set or incorrect bucket/key | Export backend env vars and rerun `scripts/run-platform-prereq.sh`. |
-| Backend bucket creation fails | Missing S3 permissions or region mismatch | Validate IAM permissions and `TF_STATE_REGION`. |
-| PostgreSQL resources fail on networking inputs | Invalid `vpc_id` or `private_subnet_ids` | Correct VPC/subnet values in `dev/terraform.tfvars`. |
-| Terraform CLI fails before validate in this environment | Local `tfenv` is not configured | Fix local tfenv version configuration or use direct Terraform binary. |
 
 ## Change Management Rules
 When changing Terraform behavior:
