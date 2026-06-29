@@ -1,164 +1,235 @@
 # Platform Prerequisites Terraform
 
-## Overview
-This directory contains Terraform prerequisites used by this repository for both:
-- MongoDB on EKS
-- PostgreSQL on Aurora PostgreSQL (dev path)
+## Purpose
+This document is the single source of truth for provisioning platform prerequisites in this repository.
 
-What this setup is for:
-- create/prepare namespace and ServiceAccount wiring for MongoDB workloads
-- provision IAM + Pod Identity/IRSA access for PBM backup path
-- provision PBM S3 bucket baseline controls
-- provision optional dev Aurora PostgreSQL resources
+It covers:
+- architecture and design intent
+- admin responsibilities and access requirements
+- operator runbooks for planning and applying infrastructure
+- maintenance and change-management guidance
+- troubleshooting and recovery expectations
 
-What this setup is not for:
-- MongoDB workload manifests themselves (those are in `k8s/`)
-- CI/CD automation (manual-first dev flow only)
+It provisions both in one Terraform run/state:
+- MongoDB prerequisites on EKS
+- PostgreSQL (Aurora PostgreSQL, dev posture)
+
+It does not provision:
+- MongoDB workload manifests in `k8s/`
+- CI/CD automation (manual-first workflow only)
 
 ## Table Of Contents
 - [Platform Prerequisites Terraform](#platform-prerequisites-terraform)
-  - [Overview](#overview)
-  - [Table Of Contents](#table-of-contents)
-  - [Folder Map](#folder-map)
-  - [Naming Standard Alignment](#naming-standard-alignment)
-  - [Why Separate Roots Exist](#why-separate-roots-exist)
-  - [S3 State Backend Migration](#s3-state-backend-migration)
-  - [Quick Start: Unified Prerequisites](#quick-start-unified-prerequisites)
-  - [Executable Runbook](#executable-runbook)
-  - [Configuration Files](#configuration-files)
-  - [PostgreSQL In Unified Root](#postgresql-in-unified-root)
-  - [Access Requirement](#access-requirement)
-  - [Standalone Module Intent](#standalone-module-intent)
+  - [Purpose](#purpose)
+  - [Audience And Primary Tasks](#audience-and-primary-tasks)
+  - [Architecture Summary](#architecture-summary)
+  - [Repository Structure](#repository-structure)
+  - [Design Decisions And Boundaries](#design-decisions-and-boundaries)
+  - [Access And Permissions Model](#access-and-permissions-model)
+  - [State Backend Strategy](#state-backend-strategy)
+  - [Quick Start (Unified Apply)](#quick-start-unified-apply)
+  - [Runbook Commands](#runbook-commands)
+  - [Configuration Reference](#configuration-reference)
+  - [Security Posture](#security-posture)
+  - [Operations And Day-2 Maintenance](#operations-and-day-2-maintenance)
+  - [Troubleshooting](#troubleshooting)
+  - [Change Management Rules](#change-management-rules)
+  - [Handoff To Central Platform Terraform](#handoff-to-central-platform-terraform)
 
-## Folder Map
+## Audience And Primary Tasks
+Use this section to jump directly to your role.
 
-| Folder | Purpose |
+| Audience | Primary Questions | Read First |
+|---|---|---|
+| Platform Admin | What permissions are required? What is the security posture? | [Access And Permissions Model](#access-and-permissions-model), [Security Posture](#security-posture) |
+| Infra Operator | How do I run this safely and repeatably? | [Quick Start (Unified Apply)](#quick-start-unified-apply), [Runbook Commands](#runbook-commands) |
+| System Designer | Why is this split into reusable and root layers? | [Architecture Summary](#architecture-summary), [Design Decisions And Boundaries](#design-decisions-and-boundaries) |
+| Maintainer | How do I change defaults and keep behavior stable? | [Configuration Reference](#configuration-reference), [Operations And Day-2 Maintenance](#operations-and-day-2-maintenance) |
+| Incident Responder | How do I diagnose common failures quickly? | [Troubleshooting](#troubleshooting) |
+
+## Architecture Summary
+The Terraform layout intentionally separates reusable logic from execution context.
+
+- Reusable layer: `platform-prerequisites/terraform/reusable`
+  - no provider/backend lock-in
+  - contains portable resource logic for MongoDB prerequisites
+- Unified root: `platform-prerequisites/terraform/dev`
+  - contains provider configuration, backend integration, and root-level inputs
+  - provisions MongoDB prerequisites and PostgreSQL resources in a single state/apply
+
+Single execution contract:
+- one root (`dev`)
+- one plan (`tfplan`)
+- one state key (`mongodb/platform-prerequisites/dev/terraform.tfstate` by default)
+
+## Repository Structure
+
+| Path | Role |
 |---|---|
-| `platform-prerequisites/terraform/reusable` | Reusable Terraform layer (no provider/backend lock-in). |
-| `platform-prerequisites/terraform/dev` | Manual-first unified root used by local operators (MongoDB prerequisites + PostgreSQL). |
+| `platform-prerequisites/terraform/reusable` | Reusable Terraform layer for portable module logic. |
+| `platform-prerequisites/terraform/dev` | Unified runnable root for MongoDB prerequisites + PostgreSQL. |
+| `scripts/run-platform-prereq.sh` | Primary plan workflow (init/fmt/validate/plan) for unified root. |
+| `scripts/bootstrap-terraform-s3-backend.sh` | Idempotent S3 backend bootstrap and one-time state migration helper. |
+| `scripts/bootstrap-dev-secrets.sh` | Creates missing MongoDB dev secrets without mutating tracked manifests. |
+| `scripts/validate-dev-render.sh` | Offline Kustomize render checks for MongoDB dev overlay. |
+| `scripts/verify-dev-identity.sh` | Post-deploy ServiceAccount verification helper. |
 
-## Naming Standard Alignment
-Naming follows the parent naming convention design:
-- source: `naming-convention-design.md` in the `tf_generator` repository
-- canonical pattern: `{provider}-{location}{site}-{env}-{app}-{role}-{type}-{seq}`
+## Design Decisions And Boundaries
+Naming alignment follows parent convention:
+- source: `naming-convention-design.md` in `tf_generator`
+- pattern: `{provider}-{location}{site}-{env}-{app}-{role}-{type}-{seq}`
 
-Current dev PBM bucket default:
+Current PBM bucket default:
 - `sml-aw-gb0-d-oms-gen-s3-01`
 
-Why this value:
-- `sml` org prefix for global-namespace resources (S3)
-- `aw-gb0-d-oms-gen-s3-01` follows the 7-segment model
+Boundary decisions:
+- Terraform here prepares platform prerequisites, not workload manifests.
+- Dev posture favors operational simplicity and repeatability.
+- PostgreSQL is provisioned Aurora with single writer for dev.
+- Manual DB credentials are used in this phase (stored in Terraform state).
+- Production direction is managed credentials (Secrets Manager-backed).
 
-## Why Separate Roots Exist
-Short answer: `platform-prerequisites/terraform/reusable` is intentionally a reusable Terraform layer, while `dev` is the runnable Terraform entrypoint.
+## Access And Permissions Model
+The Terraform runner identity must have:
+- AWS permissions for IAM, S3, EKS read/auth discovery, and RDS/VPC resources used by this stack
+- Kubernetes API authorization in the target EKS cluster for resources such as namespace/service account
 
-Why it is split:
-- Reusable Terraform layer (`platform-prerequisites/terraform/reusable`):
-  - keeps resources portable and easy to merge into a central platform repo
-  - avoids locking this module to one local backend/provider/runtime shape
-- Runnable root (`dev`):
-  - provides providers and concrete root-level execution context
-  - gives operators a ready-to-run manual workflow for MongoDB prerequisites and PostgreSQL in one apply/state
+Without EKS API authorization, AWS authentication can succeed while Kubernetes resources fail with Unauthorized/Forbidden.
 
-Can we run directly from `platform-prerequisites/terraform/reusable`?
-- Not recommended in current layout.
-- You would have to turn it into a root stack (provider/backend/root inputs), which reduces reusability.
-- If you want that model, we can flatten it in a follow-up change and drop the wrappers.
+For pipeline adoption later:
+- create an EKS Access Entry (or equivalent RBAC mapping) for the pipeline IAM role
 
-## S3 State Backend Migration
+For current manual-first flow:
+- use a bastion/admin IAM identity already mapped to required Kubernetes RBAC
 
-Yes, this repository now supports one-time, idempotent state migration to S3.
+## State Backend Strategy
+Backend migration is intentionally idempotent.
 
-Script added:
+Script:
 - `scripts/bootstrap-terraform-s3-backend.sh`
 
-What it does:
-- Checks if the state bucket exists; creates it if missing.
-- Applies bucket baseline controls after creation:
+Behavior:
+- creates backend S3 bucket if missing
+- applies bucket baseline controls on create:
   - versioning enabled
-  - server-side encryption (AES256)
+  - AES256 server-side encryption enabled
   - public access block enabled
-- Checks whether the remote state object already exists.
-- If remote exists: configures Terraform to use it (no migration).
-- If remote missing and local `terraform.tfstate` exists: migrates local state once.
-- If both missing: initializes a fresh remote backend (empty state).
+- if remote state object exists: use remote state
+- if remote is missing and local state exists: migrate local state once
+- if both are missing: initialize fresh remote backend
 
-One-time setup (Unified root for MongoDB + PostgreSQL):
+Default state key for unified root:
+- `mongodb/platform-prerequisites/dev/terraform.tfstate`
+
+## Quick Start (Unified Apply)
+1. Prepare local variables:
+
+```bash
+cp platform-prerequisites/terraform/dev/terraform.tfvars.sample platform-prerequisites/terraform/dev/terraform.tfvars
+```
+
+2. Edit `platform-prerequisites/terraform/dev/terraform.tfvars` with environment values.
+
+3. Optional remote state setup (recommended):
 
 ```bash
 export TF_STATE_BUCKET="your-terraform-state-bucket"
 export TF_STATE_REGION="us-east-1"
 export TF_STATE_KEY="mongodb/platform-prerequisites/dev/terraform.tfstate"
-
-scripts/run-platform-prereq.sh
 ```
 
-Later runs:
-- Keep `TF_STATE_BUCKET` set.
-- The scripts detect existing remote state and reuse it.
-- Bucket creation and migration are skipped when already done.
-
-If `TF_STATE_BUCKET` is not set:
-- scripts fall back to local state behavior.
-
-## Quick Start: Unified Prerequisites
-For manual-first unified deployment (MongoDB prerequisites + PostgreSQL dev):
-
-1. Copy `dev/terraform.tfvars.sample` to `dev/terraform.tfvars`.
-2. Edit `dev/terraform.tfvars` values.
-3. Run:
+4. Build plan:
 
 ```bash
 scripts/run-platform-prereq.sh
 ```
 
-4. Apply planned infrastructure:
+5. Review and apply:
 
 ```bash
 cd platform-prerequisites/terraform/dev && terraform apply tfplan
 ```
 
-## Executable Runbook
+6. For MongoDB overlay readiness, bootstrap secrets and verify render:
 
-| Command / Script | What It Does | When To Use |
+```bash
+scripts/bootstrap-dev-secrets.sh
+scripts/validate-dev-render.sh
+```
+
+## Runbook Commands
+
+| Command | Purpose | Use When |
 |---|---|---|
-| `scripts/bootstrap-terraform-s3-backend.sh` | Ensures S3 backend bucket exists and performs one-time local-to-S3 state migration only when needed. | Before first remote-state run, or directly via wrapper scripts when `TF_STATE_BUCKET` is set. |
-| `scripts/run-platform-prereq.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for unified `dev` root. | First step before any apply; rerun after variable/module changes. |
-| `cd platform-prerequisites/terraform/dev && terraform apply tfplan` | Applies the prepared unified plan (MongoDB prerequisites + PostgreSQL). | After reviewing the generated plan and confirming environment values. |
-| `scripts/bootstrap-dev-secrets.sh` | Creates missing dev secrets (`psmdb-encryption-key`, `psmdb-secrets`) without mutating tracked manifests. | Before applying MongoDB overlay or when secrets are missing. |
-| `scripts/validate-dev-render.sh` | Offline render check for dev overlay. | Fast local verification before `kubectl apply` or commit. |
-| `scripts/verify-dev-identity.sh` | Verifies MongoDB pods use expected ServiceAccount. | Post-deploy runtime check in cluster. |
+| `scripts/run-platform-prereq.sh` | Executes `init`, `fmt`, `validate`, `plan` for unified root. | Before each apply and after Terraform changes. |
+| `cd platform-prerequisites/terraform/dev && terraform apply tfplan` | Applies unified infrastructure plan. | After plan review and approval. |
+| `scripts/bootstrap-terraform-s3-backend.sh` | Bootstraps/validates S3 backend and one-time migration. | First remote-state setup or backend recovery. |
+| `scripts/bootstrap-dev-secrets.sh` | Ensures MongoDB dev secrets exist. | Before applying MongoDB manifests. |
+| `scripts/validate-dev-render.sh` | Confirms MongoDB dev overlay renders correctly. | Pre-commit and pre-apply safety check. |
+| `scripts/verify-dev-identity.sh` | Checks expected ServiceAccount usage at runtime. | Post-deploy identity verification. |
 
-## Configuration Files
+## Configuration Reference
 
-| File | Category | Editable Settings | How To Change |
-|---|---|---|---|
-| `platform-prerequisites/terraform/reusable/variables.tf` | Module defaults | Namespace, SA name, PBM bucket, IAM role defaults, identity mode flags | Edit tracked defaults in git (shared baseline). |
-| `platform-prerequisites/terraform/dev/variables.tf` | Unified root defaults | MongoDB + PostgreSQL sizing/network/security/runtime defaults | Edit tracked defaults in git for repo baseline. |
-| `platform-prerequisites/terraform/dev/terraform.tfvars` | Local runtime values | Per-operator/per-environment overrides | Local file edit (not committed). |
-| `platform-prerequisites/terraform/reusable/main.tf` | Module resources | IAM/S3/Kubernetes resources and wiring | Change only when infrastructure architecture changes. |
-| `platform-prerequisites/terraform/dev/main.tf` | Unified root resources/wiring | Provider setup, module input mapping, and PostgreSQL resources | Change when root wiring or infrastructure architecture changes. |
-| `platform-prerequisites/terraform/dev/outputs.tf` | Unified root outputs | Exposed MongoDB + PostgreSQL values after apply | Change when additional outputs are required. |
+| File | Owns | Typical Changes |
+|---|---|---|
+| `platform-prerequisites/terraform/reusable/variables.tf` | Shared module defaults for MongoDB prerequisite layer. | Baseline defaults shared across roots. |
+| `platform-prerequisites/terraform/reusable/main.tf` | Shared module resources and IAM/S3/Kubernetes wiring. | Architecture-level resource changes. |
+| `platform-prerequisites/terraform/dev/variables.tf` | Unified root input contract (MongoDB + PostgreSQL). | Root defaults for region/network/db sizing/runtime behavior. |
+| `platform-prerequisites/terraform/dev/main.tf` | Unified root execution and PostgreSQL resources. | Provider/backend/root wiring and PG resource topology. |
+| `platform-prerequisites/terraform/dev/outputs.tf` | Unified outputs for operators and downstream usage. | Expose new outputs or adjust output contracts. |
+| `platform-prerequisites/terraform/dev/terraform.tfvars.sample` | Operator template for local runtime values. | Update sample values and required fields guidance. |
 
-Reference for broader repo configuration catalog:
+Broader configuration catalog:
 - `docs/operations/dev-configuration-catalog.md`
 
-## PostgreSQL In Unified Root
-Cost-focused dev Aurora PostgreSQL single-writer resources are now included in:
-- `platform-prerequisites/terraform/dev`
+## Security Posture
+Current dev posture:
+- manual credentials for PostgreSQL via local `terraform.tfvars`
+- PostgreSQL password remains sensitive but is stored in Terraform state
+- PostgreSQL writer is non-public
+- S3 backend bootstrap enforces baseline bucket controls
 
-Current posture:
-- Dev phase uses manual credentials from local `terraform.tfvars` (no IAM DB auth in this phase).
-- Future production should use managed credentials (Secrets Manager-backed workflow).
+Operational safeguards:
+- do not commit `terraform.tfvars`
+- restrict backend bucket access to least privilege
+- treat Terraform state as sensitive data
+- rotate dev credentials when environments are shared
 
-## Access Requirement
-The IAM identity running Terraform must have Kubernetes API authorization in the target EKS cluster.
+## Operations And Day-2 Maintenance
+Routine workflow:
+- rerun `scripts/run-platform-prereq.sh` after Terraform code/default changes
+- inspect plan diff before every apply
+- keep `dev/terraform.tfvars.sample` aligned with actual variable contract
+- validate MongoDB render and secret bootstrap before workload deployment
 
-- For automated pipelines later: create an EKS Access Entry (or equivalent RBAC mapping) for the CI IAM role.
-- For current manual-first flow: ensure your bastion/admin IAM identity is mapped with permissions to create namespace and service account resources.
+Maintenance checklist:
+- verify provider versions remain compatible with root and module constraints
+- review IAM policy scope whenever new integrations are added
+- keep this README synchronized whenever behavior, inputs, or runbooks change
 
-Without EKS API authorization, Terraform can authenticate to AWS but Kubernetes resources (such as `kubernetes_namespace`) fail with Unauthorized/Forbidden errors.
+## Troubleshooting
 
-## Standalone Module Intent
-This module is intentionally clean for later merge into a central Terraform platform project.
-The `dev` root is the local execution entrypoint and can be replaced by your central platform root configuration after integration.
+| Symptom | Likely Cause | Action |
+|---|---|---|
+| `Unauthorized` or `Forbidden` for Kubernetes resources | Runner lacks EKS API authorization/RBAC mapping | Confirm EKS Access Entry or RBAC mapping for runner identity. |
+| Backend init/migration does not use S3 | `TF_STATE_BUCKET` not set or incorrect bucket/key | Export backend env vars and rerun `scripts/run-platform-prereq.sh`. |
+| Backend bucket creation fails | Missing S3 permissions or region mismatch | Validate IAM permissions and `TF_STATE_REGION`. |
+| PostgreSQL resources fail on networking inputs | Invalid `vpc_id` or `private_subnet_ids` | Correct VPC/subnet values in `dev/terraform.tfvars`. |
+| Terraform CLI fails before validate in this environment | Local `tfenv` is not configured | Fix local tfenv version configuration or use direct Terraform binary. |
+
+## Change Management Rules
+When changing Terraform behavior:
+- keep unified root/state contract intact unless intentionally redesigned
+- update this README and `docs/operations/dev-configuration-catalog.md` in the same change
+- prefer additive defaults with explicit migration notes over silent behavioral changes
+
+When changing security-sensitive settings:
+- document the threat/risk tradeoff directly in this README
+- include rollback and verification steps in the same PR/change set
+
+## Handoff To Central Platform Terraform
+This repository keeps the reusable layer intentionally portable for later integration.
+
+Handoff expectation:
+- `platform-prerequisites/terraform/reusable` can be absorbed into central platform Terraform
+- current unified root (`dev`) is an operator-oriented local entrypoint and can be replaced after integration
