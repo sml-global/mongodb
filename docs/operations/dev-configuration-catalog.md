@@ -83,6 +83,10 @@ File: `platform-prerequisites/terraform/dev/variables.tf`
 - `pbm_bucket_name` default: `sml-aw-gb0-d-oms-gen-s3-01`
 - `iam_role_name` default: `mongodb-pbm-role`
 - `use_pod_identity` default: `true`
+- PostgreSQL defaults (same root):
+  - `name_prefix` default: `dev-pg18`
+  - `db_identifier` default: `pg18-dev`
+  - `instance_class` default: `db.t4g.medium`
 
 Change method: manual Terraform variable default edit in git, or override in local `terraform.tfvars` for local runs.
 
@@ -119,15 +123,13 @@ File: `scripts/run-platform-prereq.sh`
   - `TF_STATE_REGION` (default `us-east-1`)
   - `TF_STATE_KEY` (default `mongodb/platform-prerequisites/dev/terraform.tfstate`)
 
-### PostgreSQL Terraform Wrapper Runner
+### PostgreSQL Compatibility Runner
 File: `scripts/run-platform-prereq-postgresql.sh`
 
-- Terraform working directory fixed to:
-  - `platform-prerequisites/terraform/dev-postgresql`
-- Optional remote-state env controls:
-  - `TF_STATE_BUCKET`
-  - `TF_STATE_REGION` (default `us-east-1`)
-  - `TF_STATE_KEY` (default `mongodb/platform-prerequisites/dev-postgresql/terraform.tfstate`)
+- Compatibility shim that delegates to:
+  - `scripts/run-platform-prereq.sh`
+- Purpose:
+  - preserve old command entrypoint while enforcing unified root/state workflow
 
 ### Terraform S3 Backend Bootstrap
 File: `scripts/bootstrap-terraform-s3-backend.sh`
@@ -150,14 +152,14 @@ File: `scripts/verify-dev-identity.sh`
 ## Placeholder Inventory
 - MongoDB dev path: no unresolved placeholders in tracked YAML/TF/SH files.
 - PostgreSQL dev path intentionally includes a placeholder in:
-  - `platform-prerequisites/terraform/dev-postgresql/terraform.tfvars.sample`
+  - `platform-prerequisites/terraform/dev/terraform.tfvars.sample`
   - `db_master_password = CHANGE_ME_STRONG_DEV_PASSWORD`
   - this is expected and must be set locally by operator before apply.
 
 ## PostgreSQL Path Configuration
 - Aurora PostgreSQL dev defaults and sizing live in:
-  - `platform-prerequisites/terraform/dev-postgresql/variables.tf`
+  - `platform-prerequisites/terraform/dev/variables.tf`
 - Aurora PostgreSQL dev infrastructure resources live in:
-  - `platform-prerequisites/terraform/dev-postgresql/main.tf`
+  - `platform-prerequisites/terraform/dev/main.tf`
 - Aurora PostgreSQL dev outputs live in:
-  - `platform-prerequisites/terraform/dev-postgresql/outputs.tf`
+  - `platform-prerequisites/terraform/dev/outputs.tf`

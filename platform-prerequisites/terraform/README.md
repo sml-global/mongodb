@@ -23,11 +23,10 @@ What this setup is not for:
   - [Naming Standard Alignment](#naming-standard-alignment)
   - [Why Separate Roots Exist](#why-separate-roots-exist)
   - [S3 State Backend Migration](#s3-state-backend-migration)
-  - [Quick Start: MongoDB Prerequisites](#quick-start-mongodb-prerequisites)
-  - [Quick Start: PostgreSQL Prerequisites](#quick-start-postgresql-prerequisites)
+  - [Quick Start: Unified Prerequisites](#quick-start-unified-prerequisites)
   - [Executable Runbook](#executable-runbook)
   - [Configuration Files](#configuration-files)
-  - [Dev PostgreSQL Path](#dev-postgresql-path)
+  - [PostgreSQL In Unified Root](#postgresql-in-unified-root)
   - [Access Requirement](#access-requirement)
   - [Standalone Module Intent](#standalone-module-intent)
 
@@ -36,8 +35,7 @@ What this setup is not for:
 | Folder | Purpose |
 |---|---|
 | `platform-prerequisites/terraform/reusable` | Reusable Terraform layer (no provider/backend lock-in). |
-| `platform-prerequisites/terraform/dev` | Manual-first MongoDB prerequisite root used by local operators. |
-| `platform-prerequisites/terraform/dev-postgresql` | Manual-first Aurora PostgreSQL root used by local operators. |
+| `platform-prerequisites/terraform/dev` | Manual-first unified root used by local operators (MongoDB prerequisites + PostgreSQL). |
 
 ## Naming Standard Alignment
 Naming follows the parent naming convention design:
@@ -52,15 +50,15 @@ Why this value:
 - `aw-gb0-d-oms-gen-s3-01` follows the 7-segment model
 
 ## Why Separate Roots Exist
-Short answer: `platform-prerequisites/terraform/reusable` is intentionally a reusable Terraform layer, while `dev/*` roots are runnable Terraform entrypoints.
+Short answer: `platform-prerequisites/terraform/reusable` is intentionally a reusable Terraform layer, while `dev` is the runnable Terraform entrypoint.
 
 Why it is split:
 - Reusable Terraform layer (`platform-prerequisites/terraform/reusable`):
   - keeps resources portable and easy to merge into a central platform repo
   - avoids locking this module to one local backend/provider/runtime shape
-- Runnable roots (`dev`, `dev-postgresql`):
+- Runnable root (`dev`):
   - provides providers and concrete root-level execution context
-  - gives operators a ready-to-run manual workflow for this repo
+  - gives operators a ready-to-run manual workflow for MongoDB prerequisites and PostgreSQL in one apply/state
 
 Can we run directly from `platform-prerequisites/terraform/reusable`?
 - Not recommended in current layout.
@@ -85,7 +83,7 @@ What it does:
 - If remote missing and local `terraform.tfstate` exists: migrates local state once.
 - If both missing: initializes a fresh remote backend (empty state).
 
-One-time setup (MongoDB root):
+One-time setup (Unified root for MongoDB + PostgreSQL):
 
 ```bash
 export TF_STATE_BUCKET="your-terraform-state-bucket"
@@ -93,16 +91,6 @@ export TF_STATE_REGION="us-east-1"
 export TF_STATE_KEY="mongodb/platform-prerequisites/dev/terraform.tfstate"
 
 scripts/run-platform-prereq.sh
-```
-
-One-time setup (PostgreSQL root):
-
-```bash
-export TF_STATE_BUCKET="your-terraform-state-bucket"
-export TF_STATE_REGION="us-east-1"
-export TF_STATE_KEY="mongodb/platform-prerequisites/dev-postgresql/terraform.tfstate"
-
-scripts/run-platform-prereq-postgresql.sh
 ```
 
 Later runs:
@@ -113,11 +101,11 @@ Later runs:
 If `TF_STATE_BUCKET` is not set:
 - scripts fall back to local state behavior.
 
-## Quick Start: MongoDB Prerequisites
-For manual-first MongoDB prerequisite deployment:
+## Quick Start: Unified Prerequisites
+For manual-first unified deployment (MongoDB prerequisites + PostgreSQL dev):
 
 1. Copy `dev/terraform.tfvars.sample` to `dev/terraform.tfvars`.
-2. Edit `dev/terraform.tfvars` values if needed.
+2. Edit `dev/terraform.tfvars` values.
 3. Run:
 
 ```bash
@@ -130,32 +118,13 @@ scripts/run-platform-prereq.sh
 cd platform-prerequisites/terraform/dev && terraform apply tfplan
 ```
 
-## Quick Start: PostgreSQL Prerequisites
-For manual-first PostgreSQL dev deployment:
-
-1. Copy `dev-postgresql/terraform.tfvars.sample` to `dev-postgresql/terraform.tfvars`.
-2. Edit `dev-postgresql/terraform.tfvars` values.
-3. Run:
-
-```bash
-scripts/run-platform-prereq-postgresql.sh
-```
-
-4. Apply planned infrastructure:
-
-```bash
-cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan
-```
-
 ## Executable Runbook
 
 | Command / Script | What It Does | When To Use |
 |---|---|---|
 | `scripts/bootstrap-terraform-s3-backend.sh` | Ensures S3 backend bucket exists and performs one-time local-to-S3 state migration only when needed. | Before first remote-state run, or directly via wrapper scripts when `TF_STATE_BUCKET` is set. |
-| `scripts/run-platform-prereq.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `dev`. | First step before any apply; rerun after variable/module changes. |
-| `scripts/run-platform-prereq-postgresql.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `dev-postgresql`. | First step before PostgreSQL apply; rerun after PostgreSQL variable/module changes. |
-| `cd platform-prerequisites/terraform/dev && terraform apply tfplan` | Applies the prepared MongoDB prerequisite plan. | After reviewing the generated plan and confirming environment values. |
-| `cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan` | Applies the prepared PostgreSQL plan. | After reviewing PostgreSQL plan and confirming DB inputs. |
+| `scripts/run-platform-prereq.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for unified `dev` root. | First step before any apply; rerun after variable/module changes. |
+| `cd platform-prerequisites/terraform/dev && terraform apply tfplan` | Applies the prepared unified plan (MongoDB prerequisites + PostgreSQL). | After reviewing the generated plan and confirming environment values. |
 | `scripts/bootstrap-dev-secrets.sh` | Creates missing dev secrets (`psmdb-encryption-key`, `psmdb-secrets`) without mutating tracked manifests. | Before applying MongoDB overlay or when secrets are missing. |
 | `scripts/validate-dev-render.sh` | Offline render check for dev overlay. | Fast local verification before `kubectl apply` or commit. |
 | `scripts/verify-dev-identity.sh` | Verifies MongoDB pods use expected ServiceAccount. | Post-deploy runtime check in cluster. |
@@ -165,21 +134,18 @@ cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan
 | File | Category | Editable Settings | How To Change |
 |---|---|---|---|
 | `platform-prerequisites/terraform/reusable/variables.tf` | Module defaults | Namespace, SA name, PBM bucket, IAM role defaults, identity mode flags | Edit tracked defaults in git (shared baseline). |
-| `platform-prerequisites/terraform/dev/variables.tf` | MongoDB root defaults | `aws_region`, bucket default, namespace/SA defaults | Edit tracked defaults in git for repo baseline. |
+| `platform-prerequisites/terraform/dev/variables.tf` | Unified root defaults | MongoDB + PostgreSQL sizing/network/security/runtime defaults | Edit tracked defaults in git for repo baseline. |
 | `platform-prerequisites/terraform/dev/terraform.tfvars` | Local runtime values | Per-operator/per-environment overrides | Local file edit (not committed). |
 | `platform-prerequisites/terraform/reusable/main.tf` | Module resources | IAM/S3/Kubernetes resources and wiring | Change only when infrastructure architecture changes. |
-| `platform-prerequisites/terraform/dev/main.tf` | MongoDB root wiring | Provider setup + module input mapping | Change when root wiring changes. |
-| `platform-prerequisites/terraform/dev/outputs.tf` | MongoDB root outputs | Exposed values after apply | Change when additional outputs are required. |
-| `platform-prerequisites/terraform/dev-postgresql/variables.tf` | PostgreSQL root defaults | DB sizing/version/network/security defaults | Edit tracked defaults in git for PostgreSQL baseline. |
-| `platform-prerequisites/terraform/dev-postgresql/main.tf` | PostgreSQL root resources | Aurora cluster/subnet group/security group resource definitions | Change when PostgreSQL infrastructure architecture changes. |
-| `platform-prerequisites/terraform/dev-postgresql/outputs.tf` | PostgreSQL root outputs | Exposed PostgreSQL runtime values after apply | Change when additional PostgreSQL outputs are required. |
+| `platform-prerequisites/terraform/dev/main.tf` | Unified root resources/wiring | Provider setup, module input mapping, and PostgreSQL resources | Change when root wiring or infrastructure architecture changes. |
+| `platform-prerequisites/terraform/dev/outputs.tf` | Unified root outputs | Exposed MongoDB + PostgreSQL values after apply | Change when additional outputs are required. |
 
 Reference for broader repo configuration catalog:
 - `docs/operations/dev-configuration-catalog.md`
 
-## Dev PostgreSQL Path
-For a cost-focused dev Aurora PostgreSQL single-writer form using existing subnets, see:
-- `platform-prerequisites/terraform/dev-postgresql`
+## PostgreSQL In Unified Root
+Cost-focused dev Aurora PostgreSQL single-writer resources are now included in:
+- `platform-prerequisites/terraform/dev`
 
 Current posture:
 - Dev phase uses manual credentials from local `terraform.tfvars` (no IAM DB auth in this phase).
@@ -195,4 +161,4 @@ Without EKS API authorization, Terraform can authenticate to AWS but Kubernetes 
 
 ## Standalone Module Intent
 This module is intentionally clean for later merge into a central Terraform platform project.
-The `dev` and `dev-postgresql` roots are local execution entrypoints and can be replaced by your central platform root configuration after integration.
+The `dev` root is the local execution entrypoint and can be replaced by your central platform root configuration after integration.
