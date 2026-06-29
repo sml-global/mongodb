@@ -1,9 +1,9 @@
-# Dev PostgreSQL (RDS) Terraform Example
+# Dev PostgreSQL (Aurora) Terraform Example
 
-This example provisions a low-cost dev PostgreSQL instance on RDS:
-- Engine: PostgreSQL 18
-- Instance: `db.t4g.small`
-- Storage: `gp3`, 20 GB initial, autoscale to 30 GB
+This example provisions a low-cost dev Aurora PostgreSQL cluster:
+- Engine: Aurora PostgreSQL (`aurora-postgresql`)
+- Topology: single writer instance (no readers)
+- Capacity: Aurora Serverless v2 with `min_acu = 1`, `max_acu = 1` (approximately 2 GiB equivalent memory)
 - Networking: existing VPC + existing private subnets
 - Security: dedicated DB security group
 
@@ -12,6 +12,7 @@ This example provisions a low-cost dev PostgreSQL instance on RDS:
 - This example does not use AWS Secrets Manager because this phase is dev-only and optimized for minimal operational friction.
 - The master password is stored in Terraform state when using `password`.
 - IAM DB authentication is intentionally not used in this phase.
+- Aurora storage remains distributed by Aurora design, even with a single writer instance.
 - Production guidance: use managed credentials (for example `manage_master_user_password = true`) and avoid shared static passwords.
 
 ## Usage

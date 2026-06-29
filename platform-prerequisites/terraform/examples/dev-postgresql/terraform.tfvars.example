@@ -14,10 +14,12 @@ allowed_source_security_group_id = "sg-cccccccc"
 allowed_cidr_blocks = []
 
 db_identifier       = "pg18-dev"
-engine_version      = "18"
-instance_class      = "db.t4g.small"
-allocated_storage   = 20
-max_allocated_storage = 30
+engine_version      = null
+serverlessv2_min_acu = 1
+serverlessv2_max_acu = 1
+
+# Optional: pin the only writer instance to a specific AZ.
+writer_availability_zone = ""
 
 db_name             = "app"
 db_master_username  = "pgadmin"

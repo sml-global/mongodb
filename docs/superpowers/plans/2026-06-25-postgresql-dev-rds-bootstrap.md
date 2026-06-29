@@ -1,9 +1,9 @@
-# PostgreSQL Dev RDS Bootstrap Plan
+# PostgreSQL Dev Aurora Bootstrap Plan
 
-> For this phase, implement only a Terraform example form for cost-focused dev PostgreSQL.
+> For this phase, implement only a Terraform example form for cost-focused dev Aurora PostgreSQL.
 
 ## Goal
-Create a reusable Terraform example that provisions dev PostgreSQL 18 on RDS `db.t4g.small` using existing network subnets.
+Create a reusable Terraform example that provisions dev Aurora PostgreSQL with single writer and 1 ACU floor/cap using existing network subnets.
 
 ## Tasks
 
@@ -15,15 +15,15 @@ Create a reusable Terraform example that provisions dev PostgreSQL 18 on RDS `db
 - Create: `platform-prerequisites/terraform/examples/dev-postgresql/terraform.tfvars.example`
 - Create: `platform-prerequisites/terraform/examples/dev-postgresql/README.md`
 
-- [x] Provision `aws_db_instance` for PostgreSQL 18 with `db.t4g.small`.
-- [x] Configure storage floor/cap (`20 -> 30` GB gp3).
-- [x] Keep deployment private and single-AZ.
+- [x] Provision `aws_rds_cluster` + single `aws_rds_cluster_instance` writer.
+- [x] Configure Serverless v2 capacity floor/cap (`1 -> 1` ACU).
+- [x] Keep deployment private with single writer topology.
 - [x] Attach dedicated security group.
 
 ### Task 2: Security and connectivity model
 - [x] Allow inbound 5432 from app SG when provided.
 - [x] Support optional CIDR-based ingress for controlled dev access.
-- [x] Keep `publicly_accessible = false` by default.
+- [x] Keep `publicly_accessible = false` by default on writer instance.
 
 ### Task 3: Operator handoff docs
 - [x] Document that subnets are reused and not created.

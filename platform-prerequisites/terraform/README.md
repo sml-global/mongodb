@@ -3,13 +3,13 @@
 ## Overview
 This directory contains Terraform prerequisites used by this repository for both:
 - MongoDB on EKS
-- PostgreSQL on RDS (dev example)
+- PostgreSQL on Aurora PostgreSQL (dev example)
 
 What this setup is for:
 - create/prepare namespace and ServiceAccount wiring for MongoDB workloads
 - provision IAM + Pod Identity/IRSA access for PBM backup path
 - provision PBM S3 bucket baseline controls
-- provision optional dev PostgreSQL RDS resources
+- provision optional dev Aurora PostgreSQL resources
 
 What this setup is not for:
 - MongoDB workload manifests themselves (those are in `k8s/`)
@@ -35,7 +35,7 @@ What this setup is not for:
 |---|---|
 | `platform-prerequisites/terraform` | Reusable Terraform module (no provider/backend lock-in). |
 | `platform-prerequisites/terraform/examples/dev` | Manual-first dev wrapper used by local operators. |
-| `platform-prerequisites/terraform/examples/dev-postgresql` | Optional dev PostgreSQL 18 example (RDS) for local testing. |
+| `platform-prerequisites/terraform/examples/dev-postgresql` | Optional dev Aurora PostgreSQL example for local testing. |
 
 ## Naming Standard Alignment
 Naming follows the parent naming convention design:
@@ -106,14 +106,14 @@ cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply t
 | `platform-prerequisites/terraform/examples/dev/main.tf` | Wrapper wiring | Provider setup + module input mapping | Change when wrapper structure changes. |
 | `platform-prerequisites/terraform/examples/dev/outputs.tf` | Wrapper outputs | Exposed values after apply | Change when additional outputs are required. |
 | `platform-prerequisites/terraform/examples/dev-postgresql/variables.tf` | PostgreSQL wrapper defaults | DB sizing/version/network/security defaults | Edit tracked defaults in git for PostgreSQL baseline. |
-| `platform-prerequisites/terraform/examples/dev-postgresql/main.tf` | PostgreSQL wrapper resources | RDS/subnet group/security group resource definitions | Change when PostgreSQL infrastructure architecture changes. |
+| `platform-prerequisites/terraform/examples/dev-postgresql/main.tf` | PostgreSQL wrapper resources | Aurora cluster/subnet group/security group resource definitions | Change when PostgreSQL infrastructure architecture changes. |
 | `platform-prerequisites/terraform/examples/dev-postgresql/outputs.tf` | PostgreSQL wrapper outputs | Exposed PostgreSQL runtime values after apply | Change when additional PostgreSQL outputs are required. |
 
 Reference for broader repo configuration catalog:
 - `docs/operations/dev-configuration-catalog.md`
 
 ## Dev PostgreSQL Example
-For a cost-focused dev PostgreSQL 18 form (RDS `db.t4g.small`) using existing subnets, see:
+For a cost-focused dev Aurora PostgreSQL single-writer form using existing subnets, see:
 - `platform-prerequisites/terraform/examples/dev-postgresql`
 
 Current posture:
