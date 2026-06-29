@@ -74,8 +74,8 @@ File: `platform-prerequisites/terraform/variables.tf`
   - `oidc_provider_url`
   - `kms_key_arn`
 
-### Dev Wrapper Defaults
-File: `platform-prerequisites/terraform/examples/dev/variables.tf`
+### MongoDB Root Defaults
+File: `platform-prerequisites/terraform/dev/variables.tf`
 
 - `aws_region` default: `us-east-1`
 - `mongodb_namespace` default: `mongodb`
@@ -113,13 +113,13 @@ File: `scripts/validate-dev-render.sh`
 File: `scripts/run-platform-prereq.sh`
 
 - Terraform working directory fixed to:
-  - `platform-prerequisites/terraform/examples/dev`
+  - `platform-prerequisites/terraform/dev`
 
 ### PostgreSQL Terraform Wrapper Runner
 File: `scripts/run-platform-prereq-postgresql.sh`
 
 - Terraform working directory fixed to:
-  - `platform-prerequisites/terraform/examples/dev-postgresql`
+  - `platform-prerequisites/terraform/dev-postgresql`
 
 ### ServiceAccount Verification Helper
 File: `scripts/verify-dev-identity.sh`
@@ -129,15 +129,15 @@ File: `scripts/verify-dev-identity.sh`
 
 ## Placeholder Inventory
 - MongoDB dev path: no unresolved placeholders in tracked YAML/TF/SH files.
-- PostgreSQL dev example intentionally includes a placeholder in:
-  - `platform-prerequisites/terraform/examples/dev-postgresql/terraform.tfvars.example`
+- PostgreSQL dev path intentionally includes a placeholder in:
+  - `platform-prerequisites/terraform/dev-postgresql/terraform.tfvars.sample`
   - `db_master_password = CHANGE_ME_STRONG_DEV_PASSWORD`
   - this is expected and must be set locally by operator before apply.
 
-## PostgreSQL Example Configuration
+## PostgreSQL Path Configuration
 - Aurora PostgreSQL dev defaults and sizing live in:
-  - `platform-prerequisites/terraform/examples/dev-postgresql/variables.tf`
+  - `platform-prerequisites/terraform/dev-postgresql/variables.tf`
 - Aurora PostgreSQL dev infrastructure resources live in:
-  - `platform-prerequisites/terraform/examples/dev-postgresql/main.tf`
+  - `platform-prerequisites/terraform/dev-postgresql/main.tf`
 - Aurora PostgreSQL dev outputs live in:
-  - `platform-prerequisites/terraform/examples/dev-postgresql/outputs.tf`
+  - `platform-prerequisites/terraform/dev-postgresql/outputs.tf`
