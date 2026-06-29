@@ -23,15 +23,19 @@ It does not provision:
   - [Purpose](#purpose)
   - [Audience And Primary Tasks](#audience-and-primary-tasks)
   - [Architecture Summary](#architecture-summary)
+  - [Architecture Flow Chart](#architecture-flow-chart)
+  - [Operator Onboarding Flow](#operator-onboarding-flow)
   - [Repository Structure](#repository-structure)
   - [Design Decisions And Boundaries](#design-decisions-and-boundaries)
   - [Access And Permissions Model](#access-and-permissions-model)
   - [State Backend Strategy](#state-backend-strategy)
   - [Quick Start (Unified Apply)](#quick-start-unified-apply)
   - [Runbook Commands](#runbook-commands)
+  - [Script Execution Flows](#script-execution-flows)
   - [Configuration Reference](#configuration-reference)
   - [Security Posture](#security-posture)
   - [Operations And Day-2 Maintenance](#operations-and-day-2-maintenance)
+  - [Change Flow (Day-2)](#change-flow-day-2)
   - [Troubleshooting](#troubleshooting)
   - [Change Management Rules](#change-management-rules)
   - [Handoff To Central Platform Terraform](#handoff-to-central-platform-terraform)
@@ -61,6 +65,50 @@ Single execution contract:
 - one root (`dev`)
 - one plan (`tfplan`)
 - one state key (`mongodb/platform-prerequisites/dev/terraform.tfstate` by default)
+
+## Architecture Flow Chart
+
+```mermaid
+flowchart TD
+  A[Operator Runs scripts/run-platform-prereq.sh] --> B[Unified Root: platform-prerequisites/terraform/dev]
+  B --> C[Providers Initialized]
+  C --> D[Module Call: reusable layer]
+  D --> E[MongoDB Prerequisites]
+  C --> F[PostgreSQL Resources in dev root]
+  E --> G[Single Plan tfplan]
+  F --> G
+  G --> H[Single Apply]
+  H --> I[Single State Key in S3 or Local]
+```
+
+## Operator Onboarding Flow
+
+This section is operator-focused only. It defines the minimum complete path from first access to first successful platform apply.
+
+Onboarding checklist:
+- Access: verify AWS IAM permissions and EKS API authorization for target cluster.
+- Tooling: verify `terraform`, `aws`, `kubectl`, `kustomize`, `rg`, `openssl` are available.
+- Config: create `platform-prerequisites/terraform/dev/terraform.tfvars` from sample and fill required values.
+- State mode: choose remote S3 backend (recommended) or local state.
+- Plan/apply: run unified Terraform plan/apply.
+- MongoDB readiness: run secret bootstrap and render checks.
+
+```mermaid
+flowchart TD
+  A[Confirm AWS IAM and EKS API access] --> B[Verify required CLI tools installed]
+  B --> C[Copy dev/terraform.tfvars.sample to dev/terraform.tfvars]
+  C --> D[Set cluster VPC subnet and DB values]
+  D --> E{Remote S3 backend?}
+  E -->|Yes| F[Export TF_STATE_BUCKET TF_STATE_REGION TF_STATE_KEY]
+  E -->|No| G[Proceed with local state]
+  F --> H[Run scripts/run-platform-prereq.sh]
+  G --> H
+  H --> I[Review generated tfplan]
+  I --> J[Apply terraform apply tfplan]
+  J --> K[Run scripts/bootstrap-dev-secrets.sh]
+  K --> L[Run scripts/validate-dev-render.sh]
+  L --> M[Run scripts/verify-dev-identity.sh when pods are running]
+```
 
 ## Repository Structure
 
@@ -168,6 +216,81 @@ scripts/validate-dev-render.sh
 | `scripts/validate-dev-render.sh` | Confirms MongoDB dev overlay renders correctly. | Pre-commit and pre-apply safety check. |
 | `scripts/verify-dev-identity.sh` | Checks expected ServiceAccount usage at runtime. | Post-deploy identity verification. |
 
+## Script Execution Flows
+
+These diagrams describe script internals. Use this section when debugging behavior or onboarding maintainers.
+
+### scripts/run-platform-prereq.sh
+
+```mermaid
+flowchart TD
+  A[Start run-platform-prereq.sh] --> B{TF_STATE_BUCKET set?}
+  B -->|Yes| C[Call bootstrap-terraform-s3-backend.sh]
+  B -->|No| D[terraform init local backend]
+  C --> E[terraform fmt -recursive]
+  D --> E
+  E --> F[terraform validate]
+  F --> G[terraform plan -out=tfplan]
+  G --> H[Print apply command]
+```
+
+### scripts/bootstrap-terraform-s3-backend.sh
+
+```mermaid
+flowchart TD
+  A[Parse args and preflight checks] --> B[Ensure backend s3 block exists]
+  B --> C{S3 bucket exists?}
+  C -->|No| D[Create bucket and apply controls]
+  C -->|Yes| E[Keep existing bucket]
+  D --> F{Remote state object exists?}
+  E --> F
+  F -->|Yes| G[terraform init -reconfigure]
+  F -->|No| H{Local terraform.tfstate exists?}
+  H -->|Yes| I[terraform init -migrate-state]
+  H -->|No| J[terraform init -reconfigure fresh backend]
+```
+
+### scripts/bootstrap-dev-secrets.sh
+
+```mermaid
+flowchart TD
+  A[Preflight kubectl RBAC and tools] --> B{Encryption secret exists?}
+  B -->|Yes| C[Skip encryption create]
+  B -->|No| D{Local encryption escrow exists?}
+  D -->|Yes| E[Validate escrow key and create secret]
+  D -->|No| F[Generate key save escrow create secret]
+  C --> G{Admin secret exists?}
+  E --> G
+  F --> G
+  G -->|Yes| H[Skip admin create]
+  G -->|No| I{Local admin escrow exists?}
+  I -->|Yes| J[Read escrow and create admin secret]
+  I -->|No| K[Generate password save escrow create admin secret]
+  H --> L[Bootstrap complete]
+  J --> L
+  K --> L
+```
+
+### scripts/validate-dev-render.sh
+
+```mermaid
+flowchart TD
+  A[Run kustomize build on k8s/overlays/dev] --> B[Write rendered manifest to /tmp/mongodb-dev.yaml]
+  B --> C[rg checks for key structural markers]
+```
+
+### scripts/verify-dev-identity.sh
+
+```mermaid
+flowchart TD
+  A[List MongoDB pods by label] --> B{Any pods found?}
+  B -->|No| C[Exit 1]
+  B -->|Yes| D[Read each pod ServiceAccount]
+  D --> E{All match expected SA?}
+  E -->|Yes| F[Exit 0]
+  E -->|No| G[Exit 2]
+```
+
 ## Configuration Reference
 
 | File | Owns | Typical Changes |
@@ -206,6 +329,21 @@ Maintenance checklist:
 - verify provider versions remain compatible with root and module constraints
 - review IAM policy scope whenever new integrations are added
 - keep this README synchronized whenever behavior, inputs, or runbooks change
+
+## Change Flow (Day-2)
+
+```mermaid
+flowchart TD
+  A[Propose change] --> B[Update Terraform code or defaults]
+  B --> C[Update docs and config catalog in same change]
+  C --> D[Run scripts/run-platform-prereq.sh]
+  D --> E[Review plan for blast radius]
+  E --> F{Approved?}
+  F -->|No| B
+  F -->|Yes| G[Apply terraform apply tfplan]
+  G --> H[Run post-change checks]
+  H --> I[Record decisions and rationale in docs]
+```
 
 ## Troubleshooting
 
