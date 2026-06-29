@@ -1,5 +1,10 @@
 # PostgreSQL Dev Aurora Bootstrap Plan
 
+## Document Status
+This is a historical implementation plan. It is retained for traceability and should not be used as the current operator runbook.
+
+Current implementation uses the unified Terraform root at `platform-prerequisites/terraform/dev`; current operator instructions are maintained in `platform-prerequisites/terraform/README.md`.
+
 > For this phase, implement only a Terraform root form for cost-focused dev Aurora PostgreSQL.
 
 ## Goal

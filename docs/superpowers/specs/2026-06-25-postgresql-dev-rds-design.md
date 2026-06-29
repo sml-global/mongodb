@@ -1,7 +1,12 @@
 # PostgreSQL Dev Aurora Design
 
+## Document Status
+This is a historical design document for the PostgreSQL dev Aurora addition.
+
+Current implementation uses the unified Terraform root at `platform-prerequisites/terraform/dev`, where MongoDB prerequisites and PostgreSQL are planned, applied, and tracked in one state file. Current operator instructions are maintained in `platform-prerequisites/terraform/README.md`.
+
 ## Scope
-- Add a dedicated Terraform form for dev PostgreSQL in this repository.
+- Add dev PostgreSQL resources to the repository Terraform workflow.
 - Use Amazon Aurora PostgreSQL with a single writer instance for dev.
 - Reuse existing VPC and existing private subnets; do not create subnet resources.
 

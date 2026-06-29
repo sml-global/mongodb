@@ -39,6 +39,38 @@ The workflow has three phases. Keep them separate when debugging.
 | Plan and Apply | Build a Terraform plan for MongoDB prerequisites and PostgreSQL, then apply the reviewed plan. | `scripts/run-platform-prereq.sh`, then `terraform apply tfplan`. | AWS/Kubernetes prerequisite resources are created or updated. |
 | Verify MongoDB Readiness | Create required dev secrets and confirm the MongoDB overlay renders before workload deployment. | `scripts/bootstrap-dev-secrets.sh`, then `scripts/validate-dev-render.sh`. | MongoDB workload manifests can be applied with the expected prerequisites in place. |
 
+## Table Of Contents
+- [Platform Prerequisites Terraform](#platform-prerequisites-terraform)
+  - [Purpose](#purpose)
+  - [Read This First](#read-this-first)
+  - [Scope](#scope)
+  - [Operating Model](#operating-model)
+  - [Workstation Setup](#workstation-setup)
+  - [Standard Operator Procedure](#standard-operator-procedure)
+  - [Audience And Primary Tasks](#audience-and-primary-tasks)
+  - [Experienced Operator Shortcut](#experienced-operator-shortcut)
+  - [What Happens When The Main Script Runs](#what-happens-when-the-main-script-runs)
+  - [Required Safety Gates](#required-safety-gates)
+  - [Remote State Behavior](#remote-state-behavior)
+  - [Runbook Commands](#runbook-commands)
+  - [Common Problems For New Operators](#common-problems-for-new-operators)
+  - [Troubleshooting](#troubleshooting)
+  - [Architecture Summary](#architecture-summary)
+  - [Terraform Provisioning Model](#terraform-provisioning-model)
+  - [Repository Structure](#repository-structure)
+  - [Design Decisions And Boundaries](#design-decisions-and-boundaries)
+  - [Access And Permissions Model](#access-and-permissions-model)
+  - [Admin Deep Dive](#admin-deep-dive)
+  - [State Backend Strategy](#state-backend-strategy)
+  - [Script Contracts](#script-contracts)
+  - [Script Execution Flows](#script-execution-flows)
+  - [Configuration Reference](#configuration-reference)
+  - [Security Posture](#security-posture)
+  - [Operations And Day-2 Maintenance](#operations-and-day-2-maintenance)
+  - [Change Flow (Day-2)](#change-flow-day-2)
+  - [Change Management Rules](#change-management-rules)
+  - [Handoff To Central Platform Terraform](#handoff-to-central-platform-terraform)
+
 ## Workstation Setup
 
 Complete this once per workstation before running the operator procedure.
@@ -68,16 +100,96 @@ Required commands:
 - `rg`
 - `openssl`
 
-On macOS with Homebrew:
+Use your organization-approved package source when one exists. The commands below are practical defaults for a local workstation.
+
+#### macOS
+
+Using Homebrew:
 
 ```bash
 brew install awscli terraform kubectl kustomize ripgrep openssl
 ```
 
+#### Ubuntu
+
+Install base packages:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl wget unzip gnupg lsb-release ca-certificates ripgrep openssl
+```
+
+Install AWS CLI v2:
+
+```bash
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+rm -rf aws awscliv2.zip
+```
+
+Install Terraform from the HashiCorp apt repository:
+
+```bash
+wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt-get update
+sudo apt-get install -y terraform
+```
+
+Install `kubectl` from the Kubernetes apt repository:
+
+```bash
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt-get update
+sudo apt-get install -y kubectl
+```
+
+Install `kustomize`:
+
+```bash
+curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+sudo mv kustomize /usr/local/bin/kustomize
+```
+
+#### Windows
+
+Use PowerShell.
+
+With `winget`:
+
+```powershell
+winget install --id Amazon.AWSCLI -e
+winget install --id Hashicorp.Terraform -e
+winget install --id Kubernetes.kubectl -e
+winget install --id Kubernetes.kustomize -e
+winget install --id BurntSushi.ripgrep.MSVC -e
+winget install --id ShiningLight.OpenSSL.Light -e
+```
+
+If your workstation uses Chocolatey instead:
+
+```powershell
+choco install awscli terraform kubernetes-cli kustomize ripgrep openssl -y
+```
+
+Open a new terminal after installing tools so PATH changes are loaded.
+
 Verify the tools are available:
 
 ```bash
 command -v aws terraform kubectl kustomize rg openssl
+terraform version
+aws --version
+kubectl version --client
+```
+
+On Windows PowerShell, use:
+
+```powershell
+Get-Command aws, terraform, kubectl, kustomize, rg, openssl
 terraform version
 aws --version
 kubectl version --client
@@ -112,6 +224,13 @@ Use the profile in this shell:
 ```bash
 export AWS_PROFILE=<profile-name>
 export AWS_REGION=<workload-region>
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:AWS_PROFILE = "<profile-name>"
+$env:AWS_REGION = "<workload-region>"
 ```
 
 Confirm the login is correct:
@@ -160,37 +279,12 @@ pwd
 test -d platform-prerequisites/terraform/dev && echo "repo root confirmed"
 ```
 
-## Table Of Contents
-- [Platform Prerequisites Terraform](#platform-prerequisites-terraform)
-  - [Purpose](#purpose)
-  - [Read This First](#read-this-first)
-  - [Scope](#scope)
-  - [Operating Model](#operating-model)
-  - [Workstation Setup](#workstation-setup)
-  - [Standard Operator Procedure](#standard-operator-procedure)
-  - [Audience And Primary Tasks](#audience-and-primary-tasks)
-  - [Experienced Operator Shortcut](#experienced-operator-shortcut)
-  - [What Happens When The Main Script Runs](#what-happens-when-the-main-script-runs)
-  - [Required Safety Gates](#required-safety-gates)
-  - [Remote State Behavior](#remote-state-behavior)
-  - [Runbook Commands](#runbook-commands)
-  - [Common Problems For New Operators](#common-problems-for-new-operators)
-  - [Troubleshooting](#troubleshooting)
-  - [Architecture Summary](#architecture-summary)
-  - [Terraform Provisioning Model](#terraform-provisioning-model)
-  - [Repository Structure](#repository-structure)
-  - [Design Decisions And Boundaries](#design-decisions-and-boundaries)
-  - [Access And Permissions Model](#access-and-permissions-model)
-  - [Admin Deep Dive](#admin-deep-dive)
-  - [State Backend Strategy](#state-backend-strategy)
-  - [Script Contracts](#script-contracts)
-  - [Script Execution Flows](#script-execution-flows)
-  - [Configuration Reference](#configuration-reference)
-  - [Security Posture](#security-posture)
-  - [Operations And Day-2 Maintenance](#operations-and-day-2-maintenance)
-  - [Change Flow (Day-2)](#change-flow-day-2)
-  - [Change Management Rules](#change-management-rules)
-  - [Handoff To Central Platform Terraform](#handoff-to-central-platform-terraform)
+On Windows PowerShell:
+
+```powershell
+Get-Location
+Test-Path platform-prerequisites/terraform/dev
+```
 
 ## Standard Operator Procedure
 

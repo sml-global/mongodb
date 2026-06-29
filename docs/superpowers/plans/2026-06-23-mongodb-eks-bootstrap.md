@@ -1,5 +1,10 @@
 # MongoDB EKS Bootstrap Implementation Plan
 
+## Document Status
+This is a historical implementation plan. It is retained for traceability and should not be used as the current operator runbook.
+
+Current workstation setup, Terraform execution, remote state behavior, and troubleshooting are maintained in `platform-prerequisites/terraform/README.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Create a fully declarative repository for Percona MongoDB on EKS with dev overlay and policy guardrails.
