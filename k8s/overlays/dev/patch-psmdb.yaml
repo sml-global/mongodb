@@ -36,5 +36,5 @@ spec:
       s3-main:
         type: s3
         s3:
-          bucket: sml-oms-mongodb-backup-dev
+          bucket: sml-aw-gb0-d-oms-gen-s3-01
           region: us-east-1

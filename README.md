@@ -56,7 +56,7 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
 ## Dev Overlay Configuration
 - The dev patch is static and tracked in git at `k8s/overlays/dev/patch-psmdb.yaml`.
 - Backup bucket and region are intentionally hardcoded for deterministic dev behavior:
-  - bucket: `sml-oms-mongodb-backup-dev`
+  - bucket: `sml-aw-gb0-d-oms-gen-s3-01`
   - region: `us-east-1`
 - No unresolved placeholders are permitted in tracked MongoDB dev manifests.
 
