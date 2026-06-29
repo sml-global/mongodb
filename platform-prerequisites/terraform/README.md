@@ -1,27 +1,33 @@
 # Platform Prerequisites Terraform
 
 ## Overview
-This directory contains Terraform for MongoDB platform prerequisites used by this repository.
+This directory contains Terraform prerequisites used by this repository for both:
+- MongoDB on EKS
+- PostgreSQL on RDS (dev example)
 
 What this setup is for:
 - create/prepare namespace and ServiceAccount wiring for MongoDB workloads
 - provision IAM + Pod Identity/IRSA access for PBM backup path
 - provision PBM S3 bucket baseline controls
+- provision optional dev PostgreSQL RDS resources
 
 What this setup is not for:
 - MongoDB workload manifests themselves (those are in `k8s/`)
 - CI/CD automation (manual-first dev flow only)
 
 ## Table Of Contents
-- [Overview](#overview)
-- [Folder Map](#folder-map)
-- [Naming Standard Alignment](#naming-standard-alignment)
-- [Quick Start](#quick-start)
-- [Executable Runbook](#executable-runbook)
-- [Configuration Files](#configuration-files)
-- [Dev PostgreSQL Example](#dev-postgresql-example)
-- [Access Requirement](#access-requirement)
-- [Standalone Module Intent](#standalone-module-intent)
+- [Platform Prerequisites Terraform](#platform-prerequisites-terraform)
+  - [Overview](#overview)
+  - [Table Of Contents](#table-of-contents)
+  - [Folder Map](#folder-map)
+  - [Naming Standard Alignment](#naming-standard-alignment)
+  - [Quick Start: MongoDB Prerequisites](#quick-start-mongodb-prerequisites)
+  - [Quick Start: PostgreSQL Prerequisites](#quick-start-postgresql-prerequisites)
+  - [Executable Runbook](#executable-runbook)
+  - [Configuration Files](#configuration-files)
+  - [Dev PostgreSQL Example](#dev-postgresql-example)
+  - [Access Requirement](#access-requirement)
+  - [Standalone Module Intent](#standalone-module-intent)
 
 ## Folder Map
 
@@ -43,8 +49,8 @@ Why this value:
 - `sml` org prefix for global-namespace resources (S3)
 - `aw-gb0-d-oms-gen-s3-01` follows the 7-segment model
 
-## Quick Start
-For manual-first dev deployment:
+## Quick Start: MongoDB Prerequisites
+For manual-first MongoDB prerequisite deployment:
 
 1. Copy `examples/dev/terraform.tfvars.example` to `examples/dev/terraform.tfvars`.
 2. Edit `examples/dev/terraform.tfvars` values if needed.
@@ -60,12 +66,31 @@ scripts/run-platform-prereq.sh
 cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan
 ```
 
+## Quick Start: PostgreSQL Prerequisites
+For manual-first PostgreSQL dev deployment:
+
+1. Copy `examples/dev-postgresql/terraform.tfvars.example` to `examples/dev-postgresql/terraform.tfvars`.
+2. Edit `examples/dev-postgresql/terraform.tfvars` values.
+3. Run:
+
+```bash
+scripts/run-platform-prereq-postgresql.sh
+```
+
+4. Apply planned infrastructure:
+
+```bash
+cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply tfplan
+```
+
 ## Executable Runbook
 
 | Command / Script | What It Does | When To Use |
 |---|---|---|
 | `scripts/run-platform-prereq.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `examples/dev`. | First step before any apply; rerun after variable/module changes. |
+| `scripts/run-platform-prereq-postgresql.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `examples/dev-postgresql`. | First step before PostgreSQL apply; rerun after PostgreSQL variable/module changes. |
 | `cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan` | Applies the prepared dev plan. | After reviewing the generated plan and confirming environment values. |
+| `cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply tfplan` | Applies the prepared PostgreSQL dev plan. | After reviewing PostgreSQL plan and confirming DB inputs. |
 | `scripts/bootstrap-dev-secrets.sh` | Creates missing dev secrets (`psmdb-encryption-key`, `psmdb-secrets`) without mutating tracked manifests. | Before applying MongoDB overlay or when secrets are missing. |
 | `scripts/validate-dev-render.sh` | Offline render check for dev overlay. | Fast local verification before `kubectl apply` or commit. |
 | `scripts/verify-dev-identity.sh` | Verifies MongoDB pods use expected ServiceAccount. | Post-deploy runtime check in cluster. |
@@ -80,6 +105,9 @@ cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan
 | `platform-prerequisites/terraform/main.tf` | Module resources | IAM/S3/Kubernetes resources and wiring | Change only when infrastructure architecture changes. |
 | `platform-prerequisites/terraform/examples/dev/main.tf` | Wrapper wiring | Provider setup + module input mapping | Change when wrapper structure changes. |
 | `platform-prerequisites/terraform/examples/dev/outputs.tf` | Wrapper outputs | Exposed values after apply | Change when additional outputs are required. |
+| `platform-prerequisites/terraform/examples/dev-postgresql/variables.tf` | PostgreSQL wrapper defaults | DB sizing/version/network/security defaults | Edit tracked defaults in git for PostgreSQL baseline. |
+| `platform-prerequisites/terraform/examples/dev-postgresql/main.tf` | PostgreSQL wrapper resources | RDS/subnet group/security group resource definitions | Change when PostgreSQL infrastructure architecture changes. |
+| `platform-prerequisites/terraform/examples/dev-postgresql/outputs.tf` | PostgreSQL wrapper outputs | Exposed PostgreSQL runtime values after apply | Change when additional PostgreSQL outputs are required. |
 
 Reference for broader repo configuration catalog:
 - `docs/operations/dev-configuration-catalog.md`
