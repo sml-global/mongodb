@@ -35,7 +35,7 @@ File: `k8s/overlays/dev/patch-psmdb.yaml`
 - `spec.replsets[0].volumeSpec.persistentVolumeClaim.resources.requests.storage = 20Gi`
 - `spec.backup.enabled = false`
 - `spec.backup.pitr.enabled = false`
-- `spec.backup.storages.s3-main.s3.bucket = sml-oms-mongodb-backup-dev`
+- `spec.backup.storages.s3-main.s3.bucket = sml-aw-gb0-d-oms-gen-s3-01`
 - `spec.backup.storages.s3-main.s3.region = us-east-1`
 
 Change method: manual YAML edit in git.
@@ -66,7 +66,7 @@ File: `platform-prerequisites/terraform/variables.tf`
 
 - `mongodb_namespace` default: `mongodb`
 - `mongodb_workload_service_account_name` default: `psmdb-db`
-- `pbm_bucket_name` default: `sml-oms-mongodb-backup-dev`
+- `pbm_bucket_name` default: `sml-aw-gb0-d-oms-gen-s3-01`
 - `iam_role_name` default: `mongodb-pbm-role`
 - `use_pod_identity` default: `true`
 - optional empty defaults:
@@ -80,7 +80,7 @@ File: `platform-prerequisites/terraform/examples/dev/variables.tf`
 - `aws_region` default: `us-east-1`
 - `mongodb_namespace` default: `mongodb`
 - `mongodb_workload_service_account_name` default: `psmdb-db`
-- `pbm_bucket_name` default: `sml-oms-mongodb-backup-dev`
+- `pbm_bucket_name` default: `sml-aw-gb0-d-oms-gen-s3-01`
 - `iam_role_name` default: `mongodb-pbm-role`
 - `use_pod_identity` default: `true`
 
