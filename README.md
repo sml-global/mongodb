@@ -68,11 +68,16 @@ MongoDB deployment model in this repo:
 ## Apply Order (GitOps)
 0. Provision platform prerequisites for MongoDB + PostgreSQL (`platform-prerequisites/terraform/dev`):
    - `scripts/run-platform-prereq.sh`
-  - `(cd platform-prerequisites/terraform/dev && terraform apply tfplan)`
+   - `(cd platform-prerequisites/terraform/dev && terraform apply tfplan)`
 1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
 2. Apply `gitops/operators/base`.
 3. Apply `policies/kyverno`.
 4. Apply the dev overlay: `k8s/overlays/dev`.
+
+Operator onboarding and script internals are documented in:
+- `platform-prerequisites/terraform/README.md`
+  - `Operator Onboarding Flow`
+  - `Script Execution Flows`
 
 ## Connecting to the Database
 - Username: `clusterAdmin`

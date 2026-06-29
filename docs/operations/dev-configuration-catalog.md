@@ -3,8 +3,13 @@
 ## Purpose
 This catalog is the source of truth for embedded configuration in this repository.
 
-- Scope: MongoDB dev workflow files in YAML, Terraform, and shell scripts.
+- Scope: unified MongoDB + PostgreSQL dev workflow files in YAML, Terraform, and shell scripts.
 - Goal: make every editable setting discoverable and explicit.
+
+Process and operator workflow references:
+- `platform-prerequisites/terraform/README.md`:
+  - `Operator Onboarding Flow`
+  - `Script Execution Flows`
 
 ## Configuration Policy
 - Tracked workload manifests are static for dev. No runtime manifest mutation is used.
