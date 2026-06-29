@@ -67,11 +67,10 @@
 - [x] Run `scripts/validate-dev-render.sh`.
 - [x] Run validation scripts as part of the local dev workflow.
 
-### Task 7: Dev overlay injection workflow
-- [x] Convert the dev Mongo patch into a tracked template.
-- [x] Generate the injected overlay from Terraform outputs before render/apply.
-- [x] Keep the generated overlay ignored by git.
-- [x] Make dev render validation invoke the injector first.
+### Task 7: Dev overlay static workflow
+- [x] Keep the dev Mongo patch as a tracked static file.
+- [x] Use deterministic bucket/region values in the dev patch.
+- [x] Keep dev render validation read-only and offline.
 
 ### Task 8: Documentation and usage
 **Files:**
@@ -80,3 +79,12 @@
 - [ ] Document prerequisites (Pod Identity, IAM roles, AWS Secret Manager entries).
 - [ ] Document apply order for GitOps and manual validation steps.
 - [ ] Document restore authority boundaries (PBM authoritative, snapshots compliance-only).
+
+### Task 9: Configuration inventory and variable policy
+**Files:**
+- Create: `docs/operations/dev-configuration-catalog.md`
+- Update: `README.md`
+
+- [x] Record embedded YAML/TF/SH configuration values and change mechanisms.
+- [x] Define policy for unresolved placeholders/tokens.
+- [x] Require documentation updates when embedded configuration changes.

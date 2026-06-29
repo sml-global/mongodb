@@ -12,7 +12,7 @@ This file records what has been implemented, what remains open, and which items 
 - Dev overlay kept at 3-member replica set topology.
 - Dev overlay backup subsystem enabled with scheduled backup tasks disabled.
 - Dev overlay explicitly disables PITR (`backup.pitr.enabled: false`) to avoid continuous oplog upload costs.
-- Dev overlay includes explicit backup storage block placeholders.
+- Dev overlay now uses static deterministic backup storage values (bucket/region).
 - Terraform platform prerequisites added under `platform-prerequisites/terraform`.
 - Repeatable scripts added under `scripts/`.
 - Scripted validation and operational helpers are present under `scripts/`.
@@ -20,11 +20,13 @@ This file records what has been implemented, what remains open, and which items 
 - Terraform README now documents EKS API authorization requirement for the runner identity.
 - Terraform was refactored into a pure module (`platform-prerequisites/terraform`) plus temporary manual wrapper (`platform-prerequisites/terraform/examples/dev`).
 - Dev hardcoded MongoDB user/password bootstrap secret was removed; operator can generate internal user credentials.
-- Dev bootstrap secrets now retain only the encryption key bootstrap secret.
+- Dev bootstrap secrets now include both:
+  - `psmdb-encryption-key` (encryption key)
+  - `psmdb-secrets` (`MONGODB_CLUSTER_ADMIN_PASSWORD`)
 - Credential chain conflict was resolved by removing static dev S3 credential secret and removing `credentialsSecret` from PBM storage config.
 - Obsolete non-dev `psmdb-backup-s3` ExternalSecret resources were removed as dead code.
 - StorageClass already explicitly includes `allowVolumeExpansion: true`.
-- Dev encryption-key placeholder now explicitly requires OpenSSL-generated base64 key material, and README documents `openssl rand -base64 32`.
+- Dev bootstrap generates encryption key via `openssl rand -base64 32` and admin password via `openssl rand -base64 24` when missing.
 - Memory QoS was hardened to Guaranteed policy by pinning `requests.memory == limits.memory` for MongoDB containers in base/dev.
 - PBM sidecar memory in base uses pinned request/limit values to avoid Burstable QoS eviction behavior.
 - cert-manager PKI manifests are explicitly present in `k8s/base/certificates.yaml` and included by `k8s/base/kustomization.yaml`.
@@ -44,7 +46,8 @@ This file records what has been implemented, what remains open, and which items 
 
 ## Missing Items In Plan (Operational)
 - Environment value replacement:
-  - Bucket names, regions, and secret paths remain placeholders.
+  - MongoDB dev path no longer uses runtime value replacement.
+  - Static values must remain aligned between Terraform defaults and dev overlay YAML.
 - Runtime validation in target cluster:
   - Verify MongoDB pods run with expected ServiceAccount.
   - Verify PBM sidecar can authenticate to S3/KMS with workload identity.
@@ -56,12 +59,11 @@ This file records what has been implemented, what remains open, and which items 
 ## Verification Evidence So Far
 - Dev manifest render confirms:
   - 3-member replica set
-  - backup enabled
-  - scheduled backup disabled
+  - backup disabled in dev
   - PITR disabled in dev
   - no static PBM credentials secret reference
   - memory request/limit pinning for Guaranteed QoS in current overlays
-  - dev storage block placeholders present
+  - static dev backup storage bucket/region present
 - Evidence has been validated through local render checks and script-based execution.
 
 ## Next Step Gate

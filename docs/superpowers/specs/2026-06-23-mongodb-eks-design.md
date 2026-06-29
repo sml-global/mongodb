@@ -47,10 +47,15 @@
   - reduced resources and retention windows
   - no scheduled backups and PITR disabled for cost control while preserving topology parity
 
-## Dev Overlay Injection
-- The dev MongoDB patch is authored as a tracked template and rendered into an ignored generated file.
-- Terraform outputs provide the PBM S3 bucket name and region for injection before any dev render/apply.
-- Validation and apply workflows must invoke the injection step first so the generated overlay exists before Kustomize runs.
+## Dev Overlay Configuration
+- The dev MongoDB patch is static and tracked in git (`k8s/overlays/dev/patch-psmdb.yaml`).
+- PBM bucket and AWS region are deterministic in dev and must match Terraform defaults.
+- Validation remains local and read-only: render checks must not mutate manifests.
+
+## Configuration Governance
+- Embedded configuration in YAML, Terraform, and shell scripts must be documented in `docs/operations/dev-configuration-catalog.md`.
+- Tracked MongoDB dev manifests must not contain unresolved placeholders.
+- If a placeholder/token is introduced in the future, the repo must include a resolving script and documentation for how operators populate it.
 
 ## Reliability and Recovery
 - Replica set size 3 distributed across AZs.
