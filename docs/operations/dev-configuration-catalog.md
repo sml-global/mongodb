@@ -114,12 +114,32 @@ File: `scripts/run-platform-prereq.sh`
 
 - Terraform working directory fixed to:
   - `platform-prerequisites/terraform/dev`
+- Optional remote-state env controls:
+  - `TF_STATE_BUCKET`
+  - `TF_STATE_REGION` (default `us-east-1`)
+  - `TF_STATE_KEY` (default `mongodb/platform-prerequisites/dev/terraform.tfstate`)
 
 ### PostgreSQL Terraform Wrapper Runner
 File: `scripts/run-platform-prereq-postgresql.sh`
 
 - Terraform working directory fixed to:
   - `platform-prerequisites/terraform/dev-postgresql`
+- Optional remote-state env controls:
+  - `TF_STATE_BUCKET`
+  - `TF_STATE_REGION` (default `us-east-1`)
+  - `TF_STATE_KEY` (default `mongodb/platform-prerequisites/dev-postgresql/terraform.tfstate`)
+
+### Terraform S3 Backend Bootstrap
+File: `scripts/bootstrap-terraform-s3-backend.sh`
+
+- Validates required commands (`aws`, `terraform`, `rg`).
+- Creates backend S3 bucket if missing.
+- Applies baseline controls to newly created bucket:
+  - versioning enabled
+  - AES256 default encryption
+  - public-access block
+- Migrates local state to S3 only when remote state does not exist and local state exists.
+- Uses existing remote state without re-migration when state object already exists.
 
 ### ServiceAccount Verification Helper
 File: `scripts/verify-dev-identity.sh`

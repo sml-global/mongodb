@@ -21,7 +21,8 @@ What this setup is not for:
   - [Table Of Contents](#table-of-contents)
   - [Folder Map](#folder-map)
   - [Naming Standard Alignment](#naming-standard-alignment)
-  - [Why Examples Exists](#why-examples-exists)
+  - [Why Separate Roots Exist](#why-separate-roots-exist)
+  - [S3 State Backend Migration](#s3-state-backend-migration)
   - [Quick Start: MongoDB Prerequisites](#quick-start-mongodb-prerequisites)
   - [Quick Start: PostgreSQL Prerequisites](#quick-start-postgresql-prerequisites)
   - [Executable Runbook](#executable-runbook)
@@ -66,6 +67,52 @@ Can we run directly from `platform-prerequisites/terraform`?
 - You would have to turn it into a root stack (provider/backend/root inputs), which reduces reusability.
 - If you want that model, we can flatten it in a follow-up change and drop the wrappers.
 
+## S3 State Backend Migration
+
+Yes, this repository now supports one-time, idempotent state migration to S3.
+
+Script added:
+- `scripts/bootstrap-terraform-s3-backend.sh`
+
+What it does:
+- Checks if the state bucket exists; creates it if missing.
+- Applies bucket baseline controls after creation:
+  - versioning enabled
+  - server-side encryption (AES256)
+  - public access block enabled
+- Checks whether the remote state object already exists.
+- If remote exists: configures Terraform to use it (no migration).
+- If remote missing and local `terraform.tfstate` exists: migrates local state once.
+- If both missing: initializes a fresh remote backend (empty state).
+
+One-time setup (MongoDB root):
+
+```bash
+export TF_STATE_BUCKET="your-terraform-state-bucket"
+export TF_STATE_REGION="us-east-1"
+export TF_STATE_KEY="mongodb/platform-prerequisites/dev/terraform.tfstate"
+
+scripts/run-platform-prereq.sh
+```
+
+One-time setup (PostgreSQL root):
+
+```bash
+export TF_STATE_BUCKET="your-terraform-state-bucket"
+export TF_STATE_REGION="us-east-1"
+export TF_STATE_KEY="mongodb/platform-prerequisites/dev-postgresql/terraform.tfstate"
+
+scripts/run-platform-prereq-postgresql.sh
+```
+
+Later runs:
+- Keep `TF_STATE_BUCKET` set.
+- The scripts detect existing remote state and reuse it.
+- Bucket creation and migration are skipped when already done.
+
+If `TF_STATE_BUCKET` is not set:
+- scripts fall back to local state behavior.
+
 ## Quick Start: MongoDB Prerequisites
 For manual-first MongoDB prerequisite deployment:
 
@@ -104,6 +151,7 @@ cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan
 
 | Command / Script | What It Does | When To Use |
 |---|---|---|
+| `scripts/bootstrap-terraform-s3-backend.sh` | Ensures S3 backend bucket exists and performs one-time local-to-S3 state migration only when needed. | Before first remote-state run, or directly via wrapper scripts when `TF_STATE_BUCKET` is set. |
 | `scripts/run-platform-prereq.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `dev`. | First step before any apply; rerun after variable/module changes. |
 | `scripts/run-platform-prereq-postgresql.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `dev-postgresql`. | First step before PostgreSQL apply; rerun after PostgreSQL variable/module changes. |
 | `cd platform-prerequisites/terraform/dev && terraform apply tfplan` | Applies the prepared MongoDB prerequisite plan. | After reviewing the generated plan and confirming environment values. |
