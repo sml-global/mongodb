@@ -39,12 +39,134 @@ The workflow has three phases. Keep them separate when debugging.
 | Plan and Apply | Build a Terraform plan for MongoDB prerequisites and PostgreSQL, then apply the reviewed plan. | `scripts/run-platform-prereq.sh`, then `terraform apply tfplan`. | AWS/Kubernetes prerequisite resources are created or updated. |
 | Verify MongoDB Readiness | Create required dev secrets and confirm the MongoDB overlay renders before workload deployment. | `scripts/bootstrap-dev-secrets.sh`, then `scripts/validate-dev-render.sh`. | MongoDB workload manifests can be applied with the expected prerequisites in place. |
 
+## Workstation Setup
+
+Complete this once per workstation before running the operator procedure.
+
+### Required Information
+
+Get these values from the platform or AWS account owner before starting:
+
+| Value | Why You Need It |
+|---|---|
+| AWS SSO start URL | Used by `aws configure sso` to create a login profile. |
+| AWS SSO region | Region where IAM Identity Center is configured. This may differ from the workload region. |
+| AWS account ID | Confirms you are logged into the intended account. |
+| AWS SSO permission set/role | Determines whether Terraform can create IAM, S3, RDS, VPC security group, and EKS-related resources. |
+| Workload AWS region | Used by Terraform providers and AWS CLI commands. |
+| EKS cluster name | Used by Terraform and `aws eks update-kubeconfig`. |
+| VPC ID and private subnet IDs | Required for Aurora PostgreSQL networking. |
+| Remote state bucket name and state key | Required for shared S3 Terraform state. |
+
+### Install Required Tools
+
+Required commands:
+- `aws`
+- `terraform` version `>= 1.5.0`
+- `kubectl`
+- `kustomize`
+- `rg`
+- `openssl`
+
+On macOS with Homebrew:
+
+```bash
+brew install awscli terraform kubectl kustomize ripgrep openssl
+```
+
+Verify the tools are available:
+
+```bash
+command -v aws terraform kubectl kustomize rg openssl
+terraform version
+aws --version
+kubectl version --client
+```
+
+The Terraform root requires Terraform `>= 1.5.0`, AWS provider `>= 5.0`, and Kubernetes provider `>= 2.26`.
+
+### Configure AWS CLI With SSO
+
+Create an AWS CLI profile for the target account:
+
+```bash
+aws configure sso --profile <profile-name>
+```
+
+The prompt asks for:
+- SSO start URL
+- SSO region
+- AWS account
+- permission set/role
+- default workload region
+- output format, usually `json`
+
+Log in:
+
+```bash
+aws sso login --profile <profile-name>
+```
+
+Use the profile in this shell:
+
+```bash
+export AWS_PROFILE=<profile-name>
+export AWS_REGION=<workload-region>
+```
+
+Confirm the login is correct:
+
+```bash
+aws sts get-caller-identity
+aws configure get region
+```
+
+Expected result: the account ID and role match the intended environment.
+
+### Configure Kubernetes Access
+
+Create or update kubeconfig for the target EKS cluster:
+
+```bash
+aws eks update-kubeconfig \
+  --name <cluster-name> \
+  --region <workload-region> \
+  --profile <profile-name>
+```
+
+Confirm the active context and cluster authentication:
+
+```bash
+kubectl config current-context
+kubectl cluster-info
+```
+
+Expected result: the context points to the intended cluster and `kubectl` can contact the Kubernetes API.
+
+After Terraform creates the `mongodb` namespace, confirm secret permissions before running `scripts/bootstrap-dev-secrets.sh`:
+
+```bash
+kubectl get ns mongodb
+kubectl auth can-i get secrets -n mongodb
+kubectl auth can-i create secrets -n mongodb
+```
+
+### Confirm Repository Location
+
+Run scripts from the repository root:
+
+```bash
+pwd
+test -d platform-prerequisites/terraform/dev && echo "repo root confirmed"
+```
+
 ## Table Of Contents
 - [Platform Prerequisites Terraform](#platform-prerequisites-terraform)
   - [Purpose](#purpose)
   - [Read This First](#read-this-first)
   - [Scope](#scope)
   - [Operating Model](#operating-model)
+  - [Workstation Setup](#workstation-setup)
   - [Standard Operator Procedure](#standard-operator-procedure)
   - [Audience And Primary Tasks](#audience-and-primary-tasks)
   - [Experienced Operator Shortcut](#experienced-operator-shortcut)
@@ -73,6 +195,12 @@ The workflow has three phases. Keep them separate when debugging.
 ## Standard Operator Procedure
 
 Follow this path for a first run or a shared environment.
+
+0. Complete workstation setup.
+
+Purpose: confirms the local machine has AWS SSO login, Terraform, Kubernetes access, and required CLI tools before any infrastructure command runs.
+
+Expected result: `aws sts get-caller-identity`, `terraform version`, and `kubectl config current-context` all return the intended environment.
 
 1. Create the runtime variable file.
 
@@ -282,6 +410,7 @@ Most failures are caused by missing context, not by Terraform syntax. Check thes
 | What Was Missed | Why It Matters | How To Check | Fix |
 |---|---|---|---|
 | Wrong AWS account or region | Terraform may create resources in the wrong place or fail to find the EKS/VPC inputs. | `aws sts get-caller-identity`; `aws configure get region` | Switch AWS profile/region before running the scripts. |
+| AWS SSO not configured or not logged in | AWS CLI and Terraform cannot authenticate. | `aws sts get-caller-identity` | Run `aws configure sso --profile <profile-name>`, then `aws sso login --profile <profile-name>`. |
 | Wrong Kubernetes context | Secret bootstrap and pod checks may target the wrong cluster. | `kubectl config current-context`; `kubectl get ns mongodb` | Update kubeconfig for the target EKS cluster. |
 | `terraform.tfvars` not created | Terraform plan cannot resolve required environment inputs. | `test -f platform-prerequisites/terraform/dev/terraform.tfvars && echo ok` | Copy the sample file and fill real values. |
 | Placeholder values left in `terraform.tfvars` | Plan may fail or create unusable infrastructure. | Review `cluster_name`, `vpc_id`, `private_subnet_ids`, and `db_master_password`. | Replace placeholders with real environment values. |
@@ -301,6 +430,25 @@ Use the symptom text first, then run the check command to confirm the cause befo
 | `required command not found` | A required CLI is missing from PATH. | `command -v terraform aws kubectl kustomize rg openssl` | Install the missing command and open a new shell if PATH changed. |
 | `terraform` fails before init/validate with a local version error | Local Terraform version manager is misconfigured. | `terraform version` | Fix the local version manager or use a direct Terraform binary. |
 | Script cannot find repository paths | Command was run from an unexpected location or the checkout is incomplete. | `pwd`; `test -d platform-prerequisites/terraform/dev && echo ok` | Run from the repository root and verify the checkout is complete. |
+
+### AWS SSO And Credentials
+
+| Symptom | Likely Cause | Confirm With | Fix |
+|---|---|---|---|
+| `The config profile (...) could not be found` | `AWS_PROFILE` points to a profile that does not exist. | `aws configure list-profiles` | Run `aws configure sso --profile <profile-name>` or export the correct profile name. |
+| Browser login never happened or expired | SSO session is missing or expired. | `aws sts get-caller-identity` | Run `aws sso login --profile <profile-name>` again. |
+| `Unable to locate credentials` or Terraform cannot find credentials | `AWS_PROFILE` is not exported in the shell running Terraform. | `echo "$AWS_PROFILE"`; `aws sts get-caller-identity` | Export `AWS_PROFILE=<profile-name>` and rerun from the same shell. |
+| Terraform or AWS CLI uses the wrong region | `AWS_REGION` or profile default region is wrong or missing. | `echo "$AWS_REGION"`; `aws configure get region` | Export `AWS_REGION=<workload-region>` or update the SSO profile region. |
+| `AccessDenied` from IAM, S3, RDS, EC2, or EKS APIs | SSO permission set/role is not powerful enough for this stack. | Check the failing AWS API in the error output. | Ask the platform/AWS account owner for a role with the required permissions. |
+
+### EKS Kubeconfig
+
+| Symptom | Likely Cause | Confirm With | Fix |
+|---|---|---|---|
+| `kubectl` points to the wrong cluster | Kubeconfig was not updated after selecting the AWS profile/region. | `kubectl config current-context` | Run `aws eks update-kubeconfig --name <cluster-name> --region <workload-region> --profile <profile-name>`. |
+| `aws eks update-kubeconfig` fails with cluster not found | Wrong cluster name, region, or account. | `aws eks describe-cluster --name <cluster-name> --region <workload-region>` | Correct the cluster name, AWS profile, or workload region. |
+| `kubectl` returns `You must be logged in to the server` | AWS SSO session expired after kubeconfig was written. | `aws sts get-caller-identity` | Run `aws sso login --profile <profile-name>` and retry `kubectl`. |
+| `kubectl` returns `Forbidden` after kubeconfig succeeds | AWS identity is authenticated but not authorized by EKS/RBAC. | `kubectl auth can-i get secrets -n mongodb` | Add/fix EKS Access Entry or Kubernetes RBAC for the SSO role. |
 
 ### Terraform Plan And Inputs
 
