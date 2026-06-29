@@ -1,6 +1,10 @@
 # MongoDB on EKS (Declarative, Free-Tool Stack)
 
-This repository deploys MongoDB on EKS using a fully declarative GitOps model:
+This repository supports dev provisioning for both:
+- MongoDB on EKS (primary workload path in this repo)
+- PostgreSQL on RDS (dev example under Terraform examples)
+
+MongoDB deployment model in this repo:
 - Flux HelmRelease for tenant-scoped operator installation
 - Percona Operator for MongoDB for database lifecycle
 - Percona Backup for MongoDB (PBM) for authoritative logical backup and restore
@@ -46,6 +50,7 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
 - node-local-dns enabled at platform layer
 - Platform prerequisites are provided as Terraform in `platform-prerequisites/terraform`.
   - Use the temporary manual wrapper at `platform-prerequisites/terraform/examples/dev`.
+  - For PostgreSQL dev RDS, use `platform-prerequisites/terraform/examples/dev-postgresql`.
 - Confirm Kubernetes context and namespace access before bootstrap/apply:
   - `kubectl config current-context`
   - `kubectl get serviceaccount default -n mongodb`
@@ -64,6 +69,9 @@ This repository deploys MongoDB on EKS using a fully declarative GitOps model:
 0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`):
    - `scripts/run-platform-prereq.sh`
   - `(cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan)`
+0b. Optional PostgreSQL dev RDS provisioning (`platform-prerequisites/terraform/examples/dev-postgresql`):
+  - `scripts/run-platform-prereq-postgresql.sh`
+  - `(cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply tfplan)`
 1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
 2. Apply `gitops/operators/base`.
 3. Apply `policies/kyverno`.
@@ -124,6 +132,7 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 ## Repeatable Scripts and Command Recording
 - Operational commands are provided in `scripts/` and should be used instead of ad-hoc one-offs.
 - For platform bootstrap, use `scripts/run-platform-prereq.sh`.
+- For PostgreSQL platform bootstrap, use `scripts/run-platform-prereq-postgresql.sh`.
 - For secret bootstrap, use `scripts/bootstrap-dev-secrets.sh`.
 - For manifest render checks, use `scripts/validate-dev-render.sh`.
 

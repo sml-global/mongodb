@@ -115,6 +115,12 @@ File: `scripts/run-platform-prereq.sh`
 - Terraform working directory fixed to:
   - `platform-prerequisites/terraform/examples/dev`
 
+### PostgreSQL Terraform Wrapper Runner
+File: `scripts/run-platform-prereq-postgresql.sh`
+
+- Terraform working directory fixed to:
+  - `platform-prerequisites/terraform/examples/dev-postgresql`
+
 ### ServiceAccount Verification Helper
 File: `scripts/verify-dev-identity.sh`
 
@@ -127,3 +133,11 @@ File: `scripts/verify-dev-identity.sh`
   - `platform-prerequisites/terraform/examples/dev-postgresql/terraform.tfvars.example`
   - `db_master_password = CHANGE_ME_STRONG_DEV_PASSWORD`
   - this is expected and must be set locally by operator before apply.
+
+## PostgreSQL Example Configuration
+- PostgreSQL dev defaults and sizing live in:
+  - `platform-prerequisites/terraform/examples/dev-postgresql/variables.tf`
+- PostgreSQL dev infrastructure resources live in:
+  - `platform-prerequisites/terraform/examples/dev-postgresql/main.tf`
+- PostgreSQL dev outputs live in:
+  - `platform-prerequisites/terraform/examples/dev-postgresql/outputs.tf`
