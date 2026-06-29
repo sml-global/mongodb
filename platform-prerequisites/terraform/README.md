@@ -21,6 +21,7 @@ What this setup is not for:
   - [Table Of Contents](#table-of-contents)
   - [Folder Map](#folder-map)
   - [Naming Standard Alignment](#naming-standard-alignment)
+  - [Why Examples Exists](#why-examples-exists)
   - [Quick Start: MongoDB Prerequisites](#quick-start-mongodb-prerequisites)
   - [Quick Start: PostgreSQL Prerequisites](#quick-start-postgresql-prerequisites)
   - [Executable Runbook](#executable-runbook)
@@ -39,7 +40,7 @@ What this setup is not for:
 
 ## Naming Standard Alignment
 Naming follows the parent naming convention design:
-- source: `/Users/frank/sml/oms/tf_generator/docs/designs/naming-convention-design.md`
+- source: `naming-convention-design.md` in the `tf_generator` repository
 - canonical pattern: `{provider}-{location}{site}-{env}-{app}-{role}-{type}-{seq}`
 
 Current dev PBM bucket default:
@@ -48,6 +49,22 @@ Current dev PBM bucket default:
 Why this value:
 - `sml` org prefix for global-namespace resources (S3)
 - `aw-gb0-d-oms-gen-s3-01` follows the 7-segment model
+
+## Why Examples Exists
+Short answer: `platform-prerequisites/terraform` is intentionally a reusable module, while `examples/*` are runnable root wrappers.
+
+Why it is split:
+- Reusable module (`platform-prerequisites/terraform`):
+  - keeps resources portable and easy to merge into a central platform repo
+  - avoids locking this module to one local backend/provider/runtime shape
+- Runnable wrapper (`examples/dev`, `examples/dev-postgresql`):
+  - provides providers and concrete root-level execution context
+  - gives operators a ready-to-run manual workflow for this repo
+
+Can we run directly from `platform-prerequisites/terraform`?
+- Not recommended in current layout.
+- You would have to turn it into a root stack (provider/backend/root inputs), which reduces reusability.
+- If you want that model, we can flatten it in a follow-up change and drop the wrappers.
 
 ## Quick Start: MongoDB Prerequisites
 For manual-first MongoDB prerequisite deployment:
