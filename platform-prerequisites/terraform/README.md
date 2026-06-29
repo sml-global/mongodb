@@ -35,7 +35,7 @@ What this setup is not for:
 
 | Folder | Purpose |
 |---|---|
-| `platform-prerequisites/terraform` | Reusable Terraform module (no provider/backend lock-in). |
+| `platform-prerequisites/terraform` | Reusable Terraform layer (no provider/backend lock-in). |
 | `platform-prerequisites/terraform/dev` | Manual-first MongoDB prerequisite root used by local operators. |
 | `platform-prerequisites/terraform/dev-postgresql` | Manual-first Aurora PostgreSQL root used by local operators. |
 
@@ -52,10 +52,10 @@ Why this value:
 - `aw-gb0-d-oms-gen-s3-01` follows the 7-segment model
 
 ## Why Separate Roots Exist
-Short answer: `platform-prerequisites/terraform` is intentionally a reusable module, while `dev/*` roots are runnable Terraform entrypoints.
+Short answer: `platform-prerequisites/terraform` is intentionally a reusable Terraform layer, while `dev/*` roots are runnable Terraform entrypoints.
 
 Why it is split:
-- Reusable module (`platform-prerequisites/terraform`):
+- Reusable Terraform layer (`platform-prerequisites/terraform`):
   - keeps resources portable and easy to merge into a central platform repo
   - avoids locking this module to one local backend/provider/runtime shape
 - Runnable roots (`dev`, `dev-postgresql`):
