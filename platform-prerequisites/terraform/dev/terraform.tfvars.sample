@@ -1,6 +1,7 @@
 aws_region      = "ap-southeast-1"
 cluster_name    = "my-eks-cluster"
 pbm_bucket_name = "my-mongodb-pbm-backups"
+vpc_id          = "vpc-xxxxxxxx"
 
 mongodb_namespace                     = "mongodb"
 mongodb_workload_service_account_name = "psmdb-db"
@@ -15,3 +16,26 @@ oidc_provider_url = ""
 
 # Optional, only if KMS key access is required.
 kms_key_arn = ""
+
+# Use your existing private subnets for PostgreSQL. No subnet resources are created by this root.
+private_subnet_ids = [
+	"subnet-aaaaaaaa",
+	"subnet-bbbbbbbb"
+]
+
+# Preferred: allow inbound from your app/workload security group.
+allowed_source_security_group_id = "sg-cccccccc"
+
+# Keep empty unless temporary CIDR-based access is needed.
+allowed_cidr_blocks = []
+
+db_identifier       = "pg18-dev"
+engine_version      = null
+instance_class      = "db.t4g.medium"
+
+# Optional: pin the only writer instance to a specific AZ.
+writer_availability_zone = ""
+
+db_name            = "app"
+db_master_username = "pgadmin"
+db_master_password = "CHANGE_ME_STRONG_DEV_PASSWORD"

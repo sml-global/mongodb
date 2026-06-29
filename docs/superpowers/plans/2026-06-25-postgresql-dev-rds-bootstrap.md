@@ -9,11 +9,11 @@ Create a reusable Terraform root that provisions dev Aurora PostgreSQL with a si
 
 ### Task 1: Add Terraform root scaffold
 **Files:**
-- Create: `platform-prerequisites/terraform/dev-postgresql/main.tf`
-- Create: `platform-prerequisites/terraform/dev-postgresql/variables.tf`
-- Create: `platform-prerequisites/terraform/dev-postgresql/outputs.tf`
-- Create: `platform-prerequisites/terraform/dev-postgresql/terraform.tfvars.sample`
-- Create: `platform-prerequisites/terraform/dev-postgresql/README.md`
+- Modify: `platform-prerequisites/terraform/dev/main.tf`
+- Modify: `platform-prerequisites/terraform/dev/variables.tf`
+- Modify: `platform-prerequisites/terraform/dev/outputs.tf`
+- Modify: `platform-prerequisites/terraform/dev/terraform.tfvars.sample`
+- Modify: `platform-prerequisites/terraform/README.md`
 
 - [x] Provision `aws_rds_cluster` + single `aws_rds_cluster_instance` writer.
 - [x] Configure provisioned writer instance class (`db.t4g.medium` default).

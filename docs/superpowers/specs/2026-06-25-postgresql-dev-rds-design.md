@@ -23,11 +23,11 @@
 - This is an explicit dev tradeoff to prioritize operational simplicity over state-file secrecy.
 
 ## Implementation Artifacts
-- `platform-prerequisites/terraform/dev-postgresql/main.tf`
-- `platform-prerequisites/terraform/dev-postgresql/variables.tf`
-- `platform-prerequisites/terraform/dev-postgresql/outputs.tf`
-- `platform-prerequisites/terraform/dev-postgresql/terraform.tfvars.sample`
-- `platform-prerequisites/terraform/dev-postgresql/README.md`
+- `platform-prerequisites/terraform/dev/main.tf`
+- `platform-prerequisites/terraform/dev/variables.tf`
+- `platform-prerequisites/terraform/dev/outputs.tf`
+- `platform-prerequisites/terraform/dev/terraform.tfvars.sample`
+- `platform-prerequisites/terraform/README.md`
 
 ## Out of Scope
 - Multi-writer/read replica topology.

@@ -50,8 +50,7 @@ MongoDB deployment model in this repo:
 - node-local-dns enabled at platform layer
 - Platform prerequisites are provided as Terraform under `platform-prerequisites/terraform`.
   - Reusable layer path: `platform-prerequisites/terraform/reusable`.
-  - Use MongoDB root at `platform-prerequisites/terraform/dev`.
-  - Use PostgreSQL root at `platform-prerequisites/terraform/dev-postgresql`.
+  - Use unified root at `platform-prerequisites/terraform/dev` for MongoDB + PostgreSQL.
 - Confirm Kubernetes context and namespace access before bootstrap/apply:
   - `kubectl config current-context`
   - `kubectl get serviceaccount default -n mongodb`
@@ -67,12 +66,9 @@ MongoDB deployment model in this repo:
 - No unresolved placeholders are permitted in tracked MongoDB dev manifests.
 
 ## Apply Order (GitOps)
-0. Provision platform prerequisites for MongoDB (`platform-prerequisites/terraform/dev`):
+0. Provision platform prerequisites for MongoDB + PostgreSQL (`platform-prerequisites/terraform/dev`):
    - `scripts/run-platform-prereq.sh`
   - `(cd platform-prerequisites/terraform/dev && terraform apply tfplan)`
-0b. Optional PostgreSQL dev Aurora provisioning (`platform-prerequisites/terraform/dev-postgresql`):
-  - `scripts/run-platform-prereq-postgresql.sh`
-  - `(cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan)`
 1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
 2. Apply `gitops/operators/base`.
 3. Apply `policies/kyverno`.
@@ -132,14 +128,13 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 
 ## Repeatable Scripts and Command Recording
 - Operational commands are provided in `scripts/` and should be used instead of ad-hoc one-offs.
-- For platform bootstrap, use `scripts/run-platform-prereq.sh`.
-- For PostgreSQL platform bootstrap, use `scripts/run-platform-prereq-postgresql.sh`.
+- For platform bootstrap (MongoDB + PostgreSQL), use `scripts/run-platform-prereq.sh`.
 - For secret bootstrap, use `scripts/bootstrap-dev-secrets.sh`.
 - For manifest render checks, use `scripts/validate-dev-render.sh`.
 
 ## Terraform Merge Strategy
 - `platform-prerequisites/terraform/reusable` is the reusable Terraform layer (no provider/backend blocks).
-- `platform-prerequisites/terraform/dev` and `platform-prerequisites/terraform/dev-postgresql` are local execution roots for manual-first deployment.
+- `platform-prerequisites/terraform/dev` is the local execution root for manual-first deployment.
 - After dev validation, merge the module into your main Terraform project and discard the wrapper.
 
 ## Execution Tracking
