@@ -3,7 +3,7 @@
 ## Overview
 This directory contains Terraform prerequisites used by this repository for both:
 - MongoDB on EKS
-- PostgreSQL on Aurora PostgreSQL (dev example)
+- PostgreSQL on Aurora PostgreSQL (dev path)
 
 What this setup is for:
 - create/prepare namespace and ServiceAccount wiring for MongoDB workloads
@@ -26,7 +26,7 @@ What this setup is not for:
   - [Quick Start: PostgreSQL Prerequisites](#quick-start-postgresql-prerequisites)
   - [Executable Runbook](#executable-runbook)
   - [Configuration Files](#configuration-files)
-  - [Dev PostgreSQL Example](#dev-postgresql-example)
+  - [Dev PostgreSQL Path](#dev-postgresql-path)
   - [Access Requirement](#access-requirement)
   - [Standalone Module Intent](#standalone-module-intent)
 
@@ -35,8 +35,8 @@ What this setup is not for:
 | Folder | Purpose |
 |---|---|
 | `platform-prerequisites/terraform` | Reusable Terraform module (no provider/backend lock-in). |
-| `platform-prerequisites/terraform/examples/dev` | Manual-first dev wrapper used by local operators. |
-| `platform-prerequisites/terraform/examples/dev-postgresql` | Optional dev Aurora PostgreSQL example for local testing. |
+| `platform-prerequisites/terraform/dev` | Manual-first MongoDB prerequisite root used by local operators. |
+| `platform-prerequisites/terraform/dev-postgresql` | Manual-first Aurora PostgreSQL root used by local operators. |
 
 ## Naming Standard Alignment
 Naming follows the parent naming convention design:
@@ -50,14 +50,14 @@ Why this value:
 - `sml` org prefix for global-namespace resources (S3)
 - `aw-gb0-d-oms-gen-s3-01` follows the 7-segment model
 
-## Why Examples Exists
-Short answer: `platform-prerequisites/terraform` is intentionally a reusable module, while `examples/*` are runnable root wrappers.
+## Why Separate Roots Exist
+Short answer: `platform-prerequisites/terraform` is intentionally a reusable module, while `dev/*` roots are runnable Terraform entrypoints.
 
 Why it is split:
 - Reusable module (`platform-prerequisites/terraform`):
   - keeps resources portable and easy to merge into a central platform repo
   - avoids locking this module to one local backend/provider/runtime shape
-- Runnable wrapper (`examples/dev`, `examples/dev-postgresql`):
+- Runnable roots (`dev`, `dev-postgresql`):
   - provides providers and concrete root-level execution context
   - gives operators a ready-to-run manual workflow for this repo
 
@@ -69,8 +69,8 @@ Can we run directly from `platform-prerequisites/terraform`?
 ## Quick Start: MongoDB Prerequisites
 For manual-first MongoDB prerequisite deployment:
 
-1. Copy `examples/dev/terraform.tfvars.example` to `examples/dev/terraform.tfvars`.
-2. Edit `examples/dev/terraform.tfvars` values if needed.
+1. Copy `dev/terraform.tfvars.sample` to `dev/terraform.tfvars`.
+2. Edit `dev/terraform.tfvars` values if needed.
 3. Run:
 
 ```bash
@@ -80,14 +80,14 @@ scripts/run-platform-prereq.sh
 4. Apply planned infrastructure:
 
 ```bash
-cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan
+cd platform-prerequisites/terraform/dev && terraform apply tfplan
 ```
 
 ## Quick Start: PostgreSQL Prerequisites
 For manual-first PostgreSQL dev deployment:
 
-1. Copy `examples/dev-postgresql/terraform.tfvars.example` to `examples/dev-postgresql/terraform.tfvars`.
-2. Edit `examples/dev-postgresql/terraform.tfvars` values.
+1. Copy `dev-postgresql/terraform.tfvars.sample` to `dev-postgresql/terraform.tfvars`.
+2. Edit `dev-postgresql/terraform.tfvars` values.
 3. Run:
 
 ```bash
@@ -97,17 +97,17 @@ scripts/run-platform-prereq-postgresql.sh
 4. Apply planned infrastructure:
 
 ```bash
-cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply tfplan
+cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan
 ```
 
 ## Executable Runbook
 
 | Command / Script | What It Does | When To Use |
 |---|---|---|
-| `scripts/run-platform-prereq.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `examples/dev`. | First step before any apply; rerun after variable/module changes. |
-| `scripts/run-platform-prereq-postgresql.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `examples/dev-postgresql`. | First step before PostgreSQL apply; rerun after PostgreSQL variable/module changes. |
-| `cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan` | Applies the prepared dev plan. | After reviewing the generated plan and confirming environment values. |
-| `cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply tfplan` | Applies the prepared PostgreSQL dev plan. | After reviewing PostgreSQL plan and confirming DB inputs. |
+| `scripts/run-platform-prereq.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `dev`. | First step before any apply; rerun after variable/module changes. |
+| `scripts/run-platform-prereq-postgresql.sh` | Runs `terraform init`, `fmt`, `validate`, and `plan` for `dev-postgresql`. | First step before PostgreSQL apply; rerun after PostgreSQL variable/module changes. |
+| `cd platform-prerequisites/terraform/dev && terraform apply tfplan` | Applies the prepared MongoDB prerequisite plan. | After reviewing the generated plan and confirming environment values. |
+| `cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan` | Applies the prepared PostgreSQL plan. | After reviewing PostgreSQL plan and confirming DB inputs. |
 | `scripts/bootstrap-dev-secrets.sh` | Creates missing dev secrets (`psmdb-encryption-key`, `psmdb-secrets`) without mutating tracked manifests. | Before applying MongoDB overlay or when secrets are missing. |
 | `scripts/validate-dev-render.sh` | Offline render check for dev overlay. | Fast local verification before `kubectl apply` or commit. |
 | `scripts/verify-dev-identity.sh` | Verifies MongoDB pods use expected ServiceAccount. | Post-deploy runtime check in cluster. |
@@ -117,25 +117,25 @@ cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply t
 | File | Category | Editable Settings | How To Change |
 |---|---|---|---|
 | `platform-prerequisites/terraform/variables.tf` | Module defaults | Namespace, SA name, PBM bucket, IAM role defaults, identity mode flags | Edit tracked defaults in git (shared baseline). |
-| `platform-prerequisites/terraform/examples/dev/variables.tf` | Dev wrapper defaults | `aws_region`, bucket default, namespace/SA defaults | Edit tracked defaults in git for repo baseline. |
-| `platform-prerequisites/terraform/examples/dev/terraform.tfvars` | Local runtime values | Per-operator/per-environment overrides | Local file edit (not committed). |
+| `platform-prerequisites/terraform/dev/variables.tf` | MongoDB root defaults | `aws_region`, bucket default, namespace/SA defaults | Edit tracked defaults in git for repo baseline. |
+| `platform-prerequisites/terraform/dev/terraform.tfvars` | Local runtime values | Per-operator/per-environment overrides | Local file edit (not committed). |
 | `platform-prerequisites/terraform/main.tf` | Module resources | IAM/S3/Kubernetes resources and wiring | Change only when infrastructure architecture changes. |
-| `platform-prerequisites/terraform/examples/dev/main.tf` | Wrapper wiring | Provider setup + module input mapping | Change when wrapper structure changes. |
-| `platform-prerequisites/terraform/examples/dev/outputs.tf` | Wrapper outputs | Exposed values after apply | Change when additional outputs are required. |
-| `platform-prerequisites/terraform/examples/dev-postgresql/variables.tf` | PostgreSQL wrapper defaults | DB sizing/version/network/security defaults | Edit tracked defaults in git for PostgreSQL baseline. |
-| `platform-prerequisites/terraform/examples/dev-postgresql/main.tf` | PostgreSQL wrapper resources | Aurora cluster/subnet group/security group resource definitions | Change when PostgreSQL infrastructure architecture changes. |
-| `platform-prerequisites/terraform/examples/dev-postgresql/outputs.tf` | PostgreSQL wrapper outputs | Exposed PostgreSQL runtime values after apply | Change when additional PostgreSQL outputs are required. |
+| `platform-prerequisites/terraform/dev/main.tf` | MongoDB root wiring | Provider setup + module input mapping | Change when root wiring changes. |
+| `platform-prerequisites/terraform/dev/outputs.tf` | MongoDB root outputs | Exposed values after apply | Change when additional outputs are required. |
+| `platform-prerequisites/terraform/dev-postgresql/variables.tf` | PostgreSQL root defaults | DB sizing/version/network/security defaults | Edit tracked defaults in git for PostgreSQL baseline. |
+| `platform-prerequisites/terraform/dev-postgresql/main.tf` | PostgreSQL root resources | Aurora cluster/subnet group/security group resource definitions | Change when PostgreSQL infrastructure architecture changes. |
+| `platform-prerequisites/terraform/dev-postgresql/outputs.tf` | PostgreSQL root outputs | Exposed PostgreSQL runtime values after apply | Change when additional PostgreSQL outputs are required. |
 
 Reference for broader repo configuration catalog:
 - `docs/operations/dev-configuration-catalog.md`
 
-## Dev PostgreSQL Example
+## Dev PostgreSQL Path
 For a cost-focused dev Aurora PostgreSQL single-writer form using existing subnets, see:
-- `platform-prerequisites/terraform/examples/dev-postgresql`
+- `platform-prerequisites/terraform/dev-postgresql`
 
 Current posture:
 - Dev phase uses manual credentials from local `terraform.tfvars` (no IAM DB auth in this phase).
-- Future production should use managed credentials (for example Secrets Manager-backed workflow).
+- Future production should use managed credentials (Secrets Manager-backed workflow).
 
 ## Access Requirement
 The IAM identity running Terraform must have Kubernetes API authorization in the target EKS cluster.
@@ -147,4 +147,4 @@ Without EKS API authorization, Terraform can authenticate to AWS but Kubernetes 
 
 ## Standalone Module Intent
 This module is intentionally clean for later merge into a central Terraform platform project.
-The `examples/dev` wrapper is temporary and can be discarded after integration.
+The `dev` and `dev-postgresql` roots are local execution entrypoints and can be replaced by your central platform root configuration after integration.

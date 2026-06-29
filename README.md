@@ -2,7 +2,7 @@
 
 This repository supports dev provisioning for both:
 - MongoDB on EKS (primary workload path in this repo)
-- PostgreSQL on Aurora PostgreSQL (dev example under Terraform examples)
+- PostgreSQL on Aurora PostgreSQL (dev path under Terraform)
 
 MongoDB deployment model in this repo:
 - Flux HelmRelease for tenant-scoped operator installation
@@ -49,8 +49,8 @@ MongoDB deployment model in this repo:
 - AWS EBS CSI driver available with support for `ebs.csi.aws.com`
 - node-local-dns enabled at platform layer
 - Platform prerequisites are provided as Terraform in `platform-prerequisites/terraform`.
-  - Use the temporary manual wrapper at `platform-prerequisites/terraform/examples/dev`.
-  - For PostgreSQL dev Aurora, use `platform-prerequisites/terraform/examples/dev-postgresql`.
+  - Use MongoDB root at `platform-prerequisites/terraform/dev`.
+  - Use PostgreSQL root at `platform-prerequisites/terraform/dev-postgresql`.
 - Confirm Kubernetes context and namespace access before bootstrap/apply:
   - `kubectl config current-context`
   - `kubectl get serviceaccount default -n mongodb`
@@ -66,12 +66,12 @@ MongoDB deployment model in this repo:
 - No unresolved placeholders are permitted in tracked MongoDB dev manifests.
 
 ## Apply Order (GitOps)
-0. Provision platform prerequisites via Terraform wrapper (`platform-prerequisites/terraform/examples/dev`):
+0. Provision platform prerequisites for MongoDB (`platform-prerequisites/terraform/dev`):
    - `scripts/run-platform-prereq.sh`
-  - `(cd platform-prerequisites/terraform/examples/dev && terraform apply tfplan)`
-0b. Optional PostgreSQL dev Aurora provisioning (`platform-prerequisites/terraform/examples/dev-postgresql`):
+  - `(cd platform-prerequisites/terraform/dev && terraform apply tfplan)`
+0b. Optional PostgreSQL dev Aurora provisioning (`platform-prerequisites/terraform/dev-postgresql`):
   - `scripts/run-platform-prereq-postgresql.sh`
-  - `(cd platform-prerequisites/terraform/examples/dev-postgresql && terraform apply tfplan)`
+  - `(cd platform-prerequisites/terraform/dev-postgresql && terraform apply tfplan)`
 1. Bootstrap dev secret state: `scripts/bootstrap-dev-secrets.sh`.
 2. Apply `gitops/operators/base`.
 3. Apply `policies/kyverno`.
@@ -138,7 +138,7 @@ Use local repeatable scripts for validation. CI/CD is intentionally not part of 
 
 ## Terraform Merge Strategy
 - `platform-prerequisites/terraform` is a reusable module (no provider/backend blocks).
-- `platform-prerequisites/terraform/examples/dev` is a temporary local-state wrapper for manual-first deployment.
+- `platform-prerequisites/terraform/dev` and `platform-prerequisites/terraform/dev-postgresql` are local execution roots for manual-first deployment.
 - After dev validation, merge the module into your main Terraform project and discard the wrapper.
 
 ## Execution Tracking

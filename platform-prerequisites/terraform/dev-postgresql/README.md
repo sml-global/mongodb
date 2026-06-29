@@ -1,6 +1,6 @@
-# Dev PostgreSQL (Aurora) Terraform Example
+# Dev PostgreSQL (Aurora) Terraform Root
 
-This example provisions a low-cost dev Aurora PostgreSQL cluster:
+This root provisions a low-cost dev Aurora PostgreSQL cluster:
 - Engine: Aurora PostgreSQL (`aurora-postgresql`)
 - Topology: single writer instance (no readers)
 - Capacity: provisioned Aurora instance class (`db.t4g.medium` default)
@@ -8,18 +8,18 @@ This example provisions a low-cost dev Aurora PostgreSQL cluster:
 - Security: dedicated DB security group
 
 ## Important Notes
-- This example does not create subnets. Provide existing subnet IDs in `terraform.tfvars`.
-- This example does not use AWS Secrets Manager because this phase is dev-only and optimized for minimal operational friction.
+- This root does not create subnets. Provide existing subnet IDs in `terraform.tfvars`.
+- This root does not use AWS Secrets Manager because this phase is dev-only and optimized for minimal operational friction.
 - The master password is stored in Terraform state when using `password`.
 - IAM DB authentication is intentionally not used in this phase.
 - Aurora storage remains distributed by Aurora design, even with a single writer instance.
-- Production guidance: use managed credentials (for example `manage_master_user_password = true`) and avoid shared static passwords.
+- Production guidance: use managed credentials (set `manage_master_user_password = true`) and avoid shared static passwords.
 
 ## Usage
 1. Copy variables file:
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars
+cp terraform.tfvars.sample terraform.tfvars
 ```
 
 2. Edit `terraform.tfvars` with your VPC/subnet/security group and password values.
