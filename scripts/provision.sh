@@ -7,14 +7,16 @@ Usage:
   provision.sh <scope> [--auto-approve]
 
 Scopes:
-  all       Provision full dev baseline from unified root state (MongoDB + PostgreSQL infra, then MongoDB k8s stack).
-  mongodb   Provision MongoDB prerequisites from dedicated mongodb root/state, then MongoDB k8s stack.
-  pg        Provision PostgreSQL prerequisites from dedicated postgresql root/state only.
+  all       Provision MongoDB + PostgreSQL prerequisites (separate states), then MongoDB k8s stack.
+  mongodb   Provision MongoDB prerequisites only, then MongoDB k8s stack.
+  mongo     Alias of mongodb.
+  pg        Provision PostgreSQL prerequisites only.
   signoz    Provision optional SigNoz stack only.
 
 Examples:
   bash scripts/provision.sh all
   bash scripts/provision.sh mongodb
+  bash scripts/provision.sh mongo
   bash scripts/provision.sh pg --auto-approve
   bash scripts/provision.sh signoz
 EOF
@@ -23,6 +25,11 @@ EOF
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCOPE="${1:-}"
 AUTO_APPROVE="false"
+
+if [[ "$SCOPE" == "-h" || "$SCOPE" == "--help" ]]; then
+  usage
+  exit 0
+fi
 
 if [[ -z "$SCOPE" ]]; then
   usage
@@ -59,10 +66,11 @@ run_platform() {
 
 case "$SCOPE" in
   all)
-    run_platform all
+    run_platform mongodb
+    run_platform pg
     bash "$ROOT_DIR/scripts/provision-k8s-components.sh" mongodb
     ;;
-  mongodb)
+  mongodb|mongo)
     run_platform mongodb
     bash "$ROOT_DIR/scripts/provision-k8s-components.sh" mongodb
     ;;
@@ -73,7 +81,7 @@ case "$SCOPE" in
     bash "$ROOT_DIR/scripts/provision-k8s-components.sh" signoz
     ;;
   *)
-    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, pg, signoz" >&2
+    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, signoz" >&2
     usage
     exit 1
     ;;
