@@ -50,6 +50,13 @@ This stack does not provision:
 | Terraform state | A record file Terraform uses to track real infrastructure it created. | Without stable state, Terraform can create duplicates or lose ownership history. |
 | State key | The object path of a state file in S3. | Different keys separate ownership between roots/scopes. |
 | Reusable layer | Shared Terraform code called by roots. | Keeps MongoDB prerequisite logic in one place and avoids duplication. |
+| Escrow file | A local-only copy of generated secrets saved on your laptop. Named "escrow" because it holds material you may need to recover later. | If you lose an escrow file and the cluster secret is deleted, the credential or encryption key is gone. |
+| PBM | Percona Backup for MongoDB — the backup agent that runs as a sidecar inside each MongoDB pod. | PBM needs an S3 bucket and IAM role provisioned by this stack. |
+| PSMDB | Percona Server for MongoDB — the database operator that manages the MongoDB replica set. | The Kubernetes CR (`PerconaServerMongoDB`) and user secrets are built for this operator. |
+| Flux | A GitOps toolkit that reconciles Helm charts from git-tracked `HelmRelease` manifests. | The Percona operator and optional SigNoz are installed via Flux. |
+| cert-manager | A Kubernetes add-on that issues and renews TLS certificates automatically. | MongoDB TLS certificates are defined as cert-manager `Certificate` resources. |
+| Kyverno | A Kubernetes policy engine that enforces rules on resources at admission time. | Policies under `policies/kyverno/` guard storage class and sidecar resource settings. |
+| `rg` (ripgrep) | A fast text search tool used by validation scripts. Installed as `ripgrep`, invoked as `rg`. | `scripts/validate-dev-render.sh` uses `rg` to check rendered manifest content. |
 
 ## Why These Terraform Directories Exist
 
@@ -187,7 +194,7 @@ This table answers what gets created and which file or script owns it. Use it du
 | `mongodb` namespace | Namespace for MongoDB workload and secrets. | `platform-prerequisites/terraform/reusable/main.tf` (`kubernetes_namespace.mongodb`) | Terraform apply |
 | MongoDB workload ServiceAccount | ServiceAccount used by MongoDB pods for AWS workload identity. | `platform-prerequisites/terraform/reusable/main.tf` (`kubernetes_service_account.mongodb_workload`) | Terraform apply |
 | `psmdb-encryption-key` secret | MongoDB encryption bootstrap material. | `scripts/bootstrap-dev-secrets.sh` | Secret bootstrap script |
-| `psmdb-secrets` secret | MongoDB `clusterAdmin` bootstrap password. | `scripts/bootstrap-dev-secrets.sh` | Secret bootstrap script |
+| `psmdb-secrets` secret | All Percona operator user credentials (backup, clusterAdmin, clusterMonitor, userAdmin — 4 usernames and 4 passwords). | `scripts/bootstrap-dev-secrets.sh` | Secret bootstrap script |
 | Percona HelmRepository | Points Flux to the Percona chart repository. | `gitops/operators/base/helmrepositories.yaml` | GitOps/manual apply of `gitops/operators/base` |
 | Percona Operator HelmRelease | Installs the Percona Server for MongoDB Operator. | `gitops/operators/base/helmreleases.yaml` | Flux Helm controller after operator layer apply |
 | SigNoz namespace | Namespace for optional SigNoz observability resources. | `gitops/signoz/base/namespace.yaml` | GitOps/manual apply of `gitops/signoz/base` |
@@ -197,7 +204,7 @@ This table answers what gets created and which file or script owns it. Use it du
 | MongoDB certificates and issuer | Provides cert-manager issuer/certificates for MongoDB TLS/client identity. | `k8s/base/certificates.yaml` | Apply `k8s/overlays/dev` |
 | MongoDB PerconaServerMongoDB CR | Defines the MongoDB replica set, storage, TLS, backup settings, and runtime topology. | `k8s/base/psmdb-cluster.yaml` and `k8s/overlays/dev/patch-psmdb.yaml` | Apply `k8s/overlays/dev` |
 | MongoDB PodDisruptionBudget | Protects replica-set availability during voluntary disruption. | `k8s/base/pdb.yaml` | Apply `k8s/overlays/dev` |
-| Kyverno policy: storage class guardrail | Requires WaitForFirstConsumer behavior for MongoDB storage. | `policies/kyverno/require-wffc-storageclass.yaml` | Apply `policies/kyverno` |
+| Kyverno policy: storage class guardrail | Requires WaitForFirstConsumer volume binding (delays disk creation until a pod is scheduled, so the disk lands in the correct availability zone). | `policies/kyverno/require-wffc-storageclass.yaml` | Apply `policies/kyverno` |
 | Kyverno policy: app password secret guardrail | Blocks app-managed MongoDB password secrets where policy applies. | `policies/kyverno/block-app-mongo-password-secrets.yaml` | Apply `policies/kyverno` |
 | Kyverno policy: PBM sidecar resources | Requires PBM sidecar resource fencing. | `policies/kyverno/require-pbm-sidecar-resources.yaml` | Apply `policies/kyverno` |
 
@@ -521,7 +528,7 @@ What the command does:
 - uses remote S3 state if `TF_STATE_BUCKET` is set
 - bootstraps the S3 backend bucket if needed
 - migrates local state to S3 once when remote state is new and local state exists
-- runs `terraform fmt -recursive`
+- runs `terraform fmt -recursive` (auto-fixes whitespace/indentation only — safe, no logic changes)
 - runs `terraform validate`
 - selects root and default state key by scope (`all|mongodb|pg`)
 - runs `terraform plan -out=tfplan`
@@ -554,17 +561,31 @@ The bootstrap script creates two Kubernetes secrets in the `mongodb` namespace:
 scripts/bootstrap-dev-secrets.sh
 ```
 
-All passwords are auto-generated and saved to `.local-dev-user-passwords.txt` (mode 600, git-ignored).
+All four passwords are auto-generated (32-character base64 strings via `openssl rand -base64 24`) and saved to `.local-dev-user-passwords.txt`.
+
+After the script finishes, open that file to see the generated credentials:
+
+```bash
+cat .local-dev-user-passwords.txt
+```
 
 **Option B: bring your own passwords.**
 
 ```bash
 cp .local-dev-user-passwords.txt.sample .local-dev-user-passwords.txt
-$EDITOR .local-dev-user-passwords.txt       # replace every CHANGE_ME
-scripts/bootstrap-dev-secrets.sh
 ```
 
-The script reads the escrow file and creates the Kubernetes secret from it.
+Open the file in your text editor (for example `nano`, `vim`, or `code`) and replace every `CHANGE_ME` with a real password:
+
+```bash
+nano .local-dev-user-passwords.txt       # or: vim, code, etc.
+```
+
+Then run the bootstrap script. It reads the file instead of generating:
+
+```bash
+scripts/bootstrap-dev-secrets.sh
+```
 
 **Escrow file format** (`.local-dev-user-passwords.txt`):
 
@@ -579,7 +600,9 @@ MONGODB_USER_ADMIN_USER=userAdmin
 MONGODB_USER_ADMIN_PASSWORD=<generated-or-custom>
 ```
 
-Both escrow files are git-ignored. Do not commit them. If the escrow files are lost while encrypted MongoDB volumes remain, data may not be recoverable.
+Both escrow files are git-ignored and created with mode 600 (only the file owner can read them). Do not commit them.
+
+**Backup recommendation:** Copy both escrow files to a secure location (for example a password manager or an encrypted vault) immediately after the first successful bootstrap. If the escrow files are lost and the cluster secrets are also deleted, the encryption key cannot be recovered and existing encrypted MongoDB data may be permanently inaccessible.
 
 Expected result: `psmdb-encryption-key` and `psmdb-secrets` exist in the `mongodb` namespace.
 
@@ -646,7 +669,7 @@ flowchart TD
 
 Step meaning:
 - Prepare backend: decides where state is stored before Terraform reads or writes state.
-- Format files: keeps Terraform formatting consistent and prevents style-only drift.
+- Format files: auto-fixes whitespace and indentation in Terraform files. This is cosmetic only and does not change logic.
 - Validate configuration: catches syntax, provider, module, and input contract errors before planning.
 - Plan and apply: records changes and applies them for the selected root.
 - `all` scope runs this flow twice (mongodb then pg), each with its own root and state key.
