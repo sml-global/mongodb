@@ -12,6 +12,11 @@ spec:
           - resources:
               kinds:
                 - PerconaServerMongoDB
+      preconditions:
+        all:
+          - key: "{{ request.object.spec.backup.enabled || false }}"
+            operator: NotEquals
+            value: false
       validate:
         message: "PerconaServerMongoDB must define pbm-agent sidecar requests and limits."
         foreach:

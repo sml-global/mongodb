@@ -24,7 +24,6 @@ It intentionally does not duplicate runbook steps.
 |---|---|
 | Quick orientation and onboarding | [README.md](../../README.md) |
 | Full operator steps and troubleshooting | [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md) |
-| Unified Terraform root context | [platform-prerequisites/terraform/dev/README.md](../../platform-prerequisites/terraform/dev/README.md) |
 | MongoDB-only Terraform root context | [platform-prerequisites/terraform/mongodb/README.md](../../platform-prerequisites/terraform/mongodb/README.md) |
 | PostgreSQL-only Terraform root context | [platform-prerequisites/terraform/postgresql/README.md](../../platform-prerequisites/terraform/postgresql/README.md) |
 | Exact defaults and embedded constants | [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md) |

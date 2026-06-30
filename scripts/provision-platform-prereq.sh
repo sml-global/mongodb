@@ -7,13 +7,15 @@ Usage:
   provision-platform-prereq.sh <scope> [--auto-approve]
 
 Scopes:
-  all       Plan and apply unified MongoDB + PostgreSQL prerequisites.
+  all       Apply MongoDB then PostgreSQL prerequisites (separate roots and states).
   mongodb   Apply only MongoDB prerequisite resources from the dedicated mongodb root.
+  mongo     Alias of mongodb.
   pg        Apply only PostgreSQL resources from the dedicated postgresql root.
 
 Examples:
   scripts/provision-platform-prereq.sh all
   scripts/provision-platform-prereq.sh mongodb
+  scripts/provision-platform-prereq.sh mongo
   scripts/provision-platform-prereq.sh pg --auto-approve
 EOF
 }
@@ -28,6 +30,11 @@ SCOPE="${1:-}"
 AUTO_APPROVE="false"
 TF_DIR=""
 DEFAULT_TF_STATE_KEY=""
+
+if [[ "$SCOPE" == "-h" || "$SCOPE" == "--help" ]]; then
+  usage
+  exit 0
+fi
 
 if [[ -z "$SCOPE" ]]; then
   usage
@@ -55,19 +62,27 @@ done
 
 case "$SCOPE" in
   all)
-    TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/dev"
-    DEFAULT_TF_STATE_KEY="oms/dev/terraform.tfstate"
+    # Run mongodb then pg sequentially, each with its own root and state.
+    if [[ "$AUTO_APPROVE" == "true" ]]; then
+      bash "$0" mongodb --auto-approve
+      bash "$0" pg --auto-approve
+    else
+      bash "$0" mongodb
+      bash "$0" pg
+    fi
+    echo "Completed scope: all (mongodb + pg)"
+    exit 0
     ;;
-  mongodb)
+  mongodb|mongo)
     TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/mongodb"
-    DEFAULT_TF_STATE_KEY="oms/dev/mongodb/terraform.tfstate"
+    DEFAULT_TF_STATE_KEY="oms/dev/mongo.tfstate"
     ;;
   pg)
     TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/postgresql"
-    DEFAULT_TF_STATE_KEY="oms/dev/postgresql/terraform.tfstate"
+    DEFAULT_TF_STATE_KEY="oms/dev/pg.tfstate"
     ;;
   *)
-    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, pg" >&2
+    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg" >&2
     usage
     exit 1
     ;;

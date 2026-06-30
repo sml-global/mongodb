@@ -11,7 +11,7 @@ Use it when you need Aurora PostgreSQL changes without touching MongoDB prerequi
 |---|---|
 | What does this root provision? | Aurora PostgreSQL subnet group, security group/rules, cluster, and writer instance. |
 | Which script uses this root? | `bash scripts/provision-platform-prereq.sh pg`. |
-| Which default state key is used? | `oms/dev/postgresql/terraform.tfstate`. |
+| Which default state key is used? | `oms/dev/pg.tfstate`. |
 | Where is the canonical runbook? | `platform-prerequisites/terraform/README.md`. |
 
 ## Standard Use
@@ -30,5 +30,5 @@ bash scripts/provision-platform-prereq.sh pg
 ```
 
 ## Boundaries
-- Do not reuse this root's state key for MongoDB or unified root.
+- Do not reuse this root's state key for the MongoDB root.
 - Do not commit `terraform.tfvars`.

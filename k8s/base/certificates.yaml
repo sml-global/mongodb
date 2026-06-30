@@ -19,6 +19,8 @@ spec:
   dnsNames:
     - psmdb-rs0
     - psmdb-rs0.mongodb
+    - psmdb-rs0.mongodb.svc
+    - psmdb-rs0.mongodb.svc.cluster.local
   privateKey:
     algorithm: RSA
     size: 2048

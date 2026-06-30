@@ -92,7 +92,6 @@ Use these documents by purpose.
 |---|---|
 | [README.md](README.md) | Overview and onboarding entrypoint (this file). |
 | [platform-prerequisites/terraform/README.md](platform-prerequisites/terraform/README.md) | Canonical operator runbook with detailed steps and troubleshooting. |
-| [platform-prerequisites/terraform/dev/README.md](platform-prerequisites/terraform/dev/README.md) | Unified Terraform root context. |
 | [platform-prerequisites/terraform/mongodb/README.md](platform-prerequisites/terraform/mongodb/README.md) | MongoDB-only Terraform root context. |
 | [platform-prerequisites/terraform/postgresql/README.md](platform-prerequisites/terraform/postgresql/README.md) | PostgreSQL-only Terraform root context. |
 | [docs/operations/dev-configuration-catalog.md](docs/operations/dev-configuration-catalog.md) | Source of truth for embedded defaults and config inventory. |

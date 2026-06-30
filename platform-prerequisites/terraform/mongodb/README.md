@@ -11,7 +11,7 @@ Use it when you need MongoDB prerequisite changes without touching PostgreSQL re
 |---|---|
 | What does this root provision? | MongoDB prerequisites from `platform-prerequisites/terraform/reusable`. |
 | Which script uses this root? | `bash scripts/provision-platform-prereq.sh mongodb`. |
-| Which default state key is used? | `oms/dev/mongodb/terraform.tfstate`. |
+| Which default state key is used? | `oms/dev/mongo.tfstate`. |
 | Where is the canonical runbook? | `platform-prerequisites/terraform/README.md`. |
 
 ## Standard Use
@@ -30,5 +30,5 @@ bash scripts/provision-platform-prereq.sh mongodb
 ```
 
 ## Boundaries
-- Do not reuse this root's state key for PostgreSQL or unified root.
+- Do not reuse this root's state key for the PostgreSQL root.
 - Do not commit `terraform.tfvars`.

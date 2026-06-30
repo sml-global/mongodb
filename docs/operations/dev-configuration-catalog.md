@@ -38,9 +38,9 @@ Boundary note:
 
 | Scope | Terraform Root | Default State Key |
 |---|---|---|
-| `all` | `platform-prerequisites/terraform/dev` | `oms/dev/terraform.tfstate` |
-| `mongodb` | `platform-prerequisites/terraform/mongodb` | `oms/dev/mongodb/terraform.tfstate` |
-| `pg` | `platform-prerequisites/terraform/postgresql` | `oms/dev/postgresql/terraform.tfstate` |
+| `all` | Runs `mongodb` then `pg` sequentially | Two separate keys (see below) |
+| `mongodb` | `platform-prerequisites/terraform/mongodb` | `oms/dev/mongo.tfstate` |
+| `pg` | `platform-prerequisites/terraform/postgresql` | `oms/dev/pg.tfstate` |
 
 Use this map when validating whether a setting is in the correct root.
 
@@ -131,22 +131,6 @@ File: `platform-prerequisites/terraform/reusable/variables.tf`
   - `oidc_provider_url`
   - `kms_key_arn`
 
-### Unified Root Defaults
-File: `platform-prerequisites/terraform/dev/variables.tf`
-
-- `aws_region` default: `ap-east-1`
-- `mongodb_namespace` default: `mongodb`
-- `mongodb_workload_service_account_name` default: `psmdb-db`
-- `pbm_bucket_name` default: `sml-aw-gb0-d-oms-gen-s3-01`
-- `iam_role_name` default: `mongodb-pbm-role`
-- `use_pod_identity` default: `true`
-- PostgreSQL defaults (same root):
-  - `name_prefix` default: `dev-pg18`
-  - `db_identifier` default: `pg18-dev`
-  - `instance_class` default: `db.t4g.medium`
-
-Change method: manual Terraform variable default edit in git, or override in local `terraform.tfvars` for local runs.
-
 ### MongoDB-Only Root Defaults
 File: `platform-prerequisites/terraform/mongodb/variables.tf`
 
@@ -172,10 +156,15 @@ File: `scripts/bootstrap-dev-secrets.sh`
 
 - Namespace: `mongodb`
 - Encryption secret name: `psmdb-encryption-key`
-- Admin secret name: `psmdb-secrets`
+- Users secret name: `psmdb-secrets`
+- Users secret keys:
+  - `MONGODB_BACKUP_USER` / `MONGODB_BACKUP_PASSWORD`
+  - `MONGODB_CLUSTER_ADMIN_USER` / `MONGODB_CLUSTER_ADMIN_PASSWORD`
+  - `MONGODB_CLUSTER_MONITOR_USER` / `MONGODB_CLUSTER_MONITOR_PASSWORD`
+  - `MONGODB_USER_ADMIN_USER` / `MONGODB_USER_ADMIN_PASSWORD`
 - Local escrow files:
   - `.local-dev-encryption-key.txt`
-  - `.local-dev-admin-password.txt`
+  - `.local-dev-user-passwords.txt`
 - Behavior:
   - if secret exists in cluster: skip
   - if missing: generate/use local escrow and create
@@ -187,20 +176,6 @@ File: `scripts/validate-dev-render.sh`
 
 - output path: `/tmp/mongodb-dev.yaml`
 - behavior: local render and structural checks only (offline)
-
-### Terraform Wrapper Runner
-File: `scripts/run-platform-prereq.sh`
-
-- Terraform working directory fixed to:
-  - `platform-prerequisites/terraform/dev`
-- Optional remote-state env controls:
-  - `TF_STATE_BUCKET`
-  - `TF_STATE_REGION` (default `ap-east-1`)
-  - `TF_STATE_KEY` (default `oms/dev/terraform.tfstate`)
-
-Note:
-- This script is a legacy plan-only helper for the unified root.
-- Preferred apply path is `scripts/provision-platform-prereq.sh` with explicit scope.
 
 ### Provision Entry Scripts
 Files:
@@ -256,17 +231,14 @@ File: `scripts/open-signoz-ui.sh`
 ## Placeholder Inventory
 - MongoDB dev path: no unresolved placeholders in tracked YAML/TF/SH files.
 - PostgreSQL dev path intentionally includes a placeholder in:
-  - `platform-prerequisites/terraform/dev/terraform.tfvars.sample`
+  - `platform-prerequisites/terraform/postgresql/terraform.tfvars.sample`
   - `db_master_password = CHANGE_ME_STRONG_DEV_PASSWORD`
   - this is expected and must be set locally by operator before apply.
 
 ## PostgreSQL Path Configuration
 - Aurora PostgreSQL dev defaults and sizing live in:
-  - `platform-prerequisites/terraform/dev/variables.tf`
   - `platform-prerequisites/terraform/postgresql/variables.tf`
 - Aurora PostgreSQL dev infrastructure resources live in:
-  - `platform-prerequisites/terraform/dev/main.tf`
   - `platform-prerequisites/terraform/postgresql/main.tf`
 - Aurora PostgreSQL dev outputs live in:
-  - `platform-prerequisites/terraform/dev/outputs.tf`
   - `platform-prerequisites/terraform/postgresql/outputs.tf`
