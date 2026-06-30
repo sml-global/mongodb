@@ -5,11 +5,15 @@ This directory is the runnable Terraform root for the dev environment.
 
 It provisions MongoDB platform prerequisites and Aurora PostgreSQL in one Terraform plan, apply, and state file.
 
+This is the unified root used by scope `all`. Split roots are also available:
+- `platform-prerequisites/terraform/mongodb` (scope `mongodb`)
+- `platform-prerequisites/terraform/postgresql` (scope `pg`)
+
 ## Read This First
 
 | Question | Answer |
 |---|---|
-| What is this directory? | The Terraform execution root used by `scripts/run-platform-prereq.sh`. |
+| What is this directory? | The Terraform execution root used by `scripts/provision-platform-prereq.sh`. |
 | When should I edit files here? | When changing dev root inputs, providers, backend wiring, PostgreSQL resources, or root outputs. |
 | Where should I run commands from? | Run the wrapper from the repository root. Terraform itself executes in this directory. |
 | Which state owns this root? | The unified MongoDB + PostgreSQL state, local for throwaway testing or S3 for shared environments. |
@@ -32,13 +36,14 @@ It provisions MongoDB platform prerequisites and Aurora PostgreSQL in one Terraf
 4. Run from the repository root:
 
 ```bash
-scripts/run-platform-prereq.sh
+bash scripts/provision-platform-prereq.sh all
 ```
 
-5. Review and apply the generated plan:
+5. For selective infra apply, use scope-based script mode:
 
 ```bash
-cd platform-prerequisites/terraform/dev && terraform apply tfplan
+bash scripts/provision-platform-prereq.sh mongodb
+bash scripts/provision-platform-prereq.sh pg
 ```
 
 ## Boundaries
@@ -46,3 +51,4 @@ cd platform-prerequisites/terraform/dev && terraform apply tfplan
 - Do not commit `terraform.tfvars`.
 - Do not run this root with a different state key unless you are intentionally creating or migrating an environment.
 - Keep shared MongoDB prerequisite logic in `platform-prerequisites/terraform/reusable` unless the change is root-specific.
+- Do not reuse this root's state key for split roots.

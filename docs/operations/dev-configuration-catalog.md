@@ -3,6 +3,9 @@
 ## Purpose
 This catalog is the source of truth for embedded configuration in this repository.
 
+Use this file to answer: "Where is this value defined?".
+Use [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md) to answer: "What should I run next?".
+
 ## Read This First
 
 | Question | Answer |
@@ -10,13 +13,13 @@ This catalog is the source of truth for embedded configuration in this repositor
 | What does this catalog cover? | Embedded dev configuration in Kubernetes YAML, Terraform, and shell scripts. |
 | Why does it exist? | To make editable values discoverable without reading every file first. |
 | When should it change? | Whenever a tracked default, hardcoded value, script constant, or local operator template changes. |
-| Where is operator sequencing documented? | `platform-prerequisites/terraform/README.md`. |
+| Where is operator sequencing documented? | [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md). |
 | Who should use it? | Operators, maintainers, and reviewers checking configuration drift. |
 
 Scope: unified MongoDB + PostgreSQL dev workflow files in YAML, Terraform, and shell scripts.
 
 Process and operator workflow references:
-- `platform-prerequisites/terraform/README.md`:
+- [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md):
   - `Workstation Setup`
   - `Provisioned Resource Inventory`
   - `Read This First`
@@ -29,7 +32,17 @@ Process and operator workflow references:
 
 Boundary note:
 - This catalog explains configuration inventory only.
-- Operator sequencing, gates, and script control flow are maintained in the Terraform README.
+- Operator sequencing, gates, and script control flow are maintained in [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md).
+
+## Scope-To-Root Quick Map
+
+| Scope | Terraform Root | Default State Key |
+|---|---|---|
+| `all` | `platform-prerequisites/terraform/dev` | `oms/dev/terraform.tfstate` |
+| `mongodb` | `platform-prerequisites/terraform/mongodb` | `oms/dev/mongodb/terraform.tfstate` |
+| `pg` | `platform-prerequisites/terraform/postgresql` | `oms/dev/postgresql/terraform.tfstate` |
+
+Use this map when validating whether a setting is in the correct root.
 
 ## Configuration Policy
 - Tracked workload manifests are static for dev. No runtime manifest mutation is used.
@@ -43,6 +56,9 @@ Boundary note:
 - YAML runtime behavior: edit tracked YAML directly.
 - Terraform infrastructure defaults: edit variable defaults in Terraform variable files.
 - Local secret material: use bootstrap script only; do not hand-edit secret payloads into YAML.
+
+Review rule:
+- If you change a default in YAML/TF/SH, update this catalog in the same change.
 
 ## Kubernetes YAML Configuration
 
@@ -61,7 +77,7 @@ File: `k8s/overlays/dev/patch-psmdb.yaml`
 - `spec.backup.enabled = false`
 - `spec.backup.pitr.enabled = false`
 - `spec.backup.storages.s3-main.s3.bucket = sml-aw-gb0-d-oms-gen-s3-01`
-- `spec.backup.storages.s3-main.s3.region = us-east-1`
+- `spec.backup.storages.s3-main.s3.region = ap-east-1`
 
 Change method: manual YAML edit in git.
 
@@ -84,6 +100,22 @@ Files:
 
 Change method: manual YAML edit in git.
 
+### Optional SigNoz Base
+Files:
+- `gitops/signoz/base/namespace.yaml`
+- `gitops/signoz/base/helmrepositories.yaml`
+- `gitops/signoz/base/helmreleases.yaml`
+
+Defaults:
+- namespace: `signoz`
+- HelmRepository URL: `https://charts.signoz.io`
+- HelmRelease chart: `signoz`
+- edition: open-source
+- profile: dev all-in-one
+- access mode: internal-only (no ingress/load balancer manifest in this repo)
+
+Change method: manual YAML edit in git.
+
 ## Terraform Configuration
 
 ### Reusable Module Defaults
@@ -102,7 +134,7 @@ File: `platform-prerequisites/terraform/reusable/variables.tf`
 ### Unified Root Defaults
 File: `platform-prerequisites/terraform/dev/variables.tf`
 
-- `aws_region` default: `us-east-1`
+- `aws_region` default: `ap-east-1`
 - `mongodb_namespace` default: `mongodb`
 - `mongodb_workload_service_account_name` default: `psmdb-db`
 - `pbm_bucket_name` default: `sml-aw-gb0-d-oms-gen-s3-01`
@@ -114,6 +146,24 @@ File: `platform-prerequisites/terraform/dev/variables.tf`
   - `instance_class` default: `db.t4g.medium`
 
 Change method: manual Terraform variable default edit in git, or override in local `terraform.tfvars` for local runs.
+
+### MongoDB-Only Root Defaults
+File: `platform-prerequisites/terraform/mongodb/variables.tf`
+
+- `aws_region` default: `ap-east-1`
+- `mongodb_namespace` default: `mongodb`
+- `mongodb_workload_service_account_name` default: `psmdb-db`
+- `pbm_bucket_name` default: `sml-aw-gb0-d-oms-gen-s3-01`
+- `iam_role_name` default: `mongodb-pbm-role`
+- `use_pod_identity` default: `true`
+
+### PostgreSQL-Only Root Defaults
+File: `platform-prerequisites/terraform/postgresql/variables.tf`
+
+- `aws_region` default: `ap-east-1`
+- `name_prefix` default: `dev-pg18`
+- `db_identifier` default: `pg18-dev`
+- `instance_class` default: `db.t4g.medium`
 
 ## Shell Script Configuration
 
@@ -145,8 +195,38 @@ File: `scripts/run-platform-prereq.sh`
   - `platform-prerequisites/terraform/dev`
 - Optional remote-state env controls:
   - `TF_STATE_BUCKET`
-  - `TF_STATE_REGION` (default `us-east-1`)
-  - `TF_STATE_KEY` (default `mongodb/platform-prerequisites/dev/terraform.tfstate`)
+  - `TF_STATE_REGION` (default `ap-east-1`)
+  - `TF_STATE_KEY` (default `oms/dev/terraform.tfstate`)
+
+Note:
+- This script is a legacy plan-only helper for the unified root.
+- Preferred apply path is `scripts/provision-platform-prereq.sh` with explicit scope.
+
+### Provision Entry Scripts
+Files:
+- `scripts/provision.sh`
+- `scripts/provision-platform-prereq.sh`
+- `scripts/provision-k8s-components.sh`
+
+Defaults and scopes:
+- `scripts/provision.sh` scopes:
+  - `all`
+  - `mongodb`
+  - `pg`
+  - `signoz`
+- `scripts/provision-platform-prereq.sh` scopes:
+  - `all`
+  - `mongodb`
+  - `pg`
+- `scripts/provision-k8s-components.sh` scopes:
+  - `mongodb`
+  - `signoz`
+  - `operators`
+  - `policies`
+  - `overlay`
+  - `all`
+
+Change method: manual shell script edit in git.
 
 ### Terraform S3 Backend Bootstrap
 File: `scripts/bootstrap-terraform-s3-backend.sh`
@@ -166,6 +246,13 @@ File: `scripts/verify-dev-identity.sh`
 - default namespace arg: `mongodb`
 - default expected ServiceAccount arg: `psmdb-db`
 
+### SigNoz UI Helper
+File: `scripts/open-signoz-ui.sh`
+
+- default namespace arg: `signoz`
+- default service arg: `signoz-frontend`
+- default local/remote ports: `3301:3301`
+
 ## Placeholder Inventory
 - MongoDB dev path: no unresolved placeholders in tracked YAML/TF/SH files.
 - PostgreSQL dev path intentionally includes a placeholder in:
@@ -176,7 +263,10 @@ File: `scripts/verify-dev-identity.sh`
 ## PostgreSQL Path Configuration
 - Aurora PostgreSQL dev defaults and sizing live in:
   - `platform-prerequisites/terraform/dev/variables.tf`
+  - `platform-prerequisites/terraform/postgresql/variables.tf`
 - Aurora PostgreSQL dev infrastructure resources live in:
   - `platform-prerequisites/terraform/dev/main.tf`
+  - `platform-prerequisites/terraform/postgresql/main.tf`
 - Aurora PostgreSQL dev outputs live in:
   - `platform-prerequisites/terraform/dev/outputs.tf`
+  - `platform-prerequisites/terraform/postgresql/outputs.tf`

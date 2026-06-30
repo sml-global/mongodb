@@ -6,8 +6,8 @@ TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/dev"
 BOOTSTRAP_BACKEND_SCRIPT="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
 
 TF_STATE_BUCKET="${TF_STATE_BUCKET:-}"
-TF_STATE_REGION="${TF_STATE_REGION:-us-east-1}"
-TF_STATE_KEY="${TF_STATE_KEY:-mongodb/platform-prerequisites/dev/terraform.tfstate}"
+TF_STATE_REGION="${TF_STATE_REGION:-ap-east-1}"
+TF_STATE_KEY="${TF_STATE_KEY:-oms/dev/terraform.tfstate}"
 
 cd "$TF_DIR"
 

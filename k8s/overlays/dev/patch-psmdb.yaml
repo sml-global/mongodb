@@ -37,4 +37,4 @@ spec:
         type: s3
         s3:
           bucket: sml-aw-gb0-d-oms-gen-s3-01
-          region: us-east-1
+          region: ap-east-1

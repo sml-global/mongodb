@@ -1,7 +1,7 @@
-aws_region      = "ap-southeast-1"
-cluster_name    = "my-eks-cluster"
+aws_region      = "ap-east-1"
+cluster_name    = "EKS-boomi-runtime-cluster"
 pbm_bucket_name = "my-mongodb-pbm-backups"
-vpc_id          = "vpc-xxxxxxxx"
+vpc_id          = "vpc-xxxxxxxx" # eksctl-EKS-boomi-runtime-cluster-cluster/VPC (10.200.0.0/16)
 
 mongodb_namespace                     = "mongodb"
 mongodb_workload_service_account_name = "psmdb-db"
@@ -19,8 +19,9 @@ kms_key_arn = ""
 
 # Use your existing private subnets for PostgreSQL. No subnet resources are created by this root.
 private_subnet_ids = [
-	"subnet-aaaaaaaa",
-	"subnet-bbbbbbbb"
+	"subnet-private-ap-east-1a", # SubnetPrivateAPEAST1A (10.200.96.0/19)
+	"subnet-private-ap-east-1b", # SubnetPrivateAPEAST1B (10.200.128.0/19)
+	"subnet-private-ap-east-1c"  # SubnetPrivateAPEAST1C (10.200.160.0/19)
 ]
 
 # Preferred: allow inbound from your app/workload security group.

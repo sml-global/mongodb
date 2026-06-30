@@ -12,10 +12,23 @@ Use it to provision the platform prerequisites needed before deploying the Mongo
 | What does this Terraform stack create? | MongoDB platform prerequisites on EKS and one provisioned Aurora PostgreSQL dev database. |
 | Why does it exist? | To prepare shared infrastructure in a repeatable way before Kubernetes workload manifests are deployed. |
 | When do I run it? | Before the first MongoDB workload deployment, and again whenever Terraform inputs or prerequisite infrastructure need to change. |
-| Where do I run it from? | The repository root, using `scripts/run-platform-prereq.sh`. Terraform itself runs from `platform-prerequisites/terraform/dev`. |
-| Which state does it use? | One Terraform state for both MongoDB prerequisites and PostgreSQL. Remote S3 state is recommended for shared environments. |
+| Where do I run it from? | Run commands from the repository root, using [scripts/provision.sh](../../scripts/provision.sh) or [scripts/provision-platform-prereq.sh](../../scripts/provision-platform-prereq.sh). Terraform runs from a scope-selected root (`dev`, `mongodb`, or `postgresql`). |
+| Which state does it use? | Scope-dependent state: unified (`all`) or split (`mongodb`, `pg`) state keys. In plain language, Terraform state is the record file Terraform uses to remember what it created. |
 | Who should run it? | An operator with AWS permissions for IAM, S3, EKS discovery, RDS, VPC/security groups, and Kubernetes authorization for the target EKS cluster. |
-| How do I know it worked? | `tfplan` is created, `terraform apply tfplan` succeeds, MongoDB secret bootstrap succeeds, and the dev overlay render check passes. |
+| How do I know it worked? | The selected `scripts/provision-platform-prereq.sh` scope completes successfully, MongoDB secret bootstrap succeeds, and the dev overlay render check passes. |
+
+## Documentation Ownership
+
+This is the canonical operator runbook for provisioning and troubleshooting.
+
+Related docs:
+- Repository overview and architecture guardrails: [README.md](../../README.md)
+- Dev-root local context: [platform-prerequisites/terraform/dev/README.md](dev/README.md)
+- MongoDB-root local context: [platform-prerequisites/terraform/mongodb/README.md](mongodb/README.md)
+- PostgreSQL-root local context: [platform-prerequisites/terraform/postgresql/README.md](postgresql/README.md)
+- Configuration inventory only: [docs/operations/dev-configuration-catalog.md](../../docs/operations/dev-configuration-catalog.md)
+- Historical execution snapshot only: [docs/history/operations/execution-status-2026-06-23.md](../../docs/history/operations/execution-status-2026-06-23.md)
+- Operations docs map: [docs/operations/README.md](../../docs/operations/README.md)
 
 ## Scope
 
@@ -29,24 +42,85 @@ This stack does not provision:
 - Kyverno policy application under `policies/`
 - CI/CD automation
 
+## Key Terms (Plain Language)
+
+| Term | Plain Meaning | Why It Matters |
+|---|---|---|
+| Terraform root | A folder where Terraform runs for one scope. | Different roots let you apply only what you need. |
+| Scope | The target you choose: `all`, `mongodb`, or `pg`. | Scope selects both the root and the state key. |
+| Terraform state | A record file Terraform uses to track real infrastructure it created. | Without stable state, Terraform can create duplicates or lose ownership history. |
+| State key | The object path of a state file in S3. | Different keys separate ownership between roots/scopes. |
+| Reusable layer | Shared Terraform code called by roots. | Keeps MongoDB prerequisite logic in one place and avoids duplication. |
+
+## Why These Terraform Directories Exist
+
+| Path | Role | When You Use It | State Ownership |
+|---|---|---|---|
+| `platform-prerequisites/terraform/dev` | Unified root for MongoDB prerequisites + PostgreSQL prerequisites. | Full baseline provisioning or full convergence checks (`all`). | `oms/dev/terraform.tfstate` |
+| `platform-prerequisites/terraform/mongodb` | MongoDB-only root. | MongoDB prerequisite changes without touching PostgreSQL. | `oms/dev/mongodb/terraform.tfstate` |
+| `platform-prerequisites/terraform/postgresql` | PostgreSQL-only root. | PostgreSQL prerequisite changes without touching MongoDB. | `oms/dev/postgresql/terraform.tfstate` |
+| `platform-prerequisites/terraform/reusable` | Shared module code for MongoDB prerequisites. Not a standalone root. | Maintainer edits to shared MongoDB prerequisite logic used by `dev` and `mongodb` roots. | No direct state; called by roots above. |
+
+## State Partitioning Strategy
+
+Terraform root and state key are selected by script scope:
+
+| Scope | Terraform Root | Default State Key |
+|---|---|---|
+| `all` | `platform-prerequisites/terraform/dev` | `oms/dev/terraform.tfstate` |
+| `mongodb` | `platform-prerequisites/terraform/mongodb` | `oms/dev/mongodb/terraform.tfstate` |
+| `pg` | `platform-prerequisites/terraform/postgresql` | `oms/dev/postgresql/terraform.tfstate` |
+
+Safety rule:
+- Prefer split scopes (`mongodb`, `pg`) for partial rollouts.
+- Use `all` for full baseline convergence checks.
+- Do not reuse one state key across multiple roots.
+
 ## Operating Model
 
 The workflow has three phases. Keep them separate when debugging.
 
 | Phase | Purpose | Main Command | Result |
 |---|---|---|---|
-| Prepare | Create runtime configuration and choose local or remote state. | Edit `platform-prerequisites/terraform/dev/terraform.tfvars`; optionally export `TF_STATE_*`. | Terraform has real environment inputs and a known state location. |
-| Plan and Apply | Build a Terraform plan for MongoDB prerequisites and PostgreSQL, then apply the reviewed plan. | `scripts/run-platform-prereq.sh`, then `terraform apply tfplan`. | AWS/Kubernetes prerequisite resources are created or updated. |
+| Prepare | Create runtime configuration and choose local or remote state. | Copy and edit the scope-specific `terraform.tfvars` file; optionally export `TF_STATE_*`. | Terraform has real environment inputs and a known state location. |
+| Plan and Apply | Build/apply Terraform changes for full or selective scopes (MongoDB/PG). | `scripts/provision-platform-prereq.sh <all|mongodb|pg>` | AWS/Kubernetes prerequisite resources are created or updated. |
 | Verify MongoDB Readiness | Create required dev secrets and confirm the MongoDB overlay renders before workload deployment. | `scripts/bootstrap-dev-secrets.sh`, then `scripts/validate-dev-render.sh`. | MongoDB workload manifests can be applied with the expected prerequisites in place. |
+
+## Quick Start By Goal
+
+Use this section first. Detailed explanations come later.
+
+| Goal | What It Does | Command |
+|---|---|---|
+| Full baseline | Applies unified root (`dev`) for MongoDB + PostgreSQL together. | `bash scripts/provision-platform-prereq.sh all` |
+| MongoDB only | Applies MongoDB-only root with separate state key. | `bash scripts/provision-platform-prereq.sh mongodb` |
+| PostgreSQL only | Applies PostgreSQL-only root with separate state key. | `bash scripts/provision-platform-prereq.sh pg` |
+| End-to-end with k8s follow-up | Runs scope-based infra and related k8s steps via one entrypoint. | `bash scripts/provision.sh <all|mongodb|pg|signoz>` |
 
 ## Table Of Contents
 - [Platform Prerequisites Terraform](#platform-prerequisites-terraform)
   - [Purpose](#purpose)
   - [Read This First](#read-this-first)
+  - [Documentation Ownership](#documentation-ownership)
   - [Scope](#scope)
+  - [Key Terms (Plain Language)](#key-terms-plain-language)
+  - [Why These Terraform Directories Exist](#why-these-terraform-directories-exist)
   - [Operating Model](#operating-model)
+  - [Quick Start By Goal](#quick-start-by-goal)
+  - [Table Of Contents](#table-of-contents)
   - [Provisioned Resource Inventory](#provisioned-resource-inventory)
+    - [AWS Resources](#aws-resources)
+    - [Kubernetes Resources](#kubernetes-resources)
+    - [Local-Only Files Created By Scripts](#local-only-files-created-by-scripts)
   - [Workstation Setup](#workstation-setup)
+    - [Required Information](#required-information)
+    - [Install Required Tools](#install-required-tools)
+      - [macOS](#macos)
+      - [Ubuntu](#ubuntu)
+      - [Windows](#windows)
+    - [Configure AWS CLI With SSO](#configure-aws-cli-with-sso)
+    - [Configure Kubernetes Access](#configure-kubernetes-access)
+    - [Confirm Repository Location](#confirm-repository-location)
   - [Standard Operator Procedure](#standard-operator-procedure)
   - [Audience And Primary Tasks](#audience-and-primary-tasks)
   - [Experienced Operator Shortcut](#experienced-operator-shortcut)
@@ -54,8 +128,16 @@ The workflow has three phases. Keep them separate when debugging.
   - [Required Safety Gates](#required-safety-gates)
   - [Remote State Behavior](#remote-state-behavior)
   - [Runbook Commands](#runbook-commands)
-  - [Common Problems For New Operators](#common-problems-for-new-operators)
   - [Troubleshooting](#troubleshooting)
+    - [Common First-Run Issues](#common-first-run-issues)
+    - [Preflight And Tooling](#preflight-and-tooling)
+    - [AWS SSO And Credentials](#aws-sso-and-credentials)
+    - [EKS Kubeconfig](#eks-kubeconfig)
+    - [Optional SigNoz Install](#optional-signoz-install)
+    - [Terraform Plan And Inputs](#terraform-plan-and-inputs)
+    - [Remote State And Backend](#remote-state-and-backend)
+    - [Kubernetes Access And Secrets](#kubernetes-access-and-secrets)
+    - [Render And Post-Deploy Checks](#render-and-post-deploy-checks)
   - [Architecture Summary](#architecture-summary)
   - [Terraform Provisioning Model](#terraform-provisioning-model)
   - [Repository Structure](#repository-structure)
@@ -65,6 +147,11 @@ The workflow has three phases. Keep them separate when debugging.
   - [State Backend Strategy](#state-backend-strategy)
   - [Script Contracts](#script-contracts)
   - [Script Execution Flows](#script-execution-flows)
+    - [scripts/run-platform-prereq.sh](#scriptsrun-platform-prereqsh)
+    - [scripts/bootstrap-terraform-s3-backend.sh](#scriptsbootstrap-terraform-s3-backendsh)
+    - [scripts/bootstrap-dev-secrets.sh](#scriptsbootstrap-dev-secretssh)
+    - [scripts/validate-dev-render.sh](#scriptsvalidate-dev-rendersh)
+    - [scripts/verify-dev-identity.sh](#scriptsverify-dev-identitysh)
   - [Configuration Reference](#configuration-reference)
   - [Security Posture](#security-posture)
   - [Operations And Day-2 Maintenance](#operations-and-day-2-maintenance)
@@ -80,14 +167,14 @@ This table answers what gets created and which file or script owns it. Use it du
 
 | Resource | Purpose | Owner | Applied By |
 |---|---|---|---|
-| PBM S3 bucket | Stores Percona Backup for MongoDB backup objects. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket.pbm`) | `scripts/run-platform-prereq.sh`, then `terraform apply tfplan` |
+| PBM S3 bucket | Stores Percona Backup for MongoDB backup objects. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket.pbm`) | `scripts/provision-platform-prereq.sh all` or `scripts/provision-platform-prereq.sh mongodb` |
 | PBM S3 bucket versioning | Keeps object versions for backup bucket safety. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket_versioning.pbm`) | Terraform apply |
 | PBM S3 bucket encryption | Enables AES256 server-side encryption on the PBM bucket. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket_server_side_encryption_configuration.pbm`) | Terraform apply |
 | PBM S3 public access block | Blocks public ACLs/policies on the PBM bucket. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_s3_bucket_public_access_block.pbm`) | Terraform apply |
 | MongoDB PBM IAM role | Role assumed by the MongoDB workload ServiceAccount for S3/KMS access. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_iam_role.mongodb_pbm`) | Terraform apply |
 | MongoDB PBM IAM inline policy | Grants PBM S3 access and optional KMS actions. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_iam_role_policy.mongodb_pbm`) | Terraform apply |
 | EKS Pod Identity association | Binds the MongoDB workload ServiceAccount to the PBM IAM role when `use_pod_identity = true`. | `platform-prerequisites/terraform/reusable/main.tf` (`aws_eks_pod_identity_association.mongodb_workload`) | Terraform apply |
-| Terraform state S3 bucket | Stores Terraform state for the unified dev root when remote state is enabled. | `scripts/bootstrap-terraform-s3-backend.sh` | `scripts/run-platform-prereq.sh` when `TF_STATE_BUCKET` is set |
+| Terraform state S3 bucket | Stores Terraform state for selected root/state key when remote state is enabled. | `scripts/bootstrap-terraform-s3-backend.sh` | `scripts/provision-platform-prereq.sh` when `TF_STATE_BUCKET` is set |
 | Terraform state bucket controls | Applies versioning, AES256 encryption, and public access block to a newly created backend bucket. | `scripts/bootstrap-terraform-s3-backend.sh` | Backend bootstrap script |
 | Aurora PostgreSQL subnet group | Places Aurora PostgreSQL in existing private subnets. | `platform-prerequisites/terraform/dev/main.tf` (`aws_db_subnet_group.postgresql`) | Terraform apply |
 | Aurora PostgreSQL security group | Controls network access to PostgreSQL. | `platform-prerequisites/terraform/dev/main.tf` (`aws_security_group.postgresql`) | Terraform apply |
@@ -106,6 +193,9 @@ This table answers what gets created and which file or script owns it. Use it du
 | `psmdb-secrets` secret | MongoDB `clusterAdmin` bootstrap password. | `scripts/bootstrap-dev-secrets.sh` | Secret bootstrap script |
 | Percona HelmRepository | Points Flux to the Percona chart repository. | `gitops/operators/base/helmrepositories.yaml` | GitOps/manual apply of `gitops/operators/base` |
 | Percona Operator HelmRelease | Installs the Percona Server for MongoDB Operator. | `gitops/operators/base/helmreleases.yaml` | Flux Helm controller after operator layer apply |
+| SigNoz namespace | Namespace for optional SigNoz observability resources. | `gitops/signoz/base/namespace.yaml` | GitOps/manual apply of `gitops/signoz/base` |
+| SigNoz HelmRepository | Points Flux to the SigNoz chart repository. | `gitops/signoz/base/helmrepositories.yaml` | GitOps/manual apply of `gitops/signoz/base` |
+| SigNoz HelmRelease | Installs the optional SigNoz observability stack. | `gitops/signoz/base/helmreleases.yaml` | Flux Helm controller after SigNoz base apply |
 | MongoDB StorageClass | Defines EBS-backed `gp3-mongodb` storage with MongoDB-specific defaults. | `k8s/base/storageclass-gp3-mongodb.yaml` | Apply `k8s/overlays/dev` |
 | MongoDB certificates and issuer | Provides cert-manager issuer/certificates for MongoDB TLS/client identity. | `k8s/base/certificates.yaml` | Apply `k8s/overlays/dev` |
 | MongoDB PerconaServerMongoDB CR | Defines the MongoDB replica set, storage, TLS, backup settings, and runtime topology. | `k8s/base/psmdb-cluster.yaml` and `k8s/overlays/dev/patch-psmdb.yaml` | Apply `k8s/overlays/dev` |
@@ -118,7 +208,9 @@ This table answers what gets created and which file or script owns it. Use it du
 
 | File | Purpose | Owner |
 |---|---|---|
-| `platform-prerequisites/terraform/dev/tfplan` | Reviewed Terraform plan artifact. | `scripts/run-platform-prereq.sh` |
+| `platform-prerequisites/terraform/dev/tfplan` | Plan artifact for `all` scope. | `scripts/provision-platform-prereq.sh all` (or legacy `scripts/run-platform-prereq.sh`) |
+| `platform-prerequisites/terraform/mongodb/tfplan` | Plan artifact for `mongodb` scope. | `scripts/provision-platform-prereq.sh mongodb` |
+| `platform-prerequisites/terraform/postgresql/tfplan` | Plan artifact for `pg` scope. | `scripts/provision-platform-prereq.sh pg` |
 | `platform-prerequisites/terraform/dev/terraform.tfstate` | Local Terraform state when remote state is not configured. | Terraform CLI |
 | `.local-dev-encryption-key.txt` | Local escrow copy for the MongoDB encryption key. | `scripts/bootstrap-dev-secrets.sh` |
 | `.local-dev-admin-password.txt` | Local escrow copy for the MongoDB cluster admin password. | `scripts/bootstrap-dev-secrets.sh` |
@@ -252,6 +344,16 @@ The Terraform root requires Terraform `>= 1.5.0`, AWS provider `>= 5.0`, and Kub
 
 ### Configure AWS CLI With SSO
 
+Quick copy/paste flow:
+
+```bash
+aws configure sso --profile <profile-name>
+aws sso login --profile <profile-name>
+export AWS_PROFILE=<profile-name>
+export AWS_REGION=ap-east-1
+aws sts get-caller-identity
+```
+
 Create an AWS CLI profile for the target account:
 
 ```bash
@@ -349,49 +451,82 @@ Purpose: confirms the local machine has AWS SSO login, Terraform, Kubernetes acc
 
 Expected result: `aws sts get-caller-identity`, `terraform version`, and `kubectl config current-context` all return the intended environment.
 
-1. Create the runtime variable file.
+1. Choose scope and create the runtime variable file.
+
+Scope to root mapping:
+- `all` -> `platform-prerequisites/terraform/dev`
+- `mongodb` -> `platform-prerequisites/terraform/mongodb`
+- `pg` -> `platform-prerequisites/terraform/postgresql`
+
+For `all`:
 
 ```bash
 cp platform-prerequisites/terraform/dev/terraform.tfvars.sample platform-prerequisites/terraform/dev/terraform.tfvars
 ```
 
+For `mongodb`:
+
+```bash
+cp platform-prerequisites/terraform/mongodb/terraform.tfvars.sample platform-prerequisites/terraform/mongodb/terraform.tfvars
+```
+
+For `pg`:
+
+```bash
+cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-prerequisites/terraform/postgresql/terraform.tfvars
+```
+
 Purpose: creates the local input file Terraform reads during plan/apply.
 
-Expected result: `platform-prerequisites/terraform/dev/terraform.tfvars` exists locally and is not committed.
+Expected result: selected root has local `terraform.tfvars` file and it is not committed.
 
-2. Fill required values in `platform-prerequisites/terraform/dev/terraform.tfvars`.
+2. Fill required values in the selected root's `terraform.tfvars`.
 
 Required minimum values:
-- `cluster_name`
-- `vpc_id`
-- `private_subnet_ids`
-- `db_master_password`
+- `all`: `cluster_name`, `vpc_id`, `private_subnet_ids`, `db_master_password`
+- `mongodb`: `cluster_name`
+- `pg`: `vpc_id`, `private_subnet_ids`, `db_master_password`
 
 Purpose: binds this reusable Terraform root to one real AWS/EKS environment.
 
 Expected result: no required value is empty or left as a placeholder.
 
-3. Configure remote state for shared or persistent environments.
+3. Decide where Terraform keeps its state record.
+
+Plain-language rule:
+- Local state means the record file stays on your laptop.
+- Remote state means the record file is stored in S3 so multiple operators share one source of truth.
 
 ```bash
-export TF_STATE_BUCKET="your-terraform-state-bucket"
-export TF_STATE_REGION="us-east-1"
-export TF_STATE_KEY="mongodb/platform-prerequisites/dev/terraform.tfstate"
+export TF_STATE_BUCKET="sml-oms-dev-tfstate"
+export TF_STATE_REGION="ap-east-1"
 ```
 
-Purpose: stores Terraform state in S3 so multiple operators do not create independent local state files.
+Purpose: when these values are set, Terraform stores state in S3 instead of local laptop state.
 
-Expected result: future runs use the same bucket and key for the unified MongoDB + PostgreSQL state.
+Notes:
+- `TF_STATE_KEY` is optional.
+- If omitted, the script selects default key by scope.
+- Set `TF_STATE_KEY` only when you intentionally override the default.
 
-For throwaway local testing only, omit these variables and Terraform will use local state.
+Expected result: future runs use a stable bucket and scope-appropriate key for the same environment.
 
-4. Build the plan.
+For throwaway local testing only, omit these variables and Terraform will keep local state in the selected root.
+
+4. Run script-driven provisioning for your scope.
 
 ```bash
-scripts/run-platform-prereq.sh
+bash scripts/provision-platform-prereq.sh all
 ```
 
-Purpose: initializes Terraform, formats files, validates configuration, and writes a plan file named `tfplan`.
+Alternative scopes:
+
+```bash
+bash scripts/provision-platform-prereq.sh mongodb
+bash scripts/provision-platform-prereq.sh pg
+```
+
+Purpose: initializes Terraform backend/state, validates configuration, and applies the selected scope.
 
 What the command does:
 - uses remote S3 state if `TF_STATE_BUCKET` is set
@@ -399,21 +534,13 @@ What the command does:
 - migrates local state to S3 once when remote state is new and local state exists
 - runs `terraform fmt -recursive`
 - runs `terraform validate`
+- selects root and default state key by scope (`all|mongodb|pg`)
 - runs `terraform plan -out=tfplan`
+- runs `terraform apply tfplan`
 
-Expected result: `platform-prerequisites/terraform/dev/tfplan` exists and the command exits successfully.
+Expected result: selected scope applies successfully and `tfplan` is created in that scope's Terraform root.
 
-5. Review and apply the plan.
-
-```bash
-cd platform-prerequisites/terraform/dev && terraform apply tfplan
-```
-
-Purpose: applies exactly the plan you reviewed, instead of recalculating a new plan at apply time.
-
-Expected result: Terraform reports a successful apply and updates the unified state.
-
-6. Create MongoDB dev secrets if missing.
+5. Create MongoDB dev secrets if missing.
 
 ```bash
 scripts/bootstrap-dev-secrets.sh
@@ -423,7 +550,7 @@ Purpose: creates required MongoDB secrets in the cluster without mutating tracke
 
 Expected result: `psmdb-encryption-key` and `psmdb-secrets` exist in the `mongodb` namespace.
 
-7. Validate the MongoDB dev overlay before applying workload manifests.
+6. Validate the MongoDB dev overlay before applying workload manifests.
 
 ```bash
 scripts/validate-dev-render.sh
@@ -451,12 +578,9 @@ Use this only after you understand the target environment and state location.
 ```bash
 cp platform-prerequisites/terraform/dev/terraform.tfvars.sample platform-prerequisites/terraform/dev/terraform.tfvars
 $EDITOR platform-prerequisites/terraform/dev/terraform.tfvars
-export TF_STATE_BUCKET="your-terraform-state-bucket"
-export TF_STATE_REGION="us-east-1"
-export TF_STATE_KEY="mongodb/platform-prerequisites/dev/terraform.tfstate"
-scripts/run-platform-prereq.sh
-cd platform-prerequisites/terraform/dev && terraform apply tfplan
-cd ../../../..
+export TF_STATE_BUCKET="sml-oms-dev-tfstate"
+export TF_STATE_REGION="ap-east-1"
+bash scripts/provision-platform-prereq.sh all
 scripts/bootstrap-dev-secrets.sh
 scripts/validate-dev-render.sh
 ```
@@ -465,30 +589,40 @@ This shortcut does not replace plan review. Stop before apply if the generated p
 
 ## What Happens When The Main Script Runs
 
-`scripts/run-platform-prereq.sh` is a plan builder. It does not apply infrastructure.
+`scripts/provision-platform-prereq.sh` is the apply entrypoint for infrastructure scopes and state selection.
+
+`scripts/run-platform-prereq.sh` remains available as a plan-builder helper for legacy/manual flow.
 
 It exists so operators use the same initialization, formatting, validation, backend, and plan behavior every time.
 
 ```mermaid
 flowchart TD
-  A[Operator runs scripts/run-platform-prereq.sh from repository root] --> B{TF_STATE_BUCKET is set}
-  B -->|Yes| C[Prepare S3 backend and select the configured state key]
-  B -->|No| D[Initialize Terraform with local state]
-  C --> E[Format Terraform files]
+  A[Operator runs scripts/provision-platform-prereq.sh from repository root] --> B{Scope}
+  B -->|all| B1[Use root dev with state key oms/dev/terraform.tfstate]
+  B -->|mongodb| B2[Use root mongodb with state key oms/dev/mongodb/terraform.tfstate]
+  B -->|pg| B3[Use root postgresql with state key oms/dev/postgresql/terraform.tfstate]
+  B1 --> C{TF_STATE_BUCKET is set}
+  B2 --> C
+  B3 --> C
+  C -->|Yes| C1[Prepare S3 backend and select the configured state key]
+  C -->|No| D[Initialize Terraform with local state]
+  C1 --> E[Format Terraform files]
   D --> E
   E --> F[Validate Terraform configuration]
-  F --> G[Create tfplan for MongoDB prerequisites and Aurora PostgreSQL]
-  G --> H[Operator reviews tfplan before applying it]
+  F --> G{Scope}
+  G -->|all| H[Create tfplan and apply]
+  G -->|mongodb| I[Plan and apply mongodb root]
+  G -->|pg| J[Plan and apply postgresql root]
 ```
 
 Step meaning:
 - Prepare backend: decides where state is stored before Terraform reads or writes state.
 - Format files: keeps Terraform formatting consistent and prevents style-only drift.
 - Validate configuration: catches syntax, provider, module, and input contract errors before planning.
-- Create `tfplan`: records the exact infrastructure changes to review and apply.
-- Review plan: confirms the intended resources are created, changed, or destroyed before any apply.
+- Create/apply `tfplan` (scope `all`): records and applies full infrastructure changes.
+- Scoped root apply (`mongodb`/`pg`): applies selected component roots with separate state keys.
 
-The script stops on init, formatting, validation, backend, or planning errors.
+The script stops on init, formatting, validation, backend, planning, or apply errors.
 
 ## Required Safety Gates
 
@@ -501,23 +635,29 @@ Do not apply infrastructure until these gates are satisfied.
 | Tooling | `terraform`, `aws`, `kubectl`, `kustomize`, `rg`, and `openssl` are available. | Any required command is missing. |
 | Configuration | `terraform.tfvars` exists, is local only, and required values are real. | Required values are empty or placeholders. |
 | State | Shared environments use stable `TF_STATE_BUCKET`, `TF_STATE_REGION`, and `TF_STATE_KEY` values. | State location is unknown or changed accidentally. |
-| Plan | `scripts/run-platform-prereq.sh` succeeds and creates `tfplan`. | Init, backend setup, validate, or plan fails. |
-| Apply | `terraform apply tfplan` succeeds after human plan review. | Plan contains unexpected changes or apply fails. |
+| Plan/Apply | `bash scripts/provision-platform-prereq.sh <scope>` succeeds for the intended scope. | Init, backend setup, validate, plan, or apply fails. |
 | MongoDB readiness | Secret bootstrap and render validation succeed. | Secret creation, RBAC, or render validation fails. |
 
 ## Remote State Behavior
 
 Remote state is recommended whenever the environment will outlive one local test session or be touched by more than one operator.
 
-Set remote state before running `scripts/run-platform-prereq.sh`:
+Plain-language definition:
+- Local state: a local file (for example `terraform.tfstate`) on one workstation.
+- Remote state: the same record stored in S3 so operators share one consistent infrastructure history.
+
+Set remote state bucket/region before running `scripts/provision-platform-prereq.sh`:
 
 ```bash
-export TF_STATE_BUCKET="your-terraform-state-bucket"
-export TF_STATE_REGION="us-east-1"
-export TF_STATE_KEY="mongodb/platform-prerequisites/dev/terraform.tfstate"
+export TF_STATE_BUCKET="sml-oms-dev-tfstate"
+export TF_STATE_REGION="ap-east-1"
 ```
 
-When `TF_STATE_BUCKET` is set, the runner calls `scripts/bootstrap-terraform-s3-backend.sh` before planning.
+Optional override:
+- `TF_STATE_KEY` can override the scope default key.
+- If not set, the script chooses the key by scope.
+
+When `TF_STATE_BUCKET` is set, provisioning scripts call `scripts/bootstrap-terraform-s3-backend.sh` before plan/apply.
 
 ```mermaid
 flowchart TD
@@ -538,19 +678,27 @@ Important rules:
 - Keep the same `TF_STATE_KEY` for the same environment.
 - Changing the key creates a different state file and can split infrastructure ownership.
 - Backend migration is one-time behavior; later runs reuse the existing remote state.
+- Scope defaults when `TF_STATE_KEY` is unset:
+  - `all`: `oms/dev/terraform.tfstate`
+  - `mongodb`: `oms/dev/mongodb/terraform.tfstate`
+  - `pg`: `oms/dev/postgresql/terraform.tfstate`
 
 ## Runbook Commands
 
 | Command | What It Does | When To Run | Success Looks Like |
 |---|---|---|---|
-| `scripts/run-platform-prereq.sh` | Initializes Terraform state, formats files, validates configuration, and writes `tfplan`. | Before every Terraform apply. | Command exits 0 and `platform-prerequisites/terraform/dev/tfplan` exists. |
-| `cd platform-prerequisites/terraform/dev && terraform apply tfplan` | Applies the reviewed plan for MongoDB prerequisites and PostgreSQL. | After plan review. | Terraform reports successful apply and state is updated. |
-| `scripts/bootstrap-terraform-s3-backend.sh` | Creates or reuses the backend bucket and configures/migrates remote state. | Usually through `scripts/run-platform-prereq.sh`; run directly only for backend recovery. | Terraform backend is initialized against the intended S3 bucket/key. |
+| `bash scripts/provision.sh <all|mongodb|pg|signoz>` | Unified script entrypoint for full or selective provisioning. | Day-1 provisioning and selective reruns. | Selected scope completes successfully. |
+| `bash scripts/provision-platform-prereq.sh <all|mongodb|pg>` | Applies full or targeted Terraform scopes for prerequisites. | Infra provisioning only. | Terraform applies selected scope successfully. |
+| `bash scripts/provision-k8s-components.sh <mongodb|signoz|operators|policies|overlay|all>` | Applies selected Kubernetes stacks/components from git-tracked manifests. | Kubernetes/GitOps provisioning only. | Selected k8s scope applies successfully. |
+| `scripts/run-platform-prereq.sh` | Legacy helper to build `tfplan` only (no apply). | Optional manual plan-review flow. | Command exits 0 and `platform-prerequisites/terraform/dev/tfplan` exists. |
+| `scripts/bootstrap-terraform-s3-backend.sh` | Creates or reuses the backend bucket and configures/migrates remote state. | Usually through `scripts/provision-platform-prereq.sh`; run directly only for backend recovery. | Terraform backend is initialized against the intended S3 bucket/key. |
 | `scripts/bootstrap-dev-secrets.sh` | Creates missing MongoDB dev secrets from local escrow or generated values. | After Terraform apply and before MongoDB workload manifests. | Required secrets exist in namespace `mongodb`. |
 | `scripts/validate-dev-render.sh` | Renders `k8s/overlays/dev` and checks expected manifest structure. | Before applying MongoDB workload manifests. | Render succeeds and structural checks pass. |
 | `scripts/verify-dev-identity.sh` | Checks that running MongoDB pods use the expected ServiceAccount. | After MongoDB pods are running. | Exits 0 when all checked pods match the expected ServiceAccount. |
 
-## Common Problems For New Operators
+## Troubleshooting
+
+### Common First-Run Issues
 
 Most failures are caused by missing context, not by Terraform syntax. Check these before debugging the scripts.
 
@@ -559,14 +707,14 @@ Most failures are caused by missing context, not by Terraform syntax. Check thes
 | Wrong AWS account or region | Terraform may create resources in the wrong place or fail to find the EKS/VPC inputs. | `aws sts get-caller-identity`; `aws configure get region` | Switch AWS profile/region before running the scripts. |
 | AWS SSO not configured or not logged in | AWS CLI and Terraform cannot authenticate. | `aws sts get-caller-identity` | Run `aws configure sso --profile <profile-name>`, then `aws sso login --profile <profile-name>`. |
 | Wrong Kubernetes context | Secret bootstrap and pod checks may target the wrong cluster. | `kubectl config current-context`; `kubectl get ns mongodb` | Update kubeconfig for the target EKS cluster. |
-| `terraform.tfvars` not created | Terraform plan cannot resolve required environment inputs. | `test -f platform-prerequisites/terraform/dev/terraform.tfvars && echo ok` | Copy the sample file and fill real values. |
-| Placeholder values left in `terraform.tfvars` | Plan may fail or create unusable infrastructure. | Review `cluster_name`, `vpc_id`, `private_subnet_ids`, and `db_master_password`. | Replace placeholders with real environment values. |
+| Scope `terraform.tfvars` not created | Terraform plan cannot resolve required environment inputs. | Check selected root for local `terraform.tfvars`. | Copy the sample in the selected root and fill real values. |
+| Placeholder values left in selected `terraform.tfvars` | Plan may fail or create unusable infrastructure. | Review required values for the selected scope. | Replace placeholders with real environment values. |
 | Remote state bucket/key not decided | Different operators may create separate states for the same environment. | `echo "$TF_STATE_BUCKET" "$TF_STATE_REGION" "$TF_STATE_KEY"` | Set stable `TF_STATE_*` values before the first shared run. |
 | Missing CLI tools | Scripts fail before doing useful work. | `command -v terraform aws kubectl kustomize rg openssl` | Install missing tools and rerun from the repository root. |
 | No Kubernetes RBAC in `mongodb` namespace | Secret bootstrap fails even if AWS auth works. | `kubectl auth can-i get secrets -n mongodb`; `kubectl auth can-i create secrets -n mongodb` | Fix EKS Access Entry/RBAC for the operator identity. |
 | Running pod identity verification too early | `scripts/verify-dev-identity.sh` exits `1` when no MongoDB pods exist yet. | `kubectl get pods -n mongodb -l app.kubernetes.io/name=percona-server-mongodb` | Apply the workload manifests first, then rerun after pods are created. |
 
-## Troubleshooting
+### Detailed Troubleshooting Tables
 
 Use the symptom text first, then run the check command to confirm the cause before changing files or state.
 
@@ -597,11 +745,26 @@ Use the symptom text first, then run the check command to confirm the cause befo
 | `kubectl` returns `You must be logged in to the server` | AWS SSO session expired after kubeconfig was written. | `aws sts get-caller-identity` | Run `aws sso login --profile <profile-name>` and retry `kubectl`. |
 | `kubectl` returns `Forbidden` after kubeconfig succeeds | AWS identity is authenticated but not authorized by EKS/RBAC. | `kubectl auth can-i get secrets -n mongodb` | Add/fix EKS Access Entry or Kubernetes RBAC for the SSO role. |
 
+### Optional SigNoz Install
+
+If this environment needs in-cluster observability, apply the optional SigNoz GitOps base:
+
+```bash
+bash scripts/provision.sh signoz
+```
+
+Expected result: Flux reconciles the `signoz` HelmRelease and SigNoz pods start in namespace `signoz`.
+
+Default posture in this repository:
+- open-source SigNoz chart (no enterprise requirement)
+- dev all-in-one profile
+- internal-only access, then `bash scripts/open-signoz-ui.sh` for local UI access
+
 ### Terraform Plan And Inputs
 
 | Symptom | Likely Cause | Confirm With | Fix |
 |---|---|---|---|
-| Plan asks for variables or fails on required inputs | `terraform.tfvars` is missing or incomplete. | `ls platform-prerequisites/terraform/dev/terraform.tfvars` | Create the file from the sample and fill required values. |
+| Plan asks for variables or fails on required inputs | Scope `terraform.tfvars` is missing or incomplete. | Check the selected root for `terraform.tfvars`. | Create the file from scope sample and fill required values. |
 | Plan references the wrong cluster | `cluster_name` points to the wrong EKS cluster or AWS profile/region is wrong. | `aws eks describe-cluster --name <cluster_name>` | Correct `cluster_name`, AWS profile, or region. |
 | PostgreSQL subnet group or security group creation fails | `vpc_id` or `private_subnet_ids` do not belong together. | `aws ec2 describe-subnets --subnet-ids <ids>` | Use private subnet IDs from the same VPC as `vpc_id`. |
 | PostgreSQL password validation fails | `db_master_password` is empty, weak, or placeholder text. | Review `db_master_password` in local `terraform.tfvars`. | Set a strong dev password and keep the file uncommitted. |
@@ -613,7 +776,7 @@ Use the symptom text first, then run the check command to confirm the cause befo
 | Runner says it is using local state | `TF_STATE_BUCKET` is not set. | `echo "$TF_STATE_BUCKET"` | Export `TF_STATE_BUCKET`, `TF_STATE_REGION`, and `TF_STATE_KEY`, then rerun. |
 | Backend bucket creation fails | Missing S3 permissions, invalid bucket name, or wrong region. | `aws s3api head-bucket --bucket "$TF_STATE_BUCKET"` | Use a valid globally unique bucket name and an identity allowed to create/configure it. |
 | Backend points at an unexpected state | `TF_STATE_KEY` changed between runs. | `echo "$TF_STATE_KEY"`; check `s3://$TF_STATE_BUCKET/$TF_STATE_KEY` | Restore the intended key before planning. Do not apply from an accidental new state. |
-| Terraform asks about migrating state unexpectedly | Local state exists and remote state is missing at the configured key. | `ls platform-prerequisites/terraform/dev/terraform.tfstate`; `aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY"` | Confirm this is the first remote-state run before accepting migration. |
+| Terraform asks about migrating state unexpectedly | Local state exists and remote state is missing at the configured key. | Check for local `terraform.tfstate` in the selected root; `aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY"` | Confirm this is the first remote-state run before accepting migration. |
 
 ### Kubernetes Access And Secrets
 
@@ -635,36 +798,38 @@ Use the symptom text first, then run the check command to confirm the cause befo
 | `scripts/verify-dev-identity.sh` exits `2` | MongoDB pods use a different ServiceAccount than expected. | `kubectl get pod <pod> -n mongodb -o jsonpath='{.spec.serviceAccountName}'` | Fix the workload ServiceAccount reference or pass the expected ServiceAccount as the second script argument. |
 
 ## Architecture Summary
-The Terraform layout separates reusable resource logic from the runnable dev root.
+This Terraform layout separates shared logic from runnable roots.
 
 - Reusable layer: `platform-prerequisites/terraform/reusable`
-  - no provider/backend lock-in
-  - contains portable resource logic for MongoDB prerequisites
+  - no provider or backend lock-in
+  - shared MongoDB prerequisite logic
 - Unified root: `platform-prerequisites/terraform/dev`
-  - contains provider configuration, backend integration, and root-level inputs
-  - provisions MongoDB prerequisites and PostgreSQL resources in a single state/apply
+  - provider and backend wiring
+  - MongoDB + PostgreSQL in one apply/state for scope `all`
 
-Single execution contract:
-- one root (`dev`)
-- one plan (`tfplan`)
-- one state key (`mongodb/platform-prerequisites/dev/terraform.tfstate` by default)
+Execution contract:
+- one selected root per run (`dev`, `mongodb`, or `postgresql`)
+- one plan artifact (`tfplan`) in that root
+- one state key for that root
 
 ## Terraform Provisioning Model
 
-This model explains ownership. It shows which part of the repository is responsible for each infrastructure area.
+This model shows ownership.
 
-Read it as: one runnable Terraform root calls reusable MongoDB prerequisite logic and also owns the dev PostgreSQL resources. Both areas are planned, applied, and tracked in one state file.
+Read it as: script scope selects one Terraform root and one state key.
 
 ```mermaid
 flowchart TD
-  A[platform-prerequisites/terraform/dev: runnable root] --> B[Calls reusable MongoDB prerequisite code]
-  A --> C[Defines dev Aurora PostgreSQL resources]
-  B --> D[Creates MongoDB namespace IAM ServiceAccount and PBM S3 controls]
-  C --> E[Creates PostgreSQL subnet group security group cluster and writer instance]
-  D --> F[One generated plan: tfplan]
-  E --> F
-  F --> G[One reviewed apply]
-  G --> H[One Terraform state file]
+  A[scripts/provision-platform-prereq.sh <scope>] --> B{scope}
+  B -->|all| C[Root: dev]
+  B -->|mongodb| D[Root: mongodb]
+  B -->|pg| E[Root: postgresql]
+  C --> F[State key: oms/dev/terraform.tfstate]
+  D --> G[State key: oms/dev/mongodb/terraform.tfstate]
+  E --> H[State key: oms/dev/postgresql/terraform.tfstate]
+  F --> I[Plan and apply]
+  G --> I
+  H --> I
 ```
 
 ## Repository Structure
@@ -673,7 +838,14 @@ flowchart TD
 |---|---|
 | `platform-prerequisites/terraform/reusable` | Reusable Terraform layer for portable module logic. |
 | `platform-prerequisites/terraform/dev` | Unified runnable root for MongoDB prerequisites + PostgreSQL. |
-| `scripts/run-platform-prereq.sh` | Primary plan workflow (init/fmt/validate/plan) for unified root. |
+| `platform-prerequisites/terraform/mongodb` | MongoDB-only runnable root for split-state apply mode. |
+| `platform-prerequisites/terraform/postgresql` | PostgreSQL-only runnable root for split-state apply mode. |
+| `platform-prerequisites/terraform/mongodb/README.md` | MongoDB-only root quick guide. |
+| `platform-prerequisites/terraform/postgresql/README.md` | PostgreSQL-only root quick guide. |
+| `scripts/provision.sh` | Unified script entrypoint for full and selective provisioning scopes. |
+| `scripts/provision-platform-prereq.sh` | Primary Terraform apply workflow for `all|mongodb|pg` scopes. |
+| `scripts/provision-k8s-components.sh` | Kubernetes apply workflow for `mongodb|signoz|operators|policies|overlay|all` scopes. |
+| `scripts/run-platform-prereq.sh` | Legacy plan-only helper (no apply) for manual review flow. |
 | `scripts/bootstrap-terraform-s3-backend.sh` | Idempotent S3 backend bootstrap and one-time state migration helper. |
 | `scripts/bootstrap-dev-secrets.sh` | Creates missing MongoDB dev secrets without mutating tracked manifests. |
 | `scripts/validate-dev-render.sh` | Offline Kustomize render checks for MongoDB dev overlay. |
@@ -689,15 +861,15 @@ Current PBM bucket default:
 
 Boundary decisions:
 - Terraform here prepares platform prerequisites, not workload manifests.
-- Dev posture favors operational simplicity and repeatability.
-- PostgreSQL is provisioned Aurora with single writer for dev.
-- Manual DB credentials are used in this phase (stored in Terraform state).
+- Dev settings prioritize repeatable operations and lower complexity.
+- PostgreSQL is Aurora with a single writer for dev.
+- This phase uses manual DB credentials (stored in Terraform state).
 - Production direction is managed credentials (Secrets Manager-backed).
 
 ## Access And Permissions Model
-The Terraform runner identity must have:
-- AWS permissions for IAM, S3, EKS read/auth discovery, and RDS/VPC resources used by this stack
-- Kubernetes API authorization in the target EKS cluster for resources such as namespace/service account
+The identity running Terraform needs both:
+- AWS permissions for IAM, S3, EKS read/discovery, and RDS/VPC resources used by this stack
+- Kubernetes API authorization in the target EKS cluster for resources like namespace and ServiceAccount
 
 Without EKS API authorization, AWS authentication can succeed while Kubernetes resources fail with Unauthorized/Forbidden.
 
@@ -718,7 +890,7 @@ Control-plane and trust boundaries:
 
 Data sensitivity map:
 - High sensitivity:
-  - Terraform state (contains PostgreSQL master password in dev posture)
+  - Terraform state (includes PostgreSQL master password in current dev posture)
   - local `terraform.tfvars` values
   - local escrow files generated by `scripts/bootstrap-dev-secrets.sh`
 - Medium sensitivity:
@@ -726,9 +898,9 @@ Data sensitivity map:
   - DB endpoint outputs
 
 Operational risk notes:
-- Any identity without EKS API auth can still appear AWS-authenticated while failing Kubernetes resource creation.
-- Incorrect `TF_STATE_KEY` can fragment state and create drift between expected and actual ownership.
-- Lost escrow material with retained encrypted MongoDB volumes prevents recovery of old encrypted data.
+- A runner can be AWS-authenticated but still fail Kubernetes creation if EKS API auth is missing.
+- A wrong `TF_STATE_KEY` can split ownership and create state drift.
+- If escrow files are lost while encrypted MongoDB volumes remain, old encrypted data may not be recoverable.
 
 ## State Backend Strategy
 Backend migration is intentionally idempotent.
@@ -738,16 +910,18 @@ Script:
 
 Behavior:
 - creates backend S3 bucket if missing
-- applies bucket baseline controls on create:
+- applies baseline controls when bucket is created:
   - versioning enabled
   - AES256 server-side encryption enabled
   - public access block enabled
-- if remote state object exists: use remote state
+- if remote state object exists: reuse remote state
 - if remote is missing and local state exists: migrate local state once
-- if both are missing: initialize fresh remote backend
+- if both are missing: initialize a new remote state file
 
-Default state key for unified root:
-- `mongodb/platform-prerequisites/dev/terraform.tfstate`
+Default state keys by scope:
+- `all`: `oms/dev/terraform.tfstate`
+- `mongodb`: `oms/dev/mongodb/terraform.tfstate`
+- `pg`: `oms/dev/postgresql/terraform.tfstate`
 
 ## Script Contracts
 
@@ -755,6 +929,9 @@ Default state key for unified root:
 |---|---|---|---|
 | `scripts/run-platform-prereq.sh` | Optional `TF_STATE_BUCKET`, `TF_STATE_REGION`, `TF_STATE_KEY`; Terraform files in `platform-prerequisites/terraform/dev` | `tfplan` in unified root | Non-zero on backend/init/validate/plan failure |
 | `scripts/bootstrap-terraform-s3-backend.sh` | `--tf-dir`, `--bucket`, `--region`, `--key`; AWS + Terraform CLI access | Backend configured for remote state or migrated state | Non-zero on arg/preflight/AWS/Terraform failures |
+| `scripts/provision-platform-prereq.sh` | Scope (`all|mongodb|pg`), optional `--auto-approve`, optional `TF_STATE_*` env | Full or targeted Terraform apply result | Non-zero on backend/init/validate/plan/apply failure |
+| `scripts/provision-k8s-components.sh` | Scope (`mongodb|signoz|operators|policies|overlay|all`); Kubernetes access | Selected Kubernetes manifests applied | Non-zero on kubectl/bootstrap failures |
+| `scripts/provision.sh` | Scope (`all|mongodb|pg|signoz`), optional `--auto-approve` | End-to-end selected provisioning path | Non-zero if any delegated step fails |
 | `scripts/bootstrap-dev-secrets.sh` | Kubernetes access to namespace `mongodb`; optional local escrow files | Secrets `psmdb-encryption-key` and `psmdb-secrets`; local escrow files if generated | Non-zero on RBAC/tool/validation/secret creation failure |
 | `scripts/validate-dev-render.sh` | `kustomize` and `rg`; `k8s/overlays/dev` present | `/tmp/mongodb-dev.yaml` and structural checks output | Non-zero when render/checks fail |
 | `scripts/verify-dev-identity.sh` | Optional args: `namespace`, `expected SA`; running MongoDB pods | SA verification output by pod | `0` success, `1` no pods, `2` SA mismatch |
@@ -853,12 +1030,12 @@ flowchart TD
 | `platform-prerequisites/terraform/dev/terraform.tfvars.sample` | Operator template for local runtime values. | Update sample values and required fields guidance. |
 
 Broader configuration catalog:
-- `docs/operations/dev-configuration-catalog.md`
+- [docs/operations/dev-configuration-catalog.md](../../docs/operations/dev-configuration-catalog.md)
 
 ## Security Posture
 Current dev posture:
-- manual credentials for PostgreSQL via local `terraform.tfvars`
-- PostgreSQL password remains sensitive but is stored in Terraform state
+- manual PostgreSQL credentials via local `terraform.tfvars`
+- PostgreSQL password is sensitive and stored in Terraform state
 - PostgreSQL writer is non-public
 - S3 backend bootstrap enforces baseline bucket controls
 
@@ -866,13 +1043,14 @@ Operational safeguards:
 - do not commit `terraform.tfvars`
 - restrict backend bucket access to least privilege
 - treat Terraform state as sensitive data
-- rotate dev credentials when environments are shared
+- rotate dev credentials in shared environments
 
 ## Operations And Day-2 Maintenance
 Routine workflow:
-- rerun `scripts/run-platform-prereq.sh` after Terraform code/default changes
-- inspect plan diff before every apply
+- rerun `bash scripts/provision-platform-prereq.sh <all|mongodb|pg>` after Terraform code/default changes
+- review Terraform plan output before apply to confirm blast radius
 - keep `dev/terraform.tfvars.sample` aligned with actual variable contract
+- keep `mongodb/terraform.tfvars.sample` and `postgresql/terraform.tfvars.sample` aligned with their root contracts
 - validate MongoDB render and secret bootstrap before workload deployment
 
 Maintenance checklist:
@@ -886,23 +1064,23 @@ Maintenance checklist:
 flowchart TD
   A[Propose change] --> B[Update Terraform code or defaults]
   B --> C[Update docs and config catalog in same change]
-  C --> D[Run scripts/run-platform-prereq.sh]
+  C --> D[Run bash scripts/provision-platform-prereq.sh with intended scope]
   D --> E[Review plan for blast radius]
   E --> F{Approved?}
   F -->|No| B
-  F -->|Yes| G[Apply terraform apply tfplan]
+  F -->|Yes| G[Apply through provision-platform-prereq.sh]
   G --> H[Run post-change checks]
   H --> I[Record decisions and rationale in docs]
 ```
 
 ## Change Management Rules
 When changing Terraform behavior:
-- keep unified root/state contract intact unless intentionally redesigned
-- update this README and `docs/operations/dev-configuration-catalog.md` in the same change
-- prefer additive defaults with explicit migration notes over silent behavioral changes
+- keep root/state contracts intact unless intentionally redesigning them
+- update this README and [docs/operations/dev-configuration-catalog.md](../../docs/operations/dev-configuration-catalog.md) in the same change
+- prefer additive defaults with explicit migration notes over silent behavior changes
 
 When changing security-sensitive settings:
-- document the threat/risk tradeoff directly in this README
+- document the threat/risk tradeoff in this README
 - include rollback and verification steps in the same PR/change set
 
 ## Handoff To Central Platform Terraform
@@ -910,4 +1088,4 @@ This repository keeps the reusable layer intentionally portable for later integr
 
 Handoff expectation:
 - `platform-prerequisites/terraform/reusable` can be absorbed into central platform Terraform
-- current unified root (`dev`) is an operator-oriented local entrypoint and can be replaced after integration
+- current unified root (`dev`) is an operator-focused local entrypoint and can be replaced after integration
