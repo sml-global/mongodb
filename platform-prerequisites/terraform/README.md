@@ -102,6 +102,13 @@ Use this section first. Detailed explanations come later.
 | PostgreSQL only | Applies PostgreSQL-only root with its own state key. | `bash scripts/provision-platform-prereq.sh pg` |
 | End-to-end with k8s follow-up | Runs scope-based infra and related k8s steps via one entrypoint. | `bash scripts/provision.sh <all|mongodb|pg|signoz>` |
 
+After any MongoDB scope completes, you must also run the secret bootstrap and render check before MongoDB pods can start:
+
+```bash
+scripts/bootstrap-dev-secrets.sh
+scripts/validate-dev-render.sh
+```
+
 ## Table Of Contents
 - [Platform Prerequisites Terraform](#platform-prerequisites-terraform)
   - [Purpose](#purpose)
@@ -110,6 +117,7 @@ Use this section first. Detailed explanations come later.
   - [Scope](#scope)
   - [Key Terms (Plain Language)](#key-terms-plain-language)
   - [Why These Terraform Directories Exist](#why-these-terraform-directories-exist)
+  - [State Partitioning Strategy](#state-partitioning-strategy)
   - [Operating Model](#operating-model)
   - [Quick Start By Goal](#quick-start-by-goal)
   - [Table Of Contents](#table-of-contents)
@@ -135,6 +143,7 @@ Use this section first. Detailed explanations come later.
   - [Runbook Commands](#runbook-commands)
   - [Troubleshooting](#troubleshooting)
     - [Common First-Run Issues](#common-first-run-issues)
+    - [Detailed Troubleshooting Tables](#detailed-troubleshooting-tables)
     - [Preflight And Tooling](#preflight-and-tooling)
     - [AWS SSO And Credentials](#aws-sso-and-credentials)
     - [EKS Kubeconfig](#eks-kubeconfig)
@@ -235,7 +244,7 @@ Get these values from the platform or AWS account owner before starting:
 | Workload AWS region | Used by Terraform providers and AWS CLI commands. |
 | EKS cluster name | Used by Terraform and `aws eks update-kubeconfig`. |
 | VPC ID and private subnet IDs | Required for Aurora PostgreSQL networking. |
-| Remote state bucket name and state key | Required for shared S3 Terraform state. |
+| Remote state bucket name | Required for shared S3 Terraform state. The state key is optional — the script picks a default by scope if you don't override it. |
 
 ### Install Required Tools
 
@@ -456,17 +465,17 @@ Expected result: `aws sts get-caller-identity`, `terraform version`, and `kubect
 1. Choose scope and create the runtime variable file.
 
 Scope to root mapping:
-- `all` -> runs `mongodb` then `pg` sequentially
+- `all` -> runs `mongodb` then `pg` sequentially (create BOTH tfvars files below)
 - `mongodb` -> `platform-prerequisites/terraform/mongodb`
 - `pg` -> `platform-prerequisites/terraform/postgresql`
 
-For `mongodb`:
+For `mongodb` (always needed for scopes `all` or `mongodb`):
 
 ```bash
 cp platform-prerequisites/terraform/mongodb/terraform.tfvars.sample platform-prerequisites/terraform/mongodb/terraform.tfvars
 ```
 
-For `pg`:
+For `pg` (always needed for scopes `all` or `pg`):
 
 ```bash
 cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-prerequisites/terraform/postgresql/terraform.tfvars
@@ -480,7 +489,7 @@ Expected result: selected root has local `terraform.tfvars` file and it is not c
 
 Required minimum values:
 - `mongodb`: `cluster_name`
-- `pg`: `vpc_id`, `private_subnet_ids`, `db_master_password`
+- `pg`: `vpc_id`, `private_subnet_ids`, `db_master_password` (Aurora requires at least 8 characters, printable ASCII only, no `/`, `"`, or `@`)
 - `all`: fill both mongodb and pg tfvars files
 
 Purpose: binds this reusable Terraform root to one real AWS/EKS environment.
@@ -507,7 +516,7 @@ Notes:
 
 Expected result: future runs use a stable bucket and scope-appropriate key for the same environment.
 
-For throwaway local testing only, omit these variables and Terraform will keep local state in the selected root.
+For disposable local testing only (an environment you plan to destroy without sharing with anyone), omit these variables and Terraform will keep local state in the selected root. Use local state when experimenting on your own and you accept that the state will be lost if you delete the directory.
 
 4. Run script-driven provisioning for your scope.
 
@@ -520,6 +529,12 @@ Alternative scopes:
 ```bash
 bash scripts/provision-platform-prereq.sh mongodb
 bash scripts/provision-platform-prereq.sh pg
+```
+
+Optional flag — `--auto-approve` skips the interactive plan confirmation prompt. Use only when you have already reviewed the plan or are re-running a known-good apply:
+
+```bash
+bash scripts/provision-platform-prereq.sh mongodb --auto-approve
 ```
 
 Purpose: initializes Terraform backend/state, validates configuration, and applies the selected scope.
@@ -536,16 +551,27 @@ What the command does:
 
 Expected result: selected scope applies successfully and `tfplan` is created in that scope's Terraform root.
 
-5. Create MongoDB dev secrets if missing.
+5. Create MongoDB dev secrets.
 
-The bootstrap script creates two Kubernetes secrets in the `mongodb` namespace:
+The bootstrap script creates two Kubernetes secrets in the `mongodb` namespace.
+
+**How the script decides what to do (for both secrets):**
+
+The script checks two things in order:
+1. Does the secret already exist in the cluster? → If yes, **skip it entirely** (no overwrite, no error).
+2. Does the local escrow file exist on your laptop? → If yes, **read credentials from it**. If no, **auto-generate credentials, save them to the escrow file, then create the secret**.
+
+In short: **file exists → use it; file missing → generate everything automatically.** The script never asks you to choose — it decides based on what it finds on disk.
 
 **Secret 1: `psmdb-encryption-key`**
 - Contains a 32-byte random key used by MongoDB for data-at-rest encryption.
-- Stored locally in `.local-dev-encryption-key.txt` (mode 600, git-ignored).
+- Local escrow file: `.local-dev-encryption-key.txt`
+- If the escrow file already exists, the script validates and uses it.
+- If the escrow file does not exist, the script generates a new key and saves it.
 
 **Secret 2: `psmdb-secrets`**
 - Contains all Percona PSMDB operator user credentials.
+- Local escrow file: `.local-dev-user-passwords.txt`
 - The operator uses these users internally for replica set management, backup, and monitoring.
 
 | Key | Default Username | Purpose |
@@ -555,7 +581,9 @@ The bootstrap script creates two Kubernetes secrets in the `mongodb` namespace:
 | `MONGODB_CLUSTER_MONITOR_USER` / `MONGODB_CLUSTER_MONITOR_PASSWORD` | `clusterMonitor` | Health checks and monitoring. Used by readiness/liveness probes. |
 | `MONGODB_USER_ADMIN_USER` / `MONGODB_USER_ADMIN_PASSWORD` | `userAdmin` | User and role management inside MongoDB. |
 
-**Option A: let the script generate everything (recommended for dev).**
+**Option A — auto-generate (recommended for first-time dev setup).**
+
+Do nothing beforehand — just run the script. Because no escrow file exists yet, the script generates all passwords automatically:
 
 ```bash
 scripts/bootstrap-dev-secrets.sh
@@ -569,7 +597,9 @@ After the script finishes, open that file to see the generated credentials:
 cat .local-dev-user-passwords.txt
 ```
 
-**Option B: bring your own passwords.**
+**Option B — bring your own passwords (use when you need specific credentials).**
+
+Create the escrow file BEFORE running the script. Because the file exists, the script reads it instead of generating:
 
 ```bash
 cp .local-dev-user-passwords.txt.sample .local-dev-user-passwords.txt
@@ -581,7 +611,7 @@ Open the file in your text editor (for example `nano`, `vim`, or `code`) and rep
 nano .local-dev-user-passwords.txt       # or: vim, code, etc.
 ```
 
-Then run the bootstrap script. It reads the file instead of generating:
+Then run the bootstrap script — it detects the file and uses your passwords:
 
 ```bash
 scripts/bootstrap-dev-secrets.sh
@@ -632,10 +662,17 @@ Use this section to jump directly to your role.
 Use this only after you understand the target environment and state location.
 
 ```bash
+# Create tfvars for both roots (required for scope 'all')
 cp platform-prerequisites/terraform/mongodb/terraform.tfvars.sample platform-prerequisites/terraform/mongodb/terraform.tfvars
-$EDITOR platform-prerequisites/terraform/mongodb/terraform.tfvars
+cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-prerequisites/terraform/postgresql/terraform.tfvars
+nano platform-prerequisites/terraform/mongodb/terraform.tfvars
+nano platform-prerequisites/terraform/postgresql/terraform.tfvars
+
+# Set remote state
 export TF_STATE_BUCKET="sml-oms-dev-tfstate"
 export TF_STATE_REGION="ap-east-1"
+
+# Provision
 bash scripts/provision-platform-prereq.sh all
 scripts/bootstrap-dev-secrets.sh
 scripts/validate-dev-render.sh
