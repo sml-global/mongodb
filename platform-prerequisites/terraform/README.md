@@ -18,7 +18,7 @@ This Terraform stack prepares the AWS and Kubernetes infrastructure that MongoDB
 | Why does it exist? | To prepare shared infrastructure in a repeatable way before Kubernetes workload manifests are deployed. |
 | When do I run it? | Before the first MongoDB workload deployment, and again whenever Terraform inputs or prerequisite infrastructure need to change. |
 | Where do I run it from? | Run commands from the repository root, using [scripts/provision.sh](../../scripts/provision.sh) or [scripts/provision-platform-prereq.sh](../../scripts/provision-platform-prereq.sh). Terraform runs from the scope-selected root (`mongodb` or `postgresql`). |
-| Which state does it use? | Scope-dependent state: `mongodb` uses `oms/dev/mongo.tfstate`, `pg` uses `oms/dev/pg.tfstate`, `all` runs both sequentially. In plain language, Terraform state is the record file Terraform uses to remember what it created. |
+| Which state does it use? | Remote S3 state in bucket `sml-oms-dev-tfstate` (region `ap-east-1`). State key is scope-dependent: `mongodb` uses `oms/dev/mongo.tfstate`, `pg` uses `oms/dev/pg.tfstate`, `all` runs both sequentially. In plain language, Terraform state is the record file Terraform uses to remember what it created. |
 | Who should run it? | An operator with AWS permissions for IAM, S3, EKS discovery, RDS, VPC/security groups, and Kubernetes authorization for the target EKS cluster. |
 | How do I know it worked? | The selected `scripts/provision-platform-prereq.sh` scope completes successfully, MongoDB secret bootstrap succeeds, and the dev overlay render check passes. |
 
@@ -502,34 +502,28 @@ Purpose: binds this reusable Terraform root to one real AWS/EKS environment.
 
 Expected result: no required value is empty or left as a placeholder.
 
-3. Set environment variables for remote state.
+3. (Optional) Override remote state environment variables.
 
-The provisioning scripts read these environment variables to decide where Terraform stores its state record:
+The provisioning scripts default to the OMS dev remote state bucket. You only need to export these if you want to use a different bucket or region:
 
-| Variable | Required? | Default if unset | Effect |
-|---|---|---|---|
-| `TF_STATE_BUCKET` | **Yes** | *(none — falls back to local state)* | Tells the script to use S3 remote state. Without this, Terraform uses a local file on your laptop that is not shared. |
-| `TF_STATE_REGION` | No | `ap-east-1` (hardcoded in script) | The AWS region where the state bucket lives. Only set this if your bucket is in a different region. |
-| `TF_STATE_KEY` | No | Auto-selected by scope | The S3 object key. Only set this to override the default (`oms/dev/mongo.tfstate` or `oms/dev/pg.tfstate`). |
+| Variable | Default (hardcoded in script) | When to override |
+|---|---|---|
+| `TF_STATE_BUCKET` | `sml-oms-dev-tfstate` | Only if you need a different state bucket. |
+| `TF_STATE_REGION` | `ap-east-1` | Only if your state bucket is in a different region. |
+| `TF_STATE_KEY` | Auto-selected by scope (`oms/dev/mongo.tfstate` or `oms/dev/pg.tfstate`) | Only if you intentionally want a non-default state key. |
 
-For the OMS dev environment, use these actual values:
+If you are using the standard OMS dev environment, **skip this step** — the defaults are already correct and the script uses remote S3 state automatically.
+
+To override (only if needed):
 
 ```bash
-export TF_STATE_BUCKET="sml-oms-dev-tfstate"
-export TF_STATE_REGION="ap-east-1"
+export TF_STATE_BUCKET="my-other-bucket"
+export TF_STATE_REGION="us-east-1"
 ```
 
-> These are the real values for this project, not placeholders. The bucket name `sml-oms-dev-tfstate` is the shared OMS dev state bucket in `ap-east-1`.
-
-**What happens if you skip this step:** The script falls back to local state — a `terraform.tfstate` file stored inside the Terraform root on your laptop. This means other operators cannot see your changes and may create duplicate infrastructure. Only skip this for throwaway personal experiments that you will destroy immediately.
-
-Purpose: tells the provisioning scripts to store state in S3 so all operators share one consistent record.
-
-Expected result: environment variables are exported in your current shell session before running Step 4.
+Expected result: the script always uses S3 remote state. No local state fallback exists.
 
 4. Run script-driven provisioning for your scope.
-
-> The script reads `TF_STATE_BUCKET` and `TF_STATE_REGION` from your current shell. Make sure Step 3's `export` commands were run in the same terminal session.
 
 ```bash
 bash scripts/provision-platform-prereq.sh all
@@ -551,7 +545,7 @@ bash scripts/provision-platform-prereq.sh mongodb --auto-approve
 Purpose: initializes Terraform backend/state, validates configuration, and applies the selected scope.
 
 What the command does:
-- uses remote S3 state if `TF_STATE_BUCKET` is set
+- uses remote S3 state (defaults to bucket `sml-oms-dev-tfstate` in `ap-east-1`; overridable via `TF_STATE_BUCKET`/`TF_STATE_REGION`)
 - bootstraps the S3 backend bucket if needed
 - migrates local state to S3 once when remote state is new and local state exists
 - runs `terraform fmt -recursive` (auto-fixes whitespace/indentation only — safe, no logic changes)
@@ -679,9 +673,7 @@ cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-
 nano platform-prerequisites/terraform/mongodb/terraform.tfvars
 nano platform-prerequisites/terraform/postgresql/terraform.tfvars
 
-# Set remote state (these are the real OMS dev values, not placeholders)
-export TF_STATE_BUCKET="sml-oms-dev-tfstate"
-export TF_STATE_REGION="ap-east-1"
+# Remote state uses default bucket (sml-oms-dev-tfstate) — no export needed
 
 # Provision
 bash scripts/provision-platform-prereq.sh all
@@ -705,18 +697,15 @@ flowchart TD
   B -->|pg| B3[Use root postgresql with state key oms/dev/pg.tfstate]
   B1 --> B2
   B1 --> B3
-  B2 --> C{TF_STATE_BUCKET is set}
+  B2 --> C[Prepare S3 backend using TF_STATE_BUCKET default: sml-oms-dev-tfstate]
   B3 --> C
-  C -->|Yes| C1[Prepare S3 backend and select the configured state key]
-  C -->|No| D[Initialize Terraform with local state]
-  C1 --> E[Format Terraform files]
-  D --> E
+  C --> E[Format Terraform files]
   E --> F[Validate Terraform configuration]
   F --> G[Plan and apply selected root]
 ```
 
 Step meaning:
-- Prepare backend: decides where state is stored before Terraform reads or writes state.
+- Prepare backend: bootstraps the S3 state bucket if needed and configures Terraform to use remote state.
 - Format files: auto-fixes whitespace and indentation in Terraform files. This is cosmetic only and does not change logic.
 - Validate configuration: catches syntax, provider, module, and input contract errors before planning.
 - Plan and apply: records changes and applies them for the selected root.
@@ -734,36 +723,34 @@ Do not apply infrastructure until these gates are satisfied.
 | Access | AWS identity has required permissions and Kubernetes access to the target cluster works. | AWS or Kubernetes returns Unauthorized/Forbidden. |
 | Tooling | `terraform`, `aws`, `kubectl`, `kustomize`, `rg`, and `openssl` are available. | Any required command is missing. |
 | Configuration | `terraform.tfvars` exists, is local only, and required values are real. | Required values are empty or placeholders. |
-| State | Shared environments use stable `TF_STATE_BUCKET`, `TF_STATE_REGION`, and `TF_STATE_KEY` values. | State location is unknown or changed accidentally. |
+| State | Script defaults to `sml-oms-dev-tfstate` in `ap-east-1`. Only override `TF_STATE_BUCKET`/`TF_STATE_REGION` if intentionally targeting a different bucket. | State location changed accidentally via env var override. |
 | Plan/Apply | `bash scripts/provision-platform-prereq.sh <scope>` succeeds for the intended scope. | Init, backend setup, validate, plan, or apply fails. |
 | MongoDB readiness | Secret bootstrap and render validation succeed. | Secret creation, RBAC, or render validation fails. |
 
 ## Remote State Behavior
 
-Remote state is recommended whenever the environment will outlive one local test session or be touched by more than one operator.
+Remote state is always enabled. The script defaults to bucket `sml-oms-dev-tfstate` in region `ap-east-1`. There is no local-state mode.
 
 Plain-language definition:
-- Local state: a local file (for example `terraform.tfstate`) on one workstation.
-- Remote state: the same record stored in S3 so operators share one consistent infrastructure history.
+- Remote state: Terraform's record file is stored in S3 so all operators share one consistent infrastructure history.
+- The script always uses S3 remote state — you cannot accidentally end up with local-only state.
 
-Set remote state bucket/region before running `scripts/provision-platform-prereq.sh` (these are the real OMS dev values):
+The defaults are hardcoded in `scripts/provision-platform-prereq.sh`. Override only if needed:
 
 ```bash
-export TF_STATE_BUCKET="sml-oms-dev-tfstate"
-export TF_STATE_REGION="ap-east-1"
+export TF_STATE_BUCKET="my-other-bucket"
+export TF_STATE_REGION="us-east-1"
 ```
-
-> **You must set `TF_STATE_BUCKET` for the shared OMS dev environment.** If unset, the script falls back to local state on your laptop — this is only safe for throwaway personal experiments because other operators will not see your changes and may create duplicate infrastructure.
 
 Optional override:
 - `TF_STATE_KEY` can override the scope default key.
 - If not set, the script chooses the key by scope.
 
-When `TF_STATE_BUCKET` is set, provisioning scripts call `scripts/bootstrap-terraform-s3-backend.sh` before plan/apply.
+The provisioning script calls `scripts/bootstrap-terraform-s3-backend.sh` before plan/apply.
 
 ```mermaid
 flowchart TD
-  A[Remote state variables are set] --> B{S3 bucket exists}
+  A[Script uses TF_STATE_BUCKET default: sml-oms-dev-tfstate] --> B{S3 bucket exists}
   B -->|No| C[Create bucket and apply versioning encryption public-access block]
   B -->|Yes| D[Reuse existing bucket]
   C --> E{State object exists at TF_STATE_KEY}
@@ -810,7 +797,7 @@ Most failures are caused by missing context, not by Terraform syntax. Check thes
 | Wrong Kubernetes context | Secret bootstrap and pod checks may target the wrong cluster. | `kubectl config current-context`; `kubectl get ns mongodb` | Update kubeconfig for the target EKS cluster. |
 | Scope `terraform.tfvars` not created | Terraform plan cannot resolve required environment inputs. | Check selected root for local `terraform.tfvars`. | Copy the sample in the selected root and fill real values. |
 | Placeholder values left in selected `terraform.tfvars` | Plan may fail or create unusable infrastructure. | Review required values for the selected scope. | Replace placeholders with real environment values. |
-| Remote state bucket/key not decided | Different operators may create separate states for the same environment. | `echo "$TF_STATE_BUCKET" "$TF_STATE_REGION" "$TF_STATE_KEY"` | Set stable `TF_STATE_*` values before the first shared run. |
+| Unexpected state bucket override | An env var override may point Terraform at a different bucket. | `echo "$TF_STATE_BUCKET" "$TF_STATE_REGION" "$TF_STATE_KEY"` | Unset overrides (`unset TF_STATE_BUCKET TF_STATE_REGION TF_STATE_KEY`) to restore script defaults. |
 | Missing CLI tools | Scripts fail before doing useful work. | `command -v terraform aws kubectl kustomize rg openssl` | Install missing tools and rerun from the repository root. |
 | No Kubernetes RBAC in `mongodb` namespace | Secret bootstrap fails even if AWS auth works. | `kubectl auth can-i get secrets -n mongodb`; `kubectl auth can-i create secrets -n mongodb` | Fix EKS Access Entry/RBAC for the operator identity. |
 | Running pod identity verification too early | `scripts/verify-dev-identity.sh` exits `1` when no MongoDB pods exist yet. | `kubectl get pods -n mongodb -l app.kubernetes.io/name=percona-server-mongodb` | Apply the workload manifests first, then rerun after pods are created. |
@@ -874,7 +861,7 @@ Default posture in this repository:
 
 | Symptom | Likely Cause | Confirm With | Fix |
 |---|---|---|---|
-| Runner says it is using local state | `TF_STATE_BUCKET` is not set. | `echo "$TF_STATE_BUCKET"` | Export `TF_STATE_BUCKET`, `TF_STATE_REGION`, and `TF_STATE_KEY`, then rerun. |
+| State points at an unexpected bucket | `TF_STATE_BUCKET` was overridden in the shell environment. | `echo "$TF_STATE_BUCKET"` | Unset the override (`unset TF_STATE_BUCKET`) to restore the default `sml-oms-dev-tfstate`. |
 | Backend bucket creation fails | Missing S3 permissions, invalid bucket name, or wrong region. | `aws s3api head-bucket --bucket "$TF_STATE_BUCKET"` | Use a valid globally unique bucket name and an identity allowed to create/configure it. |
 | Backend points at an unexpected state | `TF_STATE_KEY` changed between runs. | `echo "$TF_STATE_KEY"`; check `s3://$TF_STATE_BUCKET/$TF_STATE_KEY` | Restore the intended key before planning. Do not apply from an accidental new state. |
 | Terraform asks about migrating state unexpectedly | Local state exists and remote state is missing at the configured key. | Check for local `terraform.tfstate` in the selected root; `aws s3api head-object --bucket "$TF_STATE_BUCKET" --key "$TF_STATE_KEY"` | Confirm this is the first remote-state run before accepting migration. |
