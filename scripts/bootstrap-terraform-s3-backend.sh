@@ -45,6 +45,7 @@ create_bucket_if_missing() {
   fi
 
   echo "S3 bucket missing. Creating: $bucket (region: $region)"
+  # AWS S3 create-bucket is a special case: us-east-1 must not send LocationConstraint.
   if [[ "$region" == "us-east-1" ]]; then
     aws s3api create-bucket --bucket "$bucket" >/dev/null
   else

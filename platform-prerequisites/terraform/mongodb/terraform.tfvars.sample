@@ -1,0 +1,17 @@
+aws_region      = "ap-east-1"
+cluster_name    = "EKS-boomi-runtime-cluster"
+pbm_bucket_name = "my-mongodb-pbm-backups"
+
+mongodb_namespace                     = "mongodb"
+mongodb_workload_service_account_name = "psmdb-db"
+iam_role_name                         = "mongodb-pbm-role"
+
+# Keep true for EKS Pod Identity.
+use_pod_identity = true
+
+# Only needed for IRSA mode (when use_pod_identity=false).
+oidc_provider_arn = ""
+oidc_provider_url = ""
+
+# Optional, only if KMS key access is required.
+kms_key_arn = ""
