@@ -508,7 +508,7 @@ The provisioning scripts read these environment variables to decide where Terraf
 
 | Variable | Required? | Default if unset | Effect |
 |---|---|---|---|
-| `TF_STATE_BUCKET` | **Yes** for shared environments | *(none — local state used)* | If unset, Terraform uses a local file on your laptop. If set, Terraform uses S3 remote state. |
+| `TF_STATE_BUCKET` | **Yes** | *(none — falls back to local state)* | Tells the script to use S3 remote state. Without this, Terraform uses a local file on your laptop that is not shared. |
 | `TF_STATE_REGION` | No | `ap-east-1` (hardcoded in script) | The AWS region where the state bucket lives. Only set this if your bucket is in a different region. |
 | `TF_STATE_KEY` | No | Auto-selected by scope | The S3 object key. Only set this to override the default (`oms/dev/mongo.tfstate` or `oms/dev/pg.tfstate`). |
 
@@ -521,7 +521,7 @@ export TF_STATE_REGION="ap-east-1"
 
 > These are the real values for this project, not placeholders. The bucket name `sml-oms-dev-tfstate` is the shared OMS dev state bucket in `ap-east-1`.
 
-**What happens if you skip this step:** The script falls back to local state — a `terraform.tfstate` file stored inside the Terraform root on your laptop. This is fine for disposable experiments you will destroy without sharing, but dangerous for shared environments because each operator would have a separate state and could create duplicate resources.
+**What happens if you skip this step:** The script falls back to local state — a `terraform.tfstate` file stored inside the Terraform root on your laptop. This means other operators cannot see your changes and may create duplicate infrastructure. Only skip this for throwaway personal experiments that you will destroy immediately.
 
 Purpose: tells the provisioning scripts to store state in S3 so all operators share one consistent record.
 
@@ -753,7 +753,7 @@ export TF_STATE_BUCKET="sml-oms-dev-tfstate"
 export TF_STATE_REGION="ap-east-1"
 ```
 
-If `TF_STATE_BUCKET` is not exported, the script uses local state instead (no S3).
+> **You must set `TF_STATE_BUCKET` for the shared OMS dev environment.** If unset, the script falls back to local state on your laptop — this is only safe for throwaway personal experiments because other operators will not see your changes and may create duplicate infrastructure.
 
 Optional override:
 - `TF_STATE_KEY` can override the scope default key.
