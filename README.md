@@ -53,9 +53,9 @@ Use one of these four options depending on your goal.
 
 | Goal | When To Use It | Command |
 |---|---|---|
-| Full baseline | First-time environment setup or full convergence check | `bash scripts/provision.sh all` |
-| MongoDB path only | MongoDB prerequisite updates without PostgreSQL changes | `bash scripts/provision.sh mongodb` |
-| PostgreSQL path only | PostgreSQL-only updates without MongoDB changes | `bash scripts/provision.sh pg` |
+| Full baseline | First-time environment setup or full convergence check. Provisions MongoDB + PostgreSQL prerequisites, then applies MongoDB k8s components (operator, workload, policies). | `bash scripts/provision.sh all` |
+| MongoDB path only | MongoDB prerequisite and k8s component updates without touching PostgreSQL | `bash scripts/provision.sh mongodb` |
+| PostgreSQL path only | PostgreSQL prerequisite updates without touching MongoDB | `bash scripts/provision.sh pg` |
 | SigNoz (telemetry) | Install or update the application telemetry stack | `bash scripts/provision.sh signoz` |
 
 ## Script Reference

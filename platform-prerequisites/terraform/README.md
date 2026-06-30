@@ -502,29 +502,34 @@ Purpose: binds this reusable Terraform root to one real AWS/EKS environment.
 
 Expected result: no required value is empty or left as a placeholder.
 
-3. Decide where Terraform keeps its state record.
+3. Set environment variables for remote state.
 
-Plain-language rule:
-- Local state means the record file stays on your laptop.
-- Remote state means the record file is stored in S3 so multiple operators share one source of truth.
+The provisioning scripts read these environment variables to decide where Terraform stores its state record:
+
+| Variable | Required? | Default if unset | Effect |
+|---|---|---|---|
+| `TF_STATE_BUCKET` | **Yes** for shared environments | *(none — local state used)* | If unset, Terraform uses a local file on your laptop. If set, Terraform uses S3 remote state. |
+| `TF_STATE_REGION` | No | `ap-east-1` (hardcoded in script) | The AWS region where the state bucket lives. Only set this if your bucket is in a different region. |
+| `TF_STATE_KEY` | No | Auto-selected by scope | The S3 object key. Only set this to override the default (`oms/dev/mongo.tfstate` or `oms/dev/pg.tfstate`). |
+
+For the OMS dev environment, use these actual values:
 
 ```bash
 export TF_STATE_BUCKET="sml-oms-dev-tfstate"
 export TF_STATE_REGION="ap-east-1"
 ```
 
-Purpose: when these values are set, Terraform stores state in S3 instead of local laptop state.
+> These are the real values for this project, not placeholders. The bucket name `sml-oms-dev-tfstate` is the shared OMS dev state bucket in `ap-east-1`.
 
-Notes:
-- `TF_STATE_KEY` is optional.
-- If omitted, the script selects default key by scope.
-- Set `TF_STATE_KEY` only when you intentionally override the default.
+**What happens if you skip this step:** The script falls back to local state — a `terraform.tfstate` file stored inside the Terraform root on your laptop. This is fine for disposable experiments you will destroy without sharing, but dangerous for shared environments because each operator would have a separate state and could create duplicate resources.
 
-Expected result: future runs use a stable bucket and scope-appropriate key for the same environment.
+Purpose: tells the provisioning scripts to store state in S3 so all operators share one consistent record.
 
-For disposable local testing only (an environment you plan to destroy without sharing with anyone), omit these variables and Terraform will keep local state in the selected root. Use local state when experimenting on your own and you accept that the state will be lost if you delete the directory.
+Expected result: environment variables are exported in your current shell session before running Step 4.
 
 4. Run script-driven provisioning for your scope.
+
+> The script reads `TF_STATE_BUCKET` and `TF_STATE_REGION` from your current shell. Make sure Step 3's `export` commands were run in the same terminal session.
 
 ```bash
 bash scripts/provision-platform-prereq.sh all
@@ -674,7 +679,7 @@ cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-
 nano platform-prerequisites/terraform/mongodb/terraform.tfvars
 nano platform-prerequisites/terraform/postgresql/terraform.tfvars
 
-# Set remote state
+# Set remote state (these are the real OMS dev values, not placeholders)
 export TF_STATE_BUCKET="sml-oms-dev-tfstate"
 export TF_STATE_REGION="ap-east-1"
 
@@ -741,12 +746,14 @@ Plain-language definition:
 - Local state: a local file (for example `terraform.tfstate`) on one workstation.
 - Remote state: the same record stored in S3 so operators share one consistent infrastructure history.
 
-Set remote state bucket/region before running `scripts/provision-platform-prereq.sh`:
+Set remote state bucket/region before running `scripts/provision-platform-prereq.sh` (these are the real OMS dev values):
 
 ```bash
 export TF_STATE_BUCKET="sml-oms-dev-tfstate"
 export TF_STATE_REGION="ap-east-1"
 ```
+
+If `TF_STATE_BUCKET` is not exported, the script uses local state instead (no S3).
 
 Optional override:
 - `TF_STATE_KEY` can override the scope default key.

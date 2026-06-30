@@ -11,7 +11,7 @@ Scopes:
   mongodb   Provision MongoDB prerequisites only, then MongoDB k8s stack.
   mongo     Alias of mongodb.
   pg        Provision PostgreSQL prerequisites only.
-  signoz    Provision optional SigNoz stack only.
+  signoz    Provision SigNoz application telemetry stack.
 
 Examples:
   bash scripts/provision.sh all
