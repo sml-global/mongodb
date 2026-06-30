@@ -16,7 +16,7 @@ Use [platform-prerequisites/terraform/README.md](../../platform-prerequisites/te
 | Where is operator sequencing documented? | [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md). |
 | Who should use it? | Operators, maintainers, and reviewers checking configuration drift. |
 
-Scope: unified MongoDB + PostgreSQL dev workflow files in YAML, Terraform, and shell scripts.
+Scope: OMS data-layer dev configuration — MongoDB (audit trail), PostgreSQL (primary app database), and SigNoz (application telemetry) across Kubernetes YAML, Terraform, and shell scripts.
 
 Process and operator workflow references:
 - [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md):
@@ -100,7 +100,7 @@ Files:
 
 Change method: manual YAML edit in git.
 
-### Optional SigNoz Base
+### SigNoz Telemetry Base
 Files:
 - `gitops/signoz/base/namespace.yaml`
 - `gitops/signoz/base/helmrepositories.yaml`
