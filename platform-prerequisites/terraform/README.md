@@ -1,15 +1,20 @@
 # Platform Prerequisites Terraform
 
 ## Purpose
-This document is the operating guide for the Terraform stack in this repository.
+This document is the operating guide for the Terraform stack that provisions the **OMS (Order Management System) data-layer prerequisites** in the dev environment.
 
-Use it to provision the platform prerequisites needed before deploying the MongoDB workload manifests and the dev Aurora PostgreSQL database.
+The OMS application has three backend services:
+- **PostgreSQL** (Aurora) — primary application database for orders, inventory, and operational data.
+- **MongoDB** (Percona on EKS) — audit trail database for immutable compliance event records.
+- **SigNoz** — application telemetry (traces, metrics, logs) for OMS services.
+
+This Terraform stack prepares the AWS and Kubernetes infrastructure that MongoDB and PostgreSQL need before their workloads can run. SigNoz is provisioned separately via Kubernetes manifests only (no Terraform prerequisites).
 
 ## Read This First
 
 | Question | Answer |
 |---|---|
-| What does this Terraform stack create? | MongoDB platform prerequisites on EKS and one provisioned Aurora PostgreSQL dev database. |
+| What does this Terraform stack create? | AWS and Kubernetes prerequisites for the OMS audit trail (MongoDB) and primary database (PostgreSQL). |
 | Why does it exist? | To prepare shared infrastructure in a repeatable way before Kubernetes workload manifests are deployed. |
 | When do I run it? | Before the first MongoDB workload deployment, and again whenever Terraform inputs or prerequisite infrastructure need to change. |
 | Where do I run it from? | Run commands from the repository root, using [scripts/provision.sh](../../scripts/provision.sh) or [scripts/provision-platform-prereq.sh](../../scripts/provision-platform-prereq.sh). Terraform runs from the scope-selected root (`mongodb` or `postgresql`). |
@@ -32,13 +37,14 @@ Related docs:
 ## Scope
 
 This stack provisions:
-- MongoDB prerequisites on EKS, including namespace, ServiceAccount/IAM wiring, and PBM backup bucket controls
-- Aurora PostgreSQL for dev, using a provisioned cluster with a single writer instance
+- MongoDB (audit trail) prerequisites on EKS, including namespace, ServiceAccount/IAM wiring, and PBM backup bucket controls
+- Aurora PostgreSQL (primary app database) for dev, using a provisioned cluster with a single writer instance
 
 This stack does not provision:
-- MongoDB workload manifests under `k8s/`
-- Percona Operator manifests under `gitops/`
-- Kyverno policy application under `policies/`
+- MongoDB workload manifests under `k8s/` (applied after prerequisites)
+- Percona Operator manifests under `gitops/` (applied via Flux)
+- Kyverno policy application under `policies/` (applied separately)
+- SigNoz telemetry manifests under `gitops/signoz/` (no Terraform prerequisites needed)
 - CI/CD automation
 
 ## Key Terms (Plain Language)
@@ -53,7 +59,7 @@ This stack does not provision:
 | Escrow file | A local-only copy of generated secrets saved on your laptop. Named "escrow" because it holds material you may need to recover later. | If you lose an escrow file and the cluster secret is deleted, the credential or encryption key is gone. |
 | PBM | Percona Backup for MongoDB — the backup agent that runs as a sidecar inside each MongoDB pod. | PBM needs an S3 bucket and IAM role provisioned by this stack. |
 | PSMDB | Percona Server for MongoDB — the database operator that manages the MongoDB replica set. | The Kubernetes CR (`PerconaServerMongoDB`) and user secrets are built for this operator. |
-| Flux | A GitOps toolkit that reconciles Helm charts from git-tracked `HelmRelease` manifests. | The Percona operator and optional SigNoz are installed via Flux. |
+| Flux | A GitOps toolkit that reconciles Helm charts from git-tracked `HelmRelease` manifests. | The Percona operator and SigNoz are installed via Flux. |
 | cert-manager | A Kubernetes add-on that issues and renews TLS certificates automatically. | MongoDB TLS certificates are defined as cert-manager `Certificate` resources. |
 | Kyverno | A Kubernetes policy engine that enforces rules on resources at admission time. | Policies under `policies/kyverno/` guard storage class and sidecar resource settings. |
 | `rg` (ripgrep) | A fast text search tool used by validation scripts. Installed as `ripgrep`, invoked as `rg`. | `scripts/validate-dev-render.sh` uses `rg` to check rendered manifest content. |
@@ -147,7 +153,7 @@ scripts/validate-dev-render.sh
     - [Preflight And Tooling](#preflight-and-tooling)
     - [AWS SSO And Credentials](#aws-sso-and-credentials)
     - [EKS Kubeconfig](#eks-kubeconfig)
-    - [Optional SigNoz Install](#optional-signoz-install)
+    - [SigNoz Telemetry Install](#signoz-telemetry-install)
     - [Terraform Plan And Inputs](#terraform-plan-and-inputs)
     - [Remote State And Backend](#remote-state-and-backend)
     - [Kubernetes Access And Secrets](#kubernetes-access-and-secrets)
@@ -206,9 +212,9 @@ This table answers what gets created and which file or script owns it. Use it du
 | `psmdb-secrets` secret | All Percona operator user credentials (backup, clusterAdmin, clusterMonitor, userAdmin — 4 usernames and 4 passwords). | `scripts/bootstrap-dev-secrets.sh` | Secret bootstrap script |
 | Percona HelmRepository | Points Flux to the Percona chart repository. | `gitops/operators/base/helmrepositories.yaml` | GitOps/manual apply of `gitops/operators/base` |
 | Percona Operator HelmRelease | Installs the Percona Server for MongoDB Operator. | `gitops/operators/base/helmreleases.yaml` | Flux Helm controller after operator layer apply |
-| SigNoz namespace | Namespace for optional SigNoz observability resources. | `gitops/signoz/base/namespace.yaml` | GitOps/manual apply of `gitops/signoz/base` |
+| SigNoz namespace | Namespace for SigNoz application telemetry resources. | `gitops/signoz/base/namespace.yaml` | GitOps/manual apply of `gitops/signoz/base` |
 | SigNoz HelmRepository | Points Flux to the SigNoz chart repository. | `gitops/signoz/base/helmrepositories.yaml` | GitOps/manual apply of `gitops/signoz/base` |
-| SigNoz HelmRelease | Installs the optional SigNoz observability stack. | `gitops/signoz/base/helmreleases.yaml` | Flux Helm controller after SigNoz base apply |
+| SigNoz HelmRelease | Installs the SigNoz application telemetry stack. | `gitops/signoz/base/helmreleases.yaml` | Flux Helm controller after SigNoz base apply |
 | MongoDB StorageClass | Defines EBS-backed `gp3-mongodb` storage with MongoDB-specific defaults. | `k8s/base/storageclass-gp3-mongodb.yaml` | Apply `k8s/overlays/dev` |
 | MongoDB certificates and issuer | Provides cert-manager issuer/certificates for MongoDB TLS/client identity. | `k8s/base/certificates.yaml` | Apply `k8s/overlays/dev` |
 | MongoDB PerconaServerMongoDB CR | Defines the MongoDB replica set, storage, TLS, backup settings, and runtime topology. | `k8s/base/psmdb-cluster.yaml` and `k8s/overlays/dev/patch-psmdb.yaml` | Apply `k8s/overlays/dev` |
@@ -833,9 +839,9 @@ Use the symptom text first, then run the check command to confirm the cause befo
 | `kubectl` returns `You must be logged in to the server` | AWS SSO session expired after kubeconfig was written. | `aws sts get-caller-identity` | Run `aws sso login --profile <profile-name>` and retry `kubectl`. |
 | `kubectl` returns `Forbidden` after kubeconfig succeeds | AWS identity is authenticated but not authorized by EKS/RBAC. | `kubectl auth can-i get secrets -n mongodb` | Add/fix EKS Access Entry or Kubernetes RBAC for the SSO role. |
 
-### Optional SigNoz Install
+### SigNoz Telemetry Install
 
-If this environment needs in-cluster observability, apply the optional SigNoz GitOps base:
+SigNoz provides application telemetry (traces, metrics, logs) for OMS services. It is provisioned separately from the Terraform stack because it needs only Kubernetes manifests:
 
 ```bash
 bash scripts/provision.sh signoz
@@ -846,7 +852,7 @@ Expected result: Flux reconciles the `signoz` HelmRelease and SigNoz pods start 
 Default posture in this repository:
 - open-source SigNoz chart (no enterprise requirement)
 - dev all-in-one profile
-- internal-only access, then `bash scripts/open-signoz-ui.sh` for local UI access
+- internal-only access, then `bash scripts/open-signoz-ui.sh` for local dashboard access
 
 ### Terraform Plan And Inputs
 

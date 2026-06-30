@@ -1,11 +1,17 @@
-# MongoDB on EKS and PostgreSQL Prerequisites
+# OMS Data Layer — MongoDB, PostgreSQL, and Telemetry
 
 ## Purpose
-This repository gives operators a script-driven way to provision and run:
-- MongoDB workload resources on EKS
-- MongoDB platform prerequisites (IAM, namespace, service account, PBM bucket)
-- Dev Aurora PostgreSQL prerequisites
-- Optional SigNoz (open-source) observability stack
+This repository provisions the data-layer infrastructure for the **OMS (Order Management System)** dev environment on EKS.
+
+The OMS application uses three backend services:
+
+| Service | Role in OMS | Provisioned By |
+|---|---|---|
+| **PostgreSQL** (Aurora) | Primary application database — stores orders, inventory, and operational data. | `scripts/provision.sh pg` |
+| **MongoDB** (Percona) | Audit trail database — stores immutable event records for compliance and traceability. | `scripts/provision.sh mongodb` |
+| **SigNoz** | Application telemetry — collects traces, metrics, and logs from OMS services for observability. | `scripts/provision.sh signoz` |
+
+Each service can be provisioned independently or together (`scripts/provision.sh all` runs MongoDB + PostgreSQL).
 
 ## Read This First
 
@@ -23,7 +29,7 @@ This repository gives operators a script-driven way to provision and run:
 - [Onboarding Flow](#onboarding-flow)
 - [Provisioning Choices](#provisioning-choices)
 - [Script Reference](#script-reference)
-- [Optional SigNoz](#optional-signoz)
+- [SigNoz (Application Telemetry)](#signoz-application-telemetry)
 - [Documentation Structure](#documentation-structure)
 
 ## Onboarding Flow
@@ -31,14 +37,14 @@ This repository gives operators a script-driven way to provision and run:
 ```mermaid
 flowchart TD
   A[Workstation setup and AWS SSO login] --> B[Choose provisioning scope]
-  B -->|all| C[Run full baseline provisioning]
-  B -->|mongodb| D[Run MongoDB-only provisioning]
-  B -->|pg| E[Run PostgreSQL-only provisioning]
-  B -->|signoz| F[Run SigNoz-only provisioning]
+  B -->|all| C[Run full baseline: MongoDB + PostgreSQL]
+  B -->|mongodb| D[Run MongoDB audit trail provisioning]
+  B -->|pg| E[Run PostgreSQL primary DB provisioning]
+  B -->|signoz| F[Run SigNoz telemetry provisioning]
   C --> G[Run MongoDB secret bootstrap and render validation]
   D --> G
   E --> H[PostgreSQL outputs available]
-  F --> I[SigNoz pods and UI tunnel]
+  F --> I[SigNoz pods and dashboard tunnel]
 ```
 
 ## Provisioning Choices
@@ -50,7 +56,7 @@ Use one of these four options depending on your goal.
 | Full baseline | First-time environment setup or full convergence check | `bash scripts/provision.sh all` |
 | MongoDB path only | MongoDB prerequisite updates without PostgreSQL changes | `bash scripts/provision.sh mongodb` |
 | PostgreSQL path only | PostgreSQL-only updates without MongoDB changes | `bash scripts/provision.sh pg` |
-| SigNoz only | Install or re-apply observability stack only | `bash scripts/provision.sh signoz` |
+| SigNoz (telemetry) | Install or update the application telemetry stack | `bash scripts/provision.sh signoz` |
 
 ## Script Reference
 
@@ -65,12 +71,14 @@ This section explains why each script exists, not only the command name.
 | `scripts/bootstrap-dev-secrets.sh` | Creates MongoDB encryption key and all four Percona operator user credential secrets (backup, clusterAdmin, clusterMonitor, userAdmin). If `.local-dev-user-passwords.txt` exists, reads passwords from it; if the file does not exist, auto-generates all passwords and saves them there. Skips any secret that already exists in the cluster. | After infra provisioning, before MongoDB overlay apply. |
 | `scripts/validate-dev-render.sh` | Renders and checks dev overlay output locally. | Before applying MongoDB manifests. |
 
-## Optional SigNoz
+## SigNoz (Application Telemetry)
 
-Plain explanation:
-- SigNoz is optional observability.
-- In this repository, it is open-source mode.
-- Default setup is internal-only access.
+SigNoz provides distributed tracing, metrics, and log aggregation for OMS application services. It is provisioned separately from the database infrastructure because it has no Terraform prerequisites — only Kubernetes manifests.
+
+Details:
+- Open-source edition (no enterprise license required).
+- Dev all-in-one profile (single-node ClickHouse backend).
+- Internal-only access — no public ingress; use a local port-forward to view the dashboard.
 
 How to install:
 
@@ -78,7 +86,7 @@ How to install:
 bash scripts/provision.sh signoz
 ```
 
-How to open UI locally:
+How to open the dashboard locally:
 
 ```bash
 bash scripts/open-signoz-ui.sh
