@@ -166,8 +166,9 @@ File: `scripts/bootstrap-dev-secrets.sh`
   - `.local-dev-encryption-key.txt`
   - `.local-dev-user-passwords.txt`
 - Behavior:
-  - if secret exists in cluster: skip
-  - if missing: generate/use local escrow and create
+  - if secret already exists in cluster: skip (no overwrite)
+  - if local escrow file exists: read credentials from it and create secret
+  - if no escrow file: auto-generate all passwords (32-char base64 via `openssl rand -base64 24`), save to escrow, create secret
 
 Change method: manual shell constant edit in git.
 
