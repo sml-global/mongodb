@@ -165,21 +165,3 @@ if (!sent) {
 
 println 'Telemetry sent successfully.'
 println "Done. Trace ID: ${traceId}"
-
-// Cleanup test data after successful run
-println 'Cleaning up test record from MongoDB...'
-def cleanupClient = com.mongodb.client.MongoClients.create(mongoUri)
-try {
-  def cleanupDb = cleanupClient.getDatabase(dbName)
-  def cleanupCol = cleanupDb.getCollection(collectionName)
-  def deleteResult = cleanupCol.deleteOne(new org.bson.Document('trace_id', traceId))
-  if (deleteResult.deletedCount > 0) {
-    println "Cleanup: removed test record (trace_id: ${traceId})"
-  } else {
-    println "Cleanup: record not found (may have been already removed)"
-  }
-} finally {
-  cleanupClient.close()
-}
-
-println 'Test complete — no test data left in database.'

@@ -108,8 +108,9 @@ Components must be deployed in this sequence due to dependencies:
 | `scripts/create-audit-writer-secret.sh` | Create K8s Secret with MongoDB URI for Boomi library | Operator |
 | `scripts/create-audit-reader.sh` | Create read-only MongoDB user for querying audit logs | Operator/Architect |
 | `scripts/verify-platform-health.sh` | Validate all components are healthy | All infra roles |
-| `scripts/verify-platform-health.sh --smoke-test` | End-to-end write + read-back + cleanup | All infra roles |
-| `scripts/write-auditlog-and-telemetry.sh` | Test harness for Boomi library (writes, sends telemetry, cleans up) | Boomi Admin |
+| `scripts/verify-platform-health.sh --smoke-test` | End-to-end write + read-back (local, needs port-forwards) | All infra roles |
+| `scripts/run-audit-telemetry-test.sh` | Deploy test Pod in cluster: write + telemetry + verify + delete pod | All roles |
+| `scripts/write-auditlog-and-telemetry.sh` | Local Groovy test harness for Boomi library (needs port-forwards) | Boomi Admin |
 | `scripts/open-signoz-ui.sh` | Access SigNoz dashboard | All |
 
 See [Verification Commands](references/verification-commands.md) for per-step health checks.
