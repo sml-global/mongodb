@@ -13,5 +13,8 @@ spec:
         kind: HelmRepository
         name: signoz
         namespace: signoz
+  values:
+    global:
+      storageClass: gp3-mongodb
   install:
     createNamespace: true

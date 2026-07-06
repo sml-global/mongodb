@@ -112,7 +112,8 @@ Defaults:
 - HelmRelease chart: `signoz`
 - edition: open-source
 - profile: dev all-in-one
-- access mode: internal-only (no ingress/load balancer manifest in this repo)
+- dev access mode: internal-only (no ingress/load balancer manifest in this repo)
+- production recommendation: ingress controller (ALB/NGINX) with SSO/OIDC and restricted source networks
 
 Change method: manual YAML edit in git.
 
@@ -226,9 +227,26 @@ File: `scripts/verify-dev-identity.sh`
 ### SigNoz UI Helper
 File: `scripts/open-signoz-ui.sh`
 
-- default namespace arg: `signoz`
-- default service arg: `signoz-frontend`
-- default local/remote ports: `3301:3301`
+- default mode: `port-forward`
+- ingress mode available: `--mode ingress`
+- default namespace: `signoz`
+- port-forward defaults: service `signoz`, local/remote ports `3301:8080`
+- ingress defaults: ingress name `signoz`
+
+### Audit Log + Telemetry Helper
+File: `scripts/write-auditlog-and-telemetry.sh`
+
+- defaults:
+  - Mongo URI: `mongodb://127.0.0.1:27017/?directConnection=true`
+  - db/collection: `test_db.auditlogs`
+  - OTLP endpoint: `http://127.0.0.1:3301/v1/logs`
+  - service name: `oms-audit-simulator`
+- behavior:
+  - shell wrapper delegates to Groovy runtime script: `scripts/write-auditlog-and-telemetry.groovy`
+  - test harness exercises Boomi library: `scripts/groovy/boomi/BoomiAuditLogLibrary.groovy`
+  - resolves Mongo URI in this order: CLI arg, Kubernetes Secret, AWS Secrets Manager, local default
+  - inserts one sample audit-log document directly with Mongo Java driver
+  - sends one matching OTLP log record to SigNoz endpoint
 
 ## Placeholder Inventory
 - MongoDB dev path: no unresolved placeholders in tracked YAML/TF/SH files.

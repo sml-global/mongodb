@@ -67,7 +67,7 @@ This section explains why each script exists, not only the command name.
 | `scripts/provision.sh` | Main entrypoint. Chooses scope (`all`, `mongodb`, `pg`, `signoz`) and runs the right steps. Platform admins can add `--bootstrap-platform-controllers` to also install missing cluster controllers and storage driver. | Normal operator usage; platform-admin bootstrap when needed. |
 | `scripts/provision-platform-prereq.sh` | Runs Terraform for infra scopes and picks the correct Terraform root/state key per scope. | Infra-only operations. |
 | `scripts/provision-k8s-components.sh` | Applies Kubernetes components by scope (`mongodb`, `signoz`, `operators`, `policies`, `overlay`). | K8s-only operations. |
-| `scripts/open-signoz-ui.sh` | Opens local port-forward tunnel to SigNoz frontend service. | Accessing SigNoz UI from workstation. |
+| `scripts/open-signoz-ui.sh` | Access helper for SigNoz dashboard. Supports dev port-forward and production ingress URL discovery. | Opening SigNoz UI in dev and production. |
 | `scripts/bootstrap-dev-secrets.sh` | Creates MongoDB encryption key and all four Percona operator user credential secrets (backup, clusterAdmin, clusterMonitor, userAdmin). If `.local-dev-user-passwords.txt` exists, reads passwords from it; if the file does not exist, auto-generates all passwords and saves them there. Skips any secret that already exists in the cluster. | After infra provisioning, before MongoDB overlay apply. |
 | `scripts/validate-dev-render.sh` | Renders and checks dev overlay output locally. | Before applying MongoDB manifests. |
 
@@ -78,7 +78,8 @@ SigNoz provides distributed tracing, metrics, and log aggregation for OMS applic
 Details:
 - Open-source edition (no enterprise license required).
 - Dev all-in-one profile (single-node ClickHouse backend).
-- Internal-only access — no public ingress; use a local port-forward to view the dashboard.
+- Dev: internal-only access via local port-forward.
+- Production: expose dashboard through ingress (ALB/NGINX) with SSO/OIDC and network restrictions.
 
 How to install:
 
@@ -86,10 +87,61 @@ How to install:
 bash scripts/provision.sh signoz
 ```
 
-How to open the dashboard locally:
+How to open the dashboard in development:
 
 ```bash
 bash scripts/open-signoz-ui.sh
+```
+
+Equivalent explicit command (dev only):
+
+```bash
+kubectl -n signoz port-forward svc/signoz 3301:8080
+```
+
+Then open `http://127.0.0.1:3301`.
+
+How to retrieve the production ingress URL (preferred in production):
+
+```bash
+bash scripts/open-signoz-ui.sh --mode ingress --namespace signoz --ingress signoz
+```
+
+If no host is returned, create/verify ingress first (ALB or NGINX ingress controller), then protect it with SSO/OIDC before granting access.
+
+Test the Boomi Groovy library by writing a sample audit log record and sending matching OTLP telemetry:
+
+```bash
+scripts/write-auditlog-and-telemetry.sh
+```
+
+Intended usage split:
+- `scripts/groovy/boomi/BoomiAuditLogLibrary.groovy`: Boomi-facing reusable library for secret resolution and direct audit-log writes.
+- `scripts/write-auditlog-and-telemetry.groovy`: test harness that exercises the library end-to-end.
+
+Use Kubernetes Secret for MongoDB URI:
+
+```bash
+scripts/write-auditlog-and-telemetry.sh \
+  --mongo-uri-k8s-secret oms-audit-writer \
+  --mongo-uri-k8s-namespace mongodb \
+  --mongo-uri-k8s-key mongoUri
+```
+
+Use AWS Secrets Manager for MongoDB URI:
+
+```bash
+scripts/write-auditlog-and-telemetry.sh \
+  --mongo-uri-secret-id /oms/dev/mongodb/audit-writer \
+  --aws-region ap-east-1
+```
+
+If local ports differ, override script inputs with:
+
+```bash
+scripts/write-auditlog-and-telemetry.sh \
+  --mongo-uri mongodb://127.0.0.1:27018/?directConnection=true \
+  --otel-endpoint http://127.0.0.1:3301/v1/logs
 ```
 
 ## Documentation Structure
