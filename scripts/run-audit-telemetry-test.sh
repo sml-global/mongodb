@@ -12,7 +12,7 @@ NAMESPACE="mongodb"
 DB_NAME="oms_audit"
 COLLECTION="auditlogs"
 POD_NAME="audit-telemetry-test-$(date +%s)"
-MONGO_SERVICE="psmdb-rs0.mongodb.svc.cluster.local"
+MONGO_SERVICE="psmdb-rs0-0.psmdb-rs0.mongodb.svc.cluster.local,psmdb-rs0-1.psmdb-rs0.mongodb.svc.cluster.local,psmdb-rs0-2.psmdb-rs0.mongodb.svc.cluster.local"
 SIGNOZ_SERVICE="signoz.signoz.svc.cluster.local"
 SIGNOZ_PORT="8080"
 KEEP_POD="false"
@@ -70,7 +70,7 @@ NOW_NANO="$(($(date -u +%s) * 1000000000))"
 
 echo "Deploying test pod: $POD_NAME"
 echo "  Namespace: $NAMESPACE"
-echo "  MongoDB: $MONGO_SERVICE / $DB_NAME.$COLLECTION"
+echo "  MongoDB: psmdb-rs0-{0,1,2} (replica set) / $DB_NAME.$COLLECTION"
 echo "  SigNoz: $SIGNOZ_SERVICE:$SIGNOZ_PORT"
 echo "  Trace ID: $TRACE_ID"
 echo ""
@@ -101,8 +101,8 @@ spec:
 
       # Step 1: Write audit record to MongoDB
       echo "[1/3] Writing audit record to MongoDB..."
-      mongosh --quiet \
-        "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_SERVICE}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0" \
+      mongosh --quiet --tls --tlsAllowInvalidCertificates \
+        "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_SERVICE}/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
           const record = {
             trace_id: "${TRACE_ID}",
@@ -159,8 +159,8 @@ spec:
 
       # Step 3: Read back from MongoDB to verify
       echo "[3/3] Verifying record in MongoDB..."
-      FOUND=\$(mongosh --quiet \
-        "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_SERVICE}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0" \
+      FOUND=\$(mongosh --quiet --tls --tlsAllowInvalidCertificates \
+        "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_SERVICE}/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
           const doc = db.getCollection("${COLLECTION}").findOne({trace_id: "${TRACE_ID}"});
           if (doc) { print("FOUND"); } else { print("NOT_FOUND"); }
