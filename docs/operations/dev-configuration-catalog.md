@@ -238,7 +238,7 @@ File: `scripts/write-auditlog-and-telemetry.sh`
 
 - defaults:
   - Mongo URI: `mongodb://127.0.0.1:27017/?directConnection=true`
-  - db/collection: `test_db.auditlogs`
+  - db/collection: `oms_audit.auditlogs`
   - OTLP endpoint: `http://127.0.0.1:3301/v1/logs`
   - service name: `oms-audit-simulator`
 - behavior:
@@ -247,6 +247,7 @@ File: `scripts/write-auditlog-and-telemetry.sh`
   - resolves Mongo URI in this order: CLI arg, Kubernetes Secret, AWS Secrets Manager, local default
   - inserts one sample audit-log document directly with Mongo Java driver
   - sends one matching OTLP log record to SigNoz endpoint
+  - **cleans up test data** from MongoDB after successful run
 
 ## Placeholder Inventory
 - MongoDB dev path: no unresolved placeholders in tracked YAML/TF/SH files.

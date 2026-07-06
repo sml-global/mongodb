@@ -28,6 +28,7 @@ nano platform-prerequisites/terraform/postgresql/terraform.tfvars
 # Provision everything
 bash scripts/provision-platform-prereq.sh all
 scripts/bootstrap-dev-secrets.sh
+scripts/create-audit-writer-secret.sh
 scripts/validate-dev-render.sh
 
 # Verify
@@ -132,7 +133,20 @@ Expected: `psmdb-encryption-key` and `psmdb-secrets` exist in namespace `mongodb
 
 > **Important:** Copy escrow files (`.local-dev-encryption-key.txt`, `.local-dev-user-passwords.txt`) to a secure location immediately. If lost and cluster secrets are deleted, encrypted MongoDB data may be permanently inaccessible.
 
-### Step 5: Validate MongoDB Overlay (MongoDB scope only)
+### Step 5: Create Audit Writer Secret (MongoDB scope only)
+
+Skip this step if you only ran the `pg` scope.
+
+```bash
+scripts/create-audit-writer-secret.sh
+```
+
+This creates the `oms-audit-writer` Kubernetes Secret that the Boomi audit log library reads.
+If it already exists, the script skips safely.
+
+Expected: Secret `oms-audit-writer` exists in namespace `mongodb`.
+
+### Step 6: Validate MongoDB Overlay (MongoDB scope only)
 
 Skip this step if you only ran the `pg` scope.
 
@@ -142,7 +156,19 @@ scripts/validate-dev-render.sh
 
 Expected: render succeeds, structural checks pass.
 
-### Step 6: Verify Deployment
+### Step 7: Provision SigNoz (if needed)
+
+```bash
+bash scripts/provision.sh signoz
+```
+
+Expected: SigNoz pods running in namespace `signoz`.
+
+> **Note:** SigNoz uses a first-user signup model. The first person to open the dashboard becomes the admin. See [Boomi Integration Guide § SigNoz Dashboard](boomi-integration-guide.md#accessing-signoz-dashboard).
+
+> **Security:** The ClickHouse password in `gitops/signoz/base/helmreleases.yaml` is set to a placeholder (`CHANGE_ME_BEFORE_PRODUCTION`). Replace it with a real password before deploying to any shared or production environment.
+
+### Step 8: Verify Deployment
 
 ```bash
 scripts/verify-platform-health.sh

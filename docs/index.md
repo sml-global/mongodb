@@ -94,9 +94,23 @@ Components must be deployed in this sequence due to dependencies:
 1. **EKS cluster** (pre-existing)
 2. **Platform controllers** (parallel): EBS CSI Driver, Flux, Kyverno, cert-manager, Pod Identity Agent
 3. **Terraform prerequisites** (after controllers): namespaces, IAM roles, S3 buckets, Aurora PostgreSQL
-4. **Kubernetes secrets** (after Terraform): encryption key, user credentials
+4. **Kubernetes secrets** (after Terraform): encryption key, user credentials, audit-writer URI
 5. **Workload manifests** (after secrets): Percona operator → MongoDB CR, SigNoz HelmRelease
-6. **Verification** (after workloads): health checks, smoke tests
+6. **Application setup** (after workloads): audit reader user, SigNoz admin signup
+7. **Verification** (after all): health checks, smoke tests
+
+### Key Scripts (in deployment order)
+
+| Script | Purpose | Run By |
+|---|---|---|
+| `scripts/provision.sh <scope>` | Full provisioning entrypoint | Operator |
+| `scripts/bootstrap-dev-secrets.sh` | Create MongoDB encryption + credential secrets | Operator |
+| `scripts/create-audit-writer-secret.sh` | Create K8s Secret with MongoDB URI for Boomi library | Operator |
+| `scripts/create-audit-reader.sh` | Create read-only MongoDB user for querying audit logs | Operator/Architect |
+| `scripts/verify-platform-health.sh` | Validate all components are healthy | All infra roles |
+| `scripts/verify-platform-health.sh --smoke-test` | End-to-end write + read-back + cleanup | All infra roles |
+| `scripts/write-auditlog-and-telemetry.sh` | Test harness for Boomi library (writes, sends telemetry, cleans up) | Boomi Admin |
+| `scripts/open-signoz-ui.sh` | Access SigNoz dashboard | All |
 
 See [Verification Commands](references/verification-commands.md) for per-step health checks.
 
