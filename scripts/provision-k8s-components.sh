@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  provision-k8s-components.sh <scope>
+  provision-k8s-components.sh <scope> [--bootstrap-platform-controllers]
 
 Scopes:
   mongodb   Apply MongoDB operator, Kyverno policies, bootstrap secrets, and dev overlay.
@@ -19,6 +19,7 @@ Examples:
   scripts/provision-k8s-components.sh signoz
   scripts/provision-k8s-components.sh mongodb
   scripts/provision-k8s-components.sh mongo
+  scripts/provision-k8s-components.sh mongodb --bootstrap-platform-controllers
 EOF
 }
 
@@ -26,6 +27,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCOPE="${1:-}"
 MONGODB_CRD_NAME="perconaservermongodbs.psmdb.percona.com"
 WAIT_TIMEOUT_SECONDS="${MONGODB_OPERATOR_READY_TIMEOUT_SECONDS:-180}"
+BOOTSTRAP_PLATFORM_CONTROLLERS="false"
 
 MISSING_CRDS=()
 
@@ -74,7 +76,53 @@ ensure_no_missing_crds() {
   exit 1
 }
 
+require_cmd() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: required command not found: $cmd" >&2
+    exit 1
+  fi
+}
+
+bootstrap_flux_controllers() {
+  require_cmd helm
+  require_cmd kubectl
+
+  echo "Bootstrapping Flux Source + Helm controllers..."
+  helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts >/dev/null
+  helm repo update >/dev/null
+  kubectl create namespace flux-system --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  helm upgrade --install source-controller fluxcd-community/source-controller -n flux-system
+  helm upgrade --install helm-controller fluxcd-community/helm-controller -n flux-system
+}
+
+bootstrap_kyverno() {
+  require_cmd helm
+  require_cmd kubectl
+
+  echo "Bootstrapping Kyverno..."
+  helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null
+  helm repo update >/dev/null
+  kubectl create namespace kyverno --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  helm upgrade --install kyverno kyverno/kyverno -n kyverno
+}
+
 preflight_scope() {
+  if [[ "$BOOTSTRAP_PLATFORM_CONTROLLERS" == "true" ]]; then
+    case "$1" in
+      mongodb|mongo)
+        bootstrap_flux_controllers
+        bootstrap_kyverno
+        ;;
+      signoz|operators)
+        bootstrap_flux_controllers
+        ;;
+      policies)
+        bootstrap_kyverno
+        ;;
+    esac
+  fi
+
   MISSING_CRDS=()
   case "$1" in
     mongodb|mongo)
@@ -105,6 +153,25 @@ if [[ -z "$SCOPE" ]]; then
   usage
   exit 1
 fi
+
+shift || true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --bootstrap-platform-controllers)
+      BOOTSTRAP_PLATFORM_CONTROLLERS="true"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
 
 apply_operators() {
   require_crd "helmreleases.helm.toolkit.fluxcd.io" \
@@ -167,8 +234,13 @@ case "$SCOPE" in
     apply_overlay
     ;;
   all)
-    "$0" mongodb
-    "$0" signoz
+    if [[ "$BOOTSTRAP_PLATFORM_CONTROLLERS" == "true" ]]; then
+      "$0" mongodb --bootstrap-platform-controllers
+      "$0" signoz --bootstrap-platform-controllers
+    else
+      "$0" mongodb
+      "$0" signoz
+    fi
     ;;
   -h|--help)
     usage
