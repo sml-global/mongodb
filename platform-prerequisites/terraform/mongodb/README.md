@@ -32,3 +32,39 @@ bash scripts/provision-platform-prereq.sh mongodb
 ## Boundaries
 - Do not reuse this root's state key for the PostgreSQL root.
 - Do not commit `terraform.tfvars`.
+
+## Post-Apply Steps (MongoDB Scope)
+
+After Terraform apply succeeds, complete these before MongoDB workload can run:
+
+1. **Bootstrap secrets:**
+```bash
+scripts/bootstrap-dev-secrets.sh
+```
+
+2. **Validate overlay render:**
+```bash
+scripts/validate-dev-render.sh
+```
+
+3. **Apply workload manifests** (via `provision.sh` or manual):
+```bash
+bash scripts/provision-k8s-components.sh mongodb
+```
+
+4. **Verify health:**
+```bash
+scripts/verify-platform-health.sh
+```
+
+Full step-by-step: [Operator Runbook](../../../docs/guides/operator-runbook.md)
+
+## Related Documentation
+
+| Topic | Link |
+|---|---|
+| Full operator runbook | [docs/guides/operator-runbook.md](../../../docs/guides/operator-runbook.md) |
+| Architecture reference | [docs/guides/architect-reference.md](../../../docs/guides/architect-reference.md) |
+| Verification commands | [docs/references/verification-commands.md](../../../docs/references/verification-commands.md) |
+| Recovery procedures | [docs/references/recovery-procedures.md](../../../docs/references/recovery-procedures.md) |
+| Configuration catalog | [docs/operations/dev-configuration-catalog.md](../../../docs/operations/dev-configuration-catalog.md) |

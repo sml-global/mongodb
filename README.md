@@ -15,13 +15,22 @@ Each service can be provisioned independently or together (`scripts/provision.sh
 
 ## Read This First
 
-| Question | Answer |
+| I am a... | I want to... | Start here |
+|---|---|---|
+| **Infra Operator** | Provision infrastructure, troubleshoot | [Environment Setup](docs/guides/environment-setup.md) → [Operator Runbook](docs/guides/operator-runbook.md) |
+| **Infra Architect** | Understand components, architecture, maintain | [Component Catalog](docs/references/component-catalog.md) → [Architect Reference](docs/guides/architect-reference.md) |
+| **Boomi Admin** | Write audit logs, use telemetry | [Boomi Integration Guide](docs/guides/boomi-integration-guide.md) |
+| **Enterprise Architect** | Review design, security, compliance | [Enterprise Architecture](docs/guides/enterprise-architecture.md) |
+
+Full documentation hub: [docs/index.md](docs/index.md)
+
+| Quick Link | Purpose |
 |---|---|
-| Where do I start? | Start with the operator runbook: [platform-prerequisites/terraform/README.md](platform-prerequisites/terraform/README.md). |
-| What is this file? | A high-level overview. It explains what to run and when. |
-| Where is detailed troubleshooting? | [platform-prerequisites/terraform/README.md](platform-prerequisites/terraform/README.md) under Troubleshooting. |
-| Where are all defaults listed? | [docs/operations/dev-configuration-catalog.md](docs/operations/dev-configuration-catalog.md). |
-| Where are historical notes? | [docs/history/](docs/history/) (not used as current runbook). |
+| [docs/index.md](docs/index.md) | Central navigation and system overview |
+| [docs/references/verification-commands.md](docs/references/verification-commands.md) | Per-component health checks |
+| [docs/references/recovery-procedures.md](docs/references/recovery-procedures.md) | Rollback and disaster recovery |
+| [docs/operations/dev-configuration-catalog.md](docs/operations/dev-configuration-catalog.md) | All embedded defaults |
+| [docs/history/](docs/history/) | Historical snapshots (not current runbook) |
 
 ## Table Of Contents
 - [Purpose](#purpose)
@@ -146,14 +155,19 @@ scripts/write-auditlog-and-telemetry.sh \
 
 ## Documentation Structure
 
-Use these documents by purpose.
+All documentation lives under `docs/` with persona-based guides.
 
 | Document | Purpose |
 |---|---|
-| [README.md](README.md) | Overview and onboarding entrypoint (this file). |
-| [platform-prerequisites/terraform/README.md](platform-prerequisites/terraform/README.md) | Canonical operator runbook with detailed steps and troubleshooting. |
-| [platform-prerequisites/terraform/mongodb/README.md](platform-prerequisites/terraform/mongodb/README.md) | MongoDB-only Terraform root context. |
-| [platform-prerequisites/terraform/postgresql/README.md](platform-prerequisites/terraform/postgresql/README.md) | PostgreSQL-only Terraform root context. |
-| [docs/operations/dev-configuration-catalog.md](docs/operations/dev-configuration-catalog.md) | Source of truth for embedded defaults and config inventory. |
-| [docs/operations/README.md](docs/operations/README.md) | Operations docs map and ownership rules. |
-| [docs/history/](docs/history/) | Historical snapshots/specs/plans for traceability only. |
+| [docs/index.md](docs/index.md) | Central navigation hub — start here to find anything |
+| [docs/guides/environment-setup.md](docs/guides/environment-setup.md) | Workstation and environment preparation |
+| [docs/guides/operator-runbook.md](docs/guides/operator-runbook.md) | Provisioning, safety gates, troubleshooting |
+| [docs/guides/architect-reference.md](docs/guides/architect-reference.md) | Architecture, state model, day-2 maintenance |
+| [docs/guides/boomi-integration-guide.md](docs/guides/boomi-integration-guide.md) | Audit log library API, SigNoz, Boomi usage |
+| [docs/guides/enterprise-architecture.md](docs/guides/enterprise-architecture.md) | Design rationale, security, compliance, roadmap |
+| [docs/references/component-catalog.md](docs/references/component-catalog.md) | Every component: what/why/how/depends-on |
+| [docs/references/verification-commands.md](docs/references/verification-commands.md) | Per-component health checks |
+| [docs/references/recovery-procedures.md](docs/references/recovery-procedures.md) | Rollback, DR, credential rotation |
+| [docs/operations/dev-configuration-catalog.md](docs/operations/dev-configuration-catalog.md) | Embedded defaults and config inventory |
+| [platform-prerequisites/terraform/README.md](platform-prerequisites/terraform/README.md) | Terraform quick-start (links to full guides) |
+| [docs/history/](docs/history/) | Historical snapshots (not current runbook) |

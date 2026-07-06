@@ -13,25 +13,38 @@ It intentionally does not duplicate runbook steps.
 
 ## Single Source Of Truth
 
-- Current operator runbook lives in [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md).
-- Overview and onboarding summary lives in [README.md](../../README.md).
-- Configuration inventory lives in [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md).
-- Historical context lives in [docs/history/](../history/).
+- Central documentation hub: [docs/index.md](../index.md)
+- Environment setup: [docs/guides/environment-setup.md](../guides/environment-setup.md)
+- Operator runbook: [docs/guides/operator-runbook.md](../guides/operator-runbook.md)
+- Architecture reference: [docs/guides/architect-reference.md](../guides/architect-reference.md)
+- Boomi integration: [docs/guides/boomi-integration-guide.md](../guides/boomi-integration-guide.md)
+- Enterprise architecture: [docs/guides/enterprise-architecture.md](../guides/enterprise-architecture.md)
+- Component catalog: [docs/references/component-catalog.md](../references/component-catalog.md)
+- Verification commands: [docs/references/verification-commands.md](../references/verification-commands.md)
+- Recovery procedures: [docs/references/recovery-procedures.md](../references/recovery-procedures.md)
+- Configuration inventory: [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md)
+- Overview and onboarding: [README.md](../../README.md)
+- Historical context: [docs/history/](../history/)
 
 ## Which Doc To Read
 
 | If You Need | Read |
 |---|---|
-| Quick orientation and onboarding | [README.md](../../README.md) |
-| Full operator steps and troubleshooting | [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md) |
-| MongoDB-only Terraform root context | [platform-prerequisites/terraform/mongodb/README.md](../../platform-prerequisites/terraform/mongodb/README.md) |
-| PostgreSQL-only Terraform root context | [platform-prerequisites/terraform/postgresql/README.md](../../platform-prerequisites/terraform/postgresql/README.md) |
-| Exact defaults and embedded constants | [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md) |
-| Historical records (not current runbook) | [docs/history/](../history/) |
+| Find anything quickly | [docs/index.md](../index.md) |
+| Set up your workstation | [docs/guides/environment-setup.md](../guides/environment-setup.md) |
+| Provision infrastructure | [docs/guides/operator-runbook.md](../guides/operator-runbook.md) |
+| Understand architecture | [docs/guides/architect-reference.md](../guides/architect-reference.md) |
+| Write audit logs from Boomi | [docs/guides/boomi-integration-guide.md](../guides/boomi-integration-guide.md) |
+| Review design/security/compliance | [docs/guides/enterprise-architecture.md](../guides/enterprise-architecture.md) |
+| Check component health | [docs/references/verification-commands.md](../references/verification-commands.md) |
+| Recover from failures | [docs/references/recovery-procedures.md](../references/recovery-procedures.md) |
+| Find exact defaults | [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md) |
+| Historical records (not current) | [docs/history/](../history/) |
 
 ## Update Order
-When run behavior changes:
-1. Update [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md) first.
-2. Update [README.md](../../README.md) summary wording only.
-3. Update [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md) only if defaults/constants changed.
-4. Keep [docs/history/](../history/) unchanged unless you are adding a new historical snapshot.
+When behavior changes:
+1. Update the relevant guide(s) in `docs/guides/`
+2. Update [docs/references/component-catalog.md](../references/component-catalog.md) if a component was added/removed
+3. Update [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md) only if defaults/constants changed
+4. Update [docs/index.md](../index.md) if navigation paths changed
+5. Keep [docs/history/](../history/) unchanged unless adding a new historical snapshot
