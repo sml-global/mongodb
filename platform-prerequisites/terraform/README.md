@@ -361,17 +361,43 @@ The Terraform root requires Terraform `>= 1.5.0`, AWS provider `>= 5.0`, and Kub
 
 ### Configure AWS CLI With SSO
 
-Quick copy/paste flow:
+This repository uses AWS SSO session `oms-dev`.
+
+Configured accounts/profiles in this environment:
+- account `815402439714` (OMS dev): profile `default` and `AdministratorAccess-815402439714`
+- account `307506882994`: profile `AdministratorAccess-307506882994`
+
+How to locate available profiles on your workstation:
 
 ```bash
-aws configure sso --profile <profile-name>
-aws sso login --profile <profile-name>
-export AWS_PROFILE=<profile-name>
+aws configure list-profiles
+```
+
+How to inspect profile/account mapping:
+
+```bash
+cat ~/.aws/config
+```
+
+Quick copy/paste flow for OMS dev account (`815402439714`):
+
+```bash
+aws sso login --profile default
+export AWS_PROFILE=default
 export AWS_REGION=ap-east-1
 aws sts get-caller-identity
 ```
 
-Create an AWS CLI profile for the target account:
+Alternative equivalent profile for the same OMS dev account:
+
+```bash
+aws sso login --profile AdministratorAccess-815402439714
+export AWS_PROFILE=AdministratorAccess-815402439714
+export AWS_REGION=ap-east-1
+aws sts get-caller-identity
+```
+
+If SSO profile setup is missing on a new workstation, create it first:
 
 ```bash
 aws configure sso --profile <profile-name>
@@ -388,21 +414,21 @@ The prompt asks for:
 Log in:
 
 ```bash
-aws sso login --profile <profile-name>
+aws sso login --profile default
 ```
 
 Use the profile in this shell:
 
 ```bash
-export AWS_PROFILE=<profile-name>
-export AWS_REGION=<workload-region>
+export AWS_PROFILE=default
+export AWS_REGION=ap-east-1
 ```
 
 On Windows PowerShell:
 
 ```powershell
-$env:AWS_PROFILE = "<profile-name>"
-$env:AWS_REGION = "<workload-region>"
+$env:AWS_PROFILE = "default"
+$env:AWS_REGION = "ap-east-1"
 ```
 
 Confirm the login is correct:
@@ -412,7 +438,7 @@ aws sts get-caller-identity
 aws configure get region
 ```
 
-Expected result: the account ID and role match the intended environment.
+Expected result: account `815402439714`, role `AdministratorAccess`, and region `ap-east-1`.
 
 ### Configure Kubernetes Access
 
@@ -421,8 +447,8 @@ Create or update kubeconfig for the target EKS cluster:
 ```bash
 aws eks update-kubeconfig \
   --name <cluster-name> \
-  --region <workload-region> \
-  --profile <profile-name>
+  --region ap-east-1 \
+  --profile "$AWS_PROFILE"
 ```
 
 Confirm the active context and cluster authentication:
@@ -793,7 +819,7 @@ Most failures are caused by missing context, not by Terraform syntax. Check thes
 | What Was Missed | Why It Matters | How To Check | Fix |
 |---|---|---|---|
 | Wrong AWS account or region | Terraform may create resources in the wrong place or fail to find the EKS/VPC inputs. | `aws sts get-caller-identity`; `aws configure get region` | Switch AWS profile/region before running the scripts. |
-| AWS SSO not configured or not logged in | AWS CLI and Terraform cannot authenticate. | `aws sts get-caller-identity` | Run `aws configure sso --profile <profile-name>`, then `aws sso login --profile <profile-name>`. |
+| AWS SSO not configured or not logged in | AWS CLI and Terraform cannot authenticate. | `aws sts get-caller-identity` | Run `aws configure sso --profile default`, then `aws sso login --profile default`. |
 | Wrong Kubernetes context | Secret bootstrap and pod checks may target the wrong cluster. | `kubectl config current-context`; `kubectl get ns mongodb` | Update kubeconfig for the target EKS cluster. |
 | Scope `terraform.tfvars` not created | Terraform plan cannot resolve required environment inputs. | Check selected root for local `terraform.tfvars`. | Copy the sample in the selected root and fill real values. |
 | Placeholder values left in selected `terraform.tfvars` | Plan may fail or create unusable infrastructure. | Review required values for the selected scope. | Replace placeholders with real environment values. |
@@ -818,9 +844,9 @@ Use the symptom text first, then run the check command to confirm the cause befo
 
 | Symptom | Likely Cause | Confirm With | Fix |
 |---|---|---|---|
-| `The config profile (...) could not be found` | `AWS_PROFILE` points to a profile that does not exist. | `aws configure list-profiles` | Run `aws configure sso --profile <profile-name>` or export the correct profile name. |
-| Browser login never happened or expired | SSO session is missing or expired. | `aws sts get-caller-identity` | Run `aws sso login --profile <profile-name>` again. |
-| `Unable to locate credentials` or Terraform cannot find credentials | `AWS_PROFILE` is not exported in the shell running Terraform. | `echo "$AWS_PROFILE"`; `aws sts get-caller-identity` | Export `AWS_PROFILE=<profile-name>` and rerun from the same shell. |
+| `The config profile (...) could not be found` | `AWS_PROFILE` points to a profile that does not exist. | `aws configure list-profiles` | Run `aws configure sso --profile default` (or `AdministratorAccess-815402439714`) and export the correct profile name. |
+| Browser login never happened or expired | SSO session is missing or expired. | `aws sts get-caller-identity` | Run `aws sso login --profile default` again. |
+| `Unable to locate credentials` or Terraform cannot find credentials | `AWS_PROFILE` is not exported in the shell running Terraform. | `echo "$AWS_PROFILE"`; `aws sts get-caller-identity` | Export `AWS_PROFILE=default` and rerun from the same shell. |
 | Terraform or AWS CLI uses the wrong region | `AWS_REGION` or profile default region is wrong or missing. | `echo "$AWS_REGION"`; `aws configure get region` | Export `AWS_REGION=<workload-region>` or update the SSO profile region. |
 | `AccessDenied` from IAM, S3, RDS, EC2, or EKS APIs | SSO permission set/role is not powerful enough for this stack. | Check the failing AWS API in the error output. | Ask the platform/AWS account owner for a role with the required permissions. |
 
@@ -828,9 +854,9 @@ Use the symptom text first, then run the check command to confirm the cause befo
 
 | Symptom | Likely Cause | Confirm With | Fix |
 |---|---|---|---|
-| `kubectl` points to the wrong cluster | Kubeconfig was not updated after selecting the AWS profile/region. | `kubectl config current-context` | Run `aws eks update-kubeconfig --name <cluster-name> --region <workload-region> --profile <profile-name>`. |
+| `kubectl` points to the wrong cluster | Kubeconfig was not updated after selecting the AWS profile/region. | `kubectl config current-context` | Run `aws eks update-kubeconfig --name <cluster-name> --region ap-east-1 --profile "$AWS_PROFILE"`. |
 | `aws eks update-kubeconfig` fails with cluster not found | Wrong cluster name, region, or account. | `aws eks describe-cluster --name <cluster-name> --region <workload-region>` | Correct the cluster name, AWS profile, or workload region. |
-| `kubectl` returns `You must be logged in to the server` | AWS SSO session expired after kubeconfig was written. | `aws sts get-caller-identity` | Run `aws sso login --profile <profile-name>` and retry `kubectl`. |
+| `kubectl` returns `You must be logged in to the server` | AWS SSO session expired after kubeconfig was written. | `aws sts get-caller-identity` | Run `aws sso login --profile default` and retry `kubectl`. |
 | `kubectl` returns `Forbidden` after kubeconfig succeeds | AWS identity is authenticated but not authorized by EKS/RBAC. | `kubectl auth can-i get secrets -n mongodb` | Add/fix EKS Access Entry or Kubernetes RBAC for the SSO role. |
 
 ### SigNoz Telemetry Install
