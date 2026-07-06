@@ -981,7 +981,13 @@ Expected result: Flux reconciles the `signoz` HelmRelease and SigNoz pods start 
 Default posture in this repository:
 - open-source SigNoz chart (no enterprise requirement)
 - dev all-in-one profile
-- internal-only access, then `bash scripts/open-signoz-ui.sh` for local dashboard access
+- dev access uses local port-forward via `bash scripts/open-signoz-ui.sh`
+
+Production access pattern:
+- do not rely on `kubectl port-forward` as the standard operator/user access path
+- expose SigNoz through an ingress controller (AWS ALB ingress controller or NGINX ingress controller)
+- require identity-aware access (SSO/OIDC) and network restrictions (allowed CIDRs, private routing, or VPN)
+- use `bash scripts/open-signoz-ui.sh --mode ingress --namespace signoz --ingress signoz` to fetch the currently configured dashboard URL
 
 ### Terraform Plan And Inputs
 
