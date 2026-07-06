@@ -357,21 +357,15 @@ Send OTLP JSON to the `/v1/logs` endpoint:
 }
 ```
 
-### Accessing SigNoz Dashboard
+### Accessing SigNoz Dashboard (Quick)
 
-**Dev:**
-```bash
-scripts/open-signoz-ui.sh
-# Opens http://127.0.0.1:3301
-```
+**Dev:** `scripts/open-signoz-ui.sh` → opens `http://127.0.0.1:3301`
 
-**Production:**
-```bash
-scripts/open-signoz-ui.sh --mode ingress --namespace signoz --ingress signoz
-# Prints the ingress URL
-```
+**Production:** `scripts/open-signoz-ui.sh --mode ingress`
 
-In the dashboard, navigate to **Logs** to find audit events by `service.name = oms-audit-writer`.
+In the dashboard, navigate to **Logs** → filter `service.name = oms-audit-writer`.
+
+For first-time login and full navigation guide, see [Accessing SigNoz Dashboard](#accessing-signoz-dashboard) below.
 
 ---
 
@@ -616,11 +610,13 @@ Save the **Trace ID** from the output.
 ### Step 3: Verify in MongoDB
 
 ```bash
-mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/test_db?authSource=test_db&directConnection=true' \
+mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/oms_audit?authSource=oms_audit&directConnection=true' \
   --eval "db.auditlogs.find().sort({time:-1}).limit(1)"
 ```
 
 Confirm the latest record matches the trace_id from Step 2.
+
+> **Note:** The test harness automatically cleans up test data after a successful run. If you need to inspect the record, run with `--no-cleanup` (not yet implemented) or query immediately after the write step before cleanup runs.
 
 ### Step 4: Verify in SigNoz
 
@@ -629,6 +625,8 @@ Confirm the latest record matches the trace_id from Step 2.
 3. Filter: `service.name = oms-audit-simulator`
 4. Find the log with matching trace_id
 5. Confirm attributes match (action, resource_id, user_id)
+
+> **Note:** Telemetry data in SigNoz is NOT cleaned up (it's append-only and has its own retention). This is by design — telemetry is for observability, not transactional data.
 
 ### Step 5: Test Audit-Log Write Only (No Telemetry)
 
@@ -646,28 +644,4 @@ This confirms the library + MongoDB path works even if SigNoz is down.
 scripts/verify-platform-health.sh --smoke-test
 ```
 
-This runs the full write → read-back cycle automatically.
-
----
-
-## Querying Audit Logs
-
-### From MongoDB directly
-
-```javascript
-// Connect via mongosh
-db.getSiblingDB('oms_audit').auditlogs.find({
-  action: 'orders.order.confirm',
-  time: { $gte: '2026-07-01T00:00:00Z' }
-}).sort({ time: -1 }).limit(10)
-```
-
-### From SigNoz Dashboard
-
-1. Open SigNoz (`scripts/open-signoz-ui.sh`)
-2. Navigate to **Logs** tab
-3. Filter: `service.name = oms-audit-writer`
-4. Search by `trace_id` or `action` attributes
-5. Click any log entry to see full attributes
-
-Telemetry in SigNoz correlates with audit records in MongoDB via the shared `trace_id` field.
+This runs the full write → read-back cycle automatically and **cleans up test data** on success.

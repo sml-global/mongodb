@@ -100,10 +100,11 @@ All credentials in the system and how to access them:
 | AWS SSO login | AWS IAM Identity Center | All infra roles | `aws sso login --profile default` |
 | MongoDB operator users (4) | K8s Secret `psmdb-secrets` + local escrow | Operators (bootstrap only) | `scripts/bootstrap-dev-secrets.sh` auto-creates |
 | MongoDB encryption key | K8s Secret `psmdb-encryption-key` + escrow | Operators (bootstrap only) | `scripts/bootstrap-dev-secrets.sh` auto-creates |
+| MongoDB audit-writer URI | K8s Secret `oms-audit-writer` | Boomi library (automatic) | `scripts/create-audit-writer-secret.sh` (one-time) |
 | MongoDB audit reader | Created in MongoDB | Boomi Admin, Compliance | `scripts/create-audit-reader.sh` (one-time) |
 | PostgreSQL master password | `terraform.tfvars` (local) + TF state | Operators (provision only) | Set manually in tfvars |
 | SigNoz dashboard login | SigNoz internal DB | All who view telemetry | First user signs up as admin, then invites others |
-| SigNoz ClickHouse (internal) | HelmRelease values | No one (internal only) | Chart value `clickhouse.password` |
+| SigNoz ClickHouse (internal) | HelmRelease values | No one (internal only) | Chart value — **must change placeholder before production** |
 | Terraform state | S3 bucket (encrypted) | Operators with S3 access | AWS IAM permissions |
 | PBM S3 bucket | IAM role (Pod Identity) | MongoDB pods (automatic) | No manual credential needed |
 

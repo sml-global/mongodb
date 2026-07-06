@@ -54,11 +54,11 @@ Single source of truth for all deployed versions. Update this table when any com
 
 ### Upgrade Notes
 
-- **Percona Operator**: current 1.18.0 is 4 versions behind latest (1.22.0). Upgrade path: 1.18→1.19→1.20→1.21→1.22 (one minor at a time). See [Architect Reference § Upgrade Procedures](../guides/architect-reference.md#upgrade-procedures).
-- **SigNoz**: current 0.130.1, latest 0.131.0 — minor version bump, generally safe.
-- **PostgreSQL**: pinned at 18.3. AWS may release newer point releases — check before upgrading.
-- **EKS**: AWS manages control plane upgrades. Node groups may need manual update.
-- **MongoDB driver 5.1.2**: compatible with MongoDB 7.0. If upgrading MongoDB to 8.0+, verify driver compatibility.
+- **Percona Operator**: current 1.18.0 is 4 versions behind latest (1.22.0). Upgrade path: 1.18→1.19→1.20→1.21→1.22 (one minor at a time). Check [Percona Operator release notes](https://docs.percona.com/percona-operator-for-mongodb/ReleaseNotes/index.html) and the [upgrade matrix](https://docs.percona.com/percona-operator-for-mongodb/update.html) for inter-version compatibility. See [Architect Reference § Upgrade Procedures](../guides/architect-reference.md#upgrade-procedures).
+- **SigNoz**: current 0.130.1, latest 0.131.0 — minor version bump, generally safe. Check [SigNoz changelog](https://github.com/SigNoz/signoz/releases).
+- **PostgreSQL**: pinned at 18.3. AWS may release newer point releases — check via `aws rds describe-db-engine-versions`.
+- **EKS**: AWS manages control plane upgrades. Node groups may need manual update. Check [EKS version calendar](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html).
+- **MongoDB driver 5.1.2**: compatible with MongoDB 7.0. If upgrading MongoDB to 8.0+, verify driver compatibility at [MongoDB driver compatibility](https://www.mongodb.com/docs/drivers/java/sync/current/compatibility/).
 
 ---
 
