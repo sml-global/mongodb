@@ -80,13 +80,22 @@ write_encryption_escrow_key() {
   chmod 600 "$ENCRYPTION_ESCROW_FILE"
 }
 
+read_encryption_secret_key() {
+  kubectl -n "$NAMESPACE" get secret "$ENCRYPTION_SECRET_NAME" -o go-template='{{index .data "encryption-key"}}'
+}
+
+read_legacy_encryption_secret_key() {
+  kubectl -n "$NAMESPACE" get secret "$ENCRYPTION_SECRET_NAME" -o go-template='{{index .data "encryptionKey"}}'
+}
+
 create_encryption_secret() {
   local key="$1"
 
   printf '%s' "$key" \
     | kubectl create secret generic "$ENCRYPTION_SECRET_NAME" \
       --namespace "$NAMESPACE" \
-      --from-file=encryptionKey=/dev/stdin >/dev/null
+      --from-file=encryption-key=/dev/stdin \
+      --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 }
 
 generate_password() {
@@ -174,7 +183,30 @@ main() {
 
   # --- Encryption key secret ---
   if kubectl -n "$NAMESPACE" get secret "$ENCRYPTION_SECRET_NAME" >/dev/null 2>&1; then
-    echo "Secret '$ENCRYPTION_SECRET_NAME' already exists in namespace '$NAMESPACE'."
+    local current_key=""
+    local legacy_key=""
+
+    current_key="$(read_encryption_secret_key || true)"
+    if [[ -n "$current_key" ]] && validate_key "$current_key"; then
+      echo "Secret '$ENCRYPTION_SECRET_NAME' already exists in namespace '$NAMESPACE' with the expected key name."
+    else
+      legacy_key="$(read_legacy_encryption_secret_key || true)"
+      if [[ -n "$legacy_key" ]] && validate_key "$legacy_key"; then
+        echo "Secret '$ENCRYPTION_SECRET_NAME' uses the legacy key name 'encryptionKey'; reconciling it to 'encryption-key'."
+        create_encryption_secret "$legacy_key"
+      elif [[ -f "$ENCRYPTION_ESCROW_FILE" ]]; then
+        key="$(read_key_from_escrow)"
+        if ! validate_key "$key"; then
+          echo "ERROR: escrow file '$ENCRYPTION_ESCROW_FILE' is invalid. Expected base64 value decoding to exactly 32 bytes." >&2
+          exit 1
+        fi
+        echo "Secret '$ENCRYPTION_SECRET_NAME' exists but is missing a valid 'encryption-key' entry; restoring from '$ENCRYPTION_ESCROW_FILE'."
+        create_encryption_secret "$key"
+      else
+        echo "ERROR: secret '$ENCRYPTION_SECRET_NAME' exists but does not contain a valid 'encryption-key' entry, and no escrow file is available to repair it safely." >&2
+        exit 1
+      fi
+    fi
   elif [[ -f "$ENCRYPTION_ESCROW_FILE" ]]; then
     key="$(read_key_from_escrow)"
     if ! validate_key "$key"; then

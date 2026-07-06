@@ -525,9 +525,11 @@ aws eks create-addon \
   --cluster-name EKS-boomi-runtime-cluster \
   --addon-name aws-ebs-csi-driver \
   --addon-version v1.62.0-eksbuild.1 \
-  --service-account-role-arn <ebs-csi-role-arn> \
+  --pod-identity-associations serviceAccount=ebs-csi-controller-sa,roleArn=<ebs-csi-role-arn> \
   --resolve-conflicts OVERWRITE
 ```
+
+If this cluster does not have the matching IAM OIDC provider for its EKS issuer, prefer EKS Pod Identity for the EBS CSI addon. The bootstrap script now detects that case automatically, ensures the `eks-pod-identity-agent` addon exists, and recreates the EBS CSI addon with Pod Identity instead of IRSA.
 
 Re-check CRDs after installation:
 
@@ -560,6 +562,7 @@ SigNoz-only path with Flux bootstrap:
 
 What this flag does:
 - installs the AWS EBS CSI driver addon for EBS-backed PVC provisioning
+- uses EKS Pod Identity automatically for the EBS CSI addon when the cluster does not have the matching IAM OIDC provider
 - installs Flux controllers via the `flux2` Helm chart
 - installs Kyverno (for MongoDB scope)
 - installs cert-manager (for MongoDB scope)
@@ -1007,7 +1010,7 @@ Default posture in this repository:
 | `required CRD not found: helmreleases.helm.toolkit.fluxcd.io` or `helmrepositories.source.toolkit.fluxcd.io` | Flux Helm/Source controllers are not installed in the cluster. | `kubectl get crd helmreleases.helm.toolkit.fluxcd.io helmrepositories.source.toolkit.fluxcd.io` | Install Flux Source + Helm controllers, then rerun `./scripts/provision.sh mongodb`. |
 | `required CRD not found: clusterpolicies.kyverno.io` | Kyverno is not installed in the cluster. | `kubectl get crd clusterpolicies.kyverno.io` | Install Kyverno, then rerun `./scripts/provision.sh mongodb`. |
 | `required CRD not found: certificates.cert-manager.io` or `issuers.cert-manager.io` | cert-manager is not installed in the cluster. | `kubectl get crd certificates.cert-manager.io issuers.cert-manager.io` | Install cert-manager, then rerun `./scripts/provision.sh mongodb`. |
-| PVC stays `Pending` with `ebs.csi.aws.com` | The AWS EBS CSI driver is not installed in the cluster. | `kubectl get csidriver ebs.csi.aws.com`; `aws eks describe-addon --cluster-name EKS-boomi-runtime-cluster --addon-name aws-ebs-csi-driver` | Install the EBS CSI addon, then rerun `./scripts/provision.sh mongodb`. |
+| PVC stays `Pending` with `ebs.csi.aws.com` | The AWS EBS CSI driver is not installed in the cluster, or its controller cannot assume the IAM role. | `kubectl get csidriver ebs.csi.aws.com`; `aws eks describe-addon --cluster-name EKS-boomi-runtime-cluster --addon-name aws-ebs-csi-driver`; `kubectl -n kube-system logs deployment/ebs-csi-controller -c ebs-plugin` | Install the EBS CSI addon, confirm the controller auth mode is correct for this cluster, then rerun `./scripts/provision.sh mongodb`. |
 | `cannot create secrets` | Identity can read namespace resources but cannot create secrets. | `kubectl auth can-i create secrets -n mongodb` | Grant create permission for secrets in namespace `mongodb`. |
 | Escrow file is invalid | `.local-dev-encryption-key.txt` was edited or corrupted. | `wc -c .local-dev-encryption-key.txt`; rerun `scripts/bootstrap-dev-secrets.sh` | Restore the original escrow file if existing encrypted volumes depend on it. For a fresh dev environment only, remove the bad escrow and regenerate. |
 | User credentials escrow has missing keys | `.local-dev-user-passwords.txt` is incomplete. | Check for all `MONGODB_*` keys in the file. | Restore the file, or delete it and regenerate for a fresh environment. |
