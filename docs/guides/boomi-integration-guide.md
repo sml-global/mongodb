@@ -1,4 +1,4 @@
-# Boomi Integration Guide
+ Boomi Integration Guide
 
 How to use the audit log library and telemetry from Boomi processes.
 
@@ -26,8 +26,56 @@ flowchart LR
 
 | Service | What Boomi Does With It | Endpoint |
 |---|---|---|
-| **MongoDB** | Writes immutable audit log records | MongoDB URI (from secret) |
-| **SigNoz** | Sends OTLP log/trace telemetry for observability | OTLP endpoint (HTTP) |
+| **MongoDB** | Writes immutable audit log records | MongoDB URI (from K8s Secret — see below) |
+| **SigNoz** | Sends OTLP log/trace telemetry for observability | OTLP endpoint (HTTP, cluster-internal or via ingress) |
+
+### Execution Model
+
+The Groovy library runs **inside the Boomi runtime** (or locally for testing), NOT as a Kubernetes pod:
+
+```mermaid
+flowchart TD
+  subgraph boomi_runtime[Boomi Runtime / Local Workstation]
+    LIB[BoomiAuditLogLibrary.groovy]
+  end
+
+  subgraph k8s_cluster[EKS Cluster]
+    SECRET[K8s Secret: oms-audit-writer]
+    MONGO[(MongoDB RS)]
+    SIGNOZ[SigNoz OTLP endpoint]
+  end
+
+  LIB -->|kubectl read secret| SECRET
+  LIB -->|MongoDB driver direct| MONGO
+  LIB -->|HTTP POST /v1/logs| SIGNOZ
+```
+
+**Key points:**
+- The library uses `kubectl` to read the MongoDB URI from a Kubernetes Secret — this requires `kubectl` in PATH and valid kubeconfig
+- MongoDB write happens directly via the Java MongoDB driver (not through a K8s service proxy)
+- Telemetry is sent via HTTP POST to the SigNoz OTLP endpoint
+- In dev, both MongoDB and SigNoz are accessed via local port-forwards
+- In production, use cluster-internal service DNS (Boomi runtime must have network access to the cluster)
+
+### Secret Strategy: Kubernetes Secrets (Recommended)
+
+**Use Kubernetes Secrets** — they are free, already provisioned in the cluster, and the library supports them natively.
+
+**Do NOT use AWS Secrets Manager** unless you have a specific requirement — it adds cost and complexity. The AWS path exists in the library for environments where kubectl access is not available.
+
+| Secret Source | Cost | When to Use |
+|---|---|---|
+| K8s Secret (recommended) | Free | Default for all environments where kubectl is available |
+| AWS Secrets Manager | ~$0.40/secret/month + $0.05/10K API calls | Only if Boomi runtime cannot access kubectl |
+| Explicit URI (hardcoded) | Free | Local testing only — never in production |
+
+**Create the K8s Secret** (one-time, run by operator):
+
+```bash
+scripts/create-audit-writer-secret.sh
+```
+
+This creates `oms-audit-writer` in the `mongodb` namespace with a `mongoUri` key containing the full connection string.
 
 ## Audit Log Library
 
@@ -210,11 +258,17 @@ The recommended audit log document structure:
 
 ## Secret Formats
 
-### Kubernetes Secret
+### Kubernetes Secret (Recommended — Free, Already Provisioned)
 
 The library reads base64-encoded values from Kubernetes Secrets via `kubectl`.
 
-Expected Secret structure:
+**To create the secret** (one-time operator step):
+
+```bash
+scripts/create-audit-writer-secret.sh
+```
+
+This generates the secret from existing MongoDB credentials. Expected structure:
 
 ```yaml
 apiVersion: v1
@@ -227,7 +281,19 @@ data:
   mongoUri: <base64-encoded MongoDB URI>
 ```
 
-### AWS Secrets Manager
+**Library usage:**
+
+```groovy
+String uri = BoomiAuditLogLibrary.resolveMongoUri([
+  k8sSecretName: 'oms-audit-writer',
+  k8sNamespace: 'mongodb',
+  k8sSecretKey: 'mongoUri'
+])
+```
+
+### AWS Secrets Manager (Optional — NOT Provisioned by Default)
+
+> **Note:** This path is NOT provisioned by the current Terraform stack. Use it only if your Boomi runtime cannot access `kubectl`. You would need to manually create the secret in AWS Secrets Manager.
 
 The library accepts two formats:
 
