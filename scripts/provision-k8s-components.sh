@@ -88,12 +88,11 @@ bootstrap_flux_controllers() {
   require_cmd helm
   require_cmd kubectl
 
-  echo "Bootstrapping Flux Source + Helm controllers..."
+  echo "Bootstrapping Flux controllers..."
   helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts >/dev/null
   helm repo update >/dev/null
   kubectl create namespace flux-system --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  helm upgrade --install source-controller fluxcd-community/source-controller -n flux-system
-  helm upgrade --install helm-controller fluxcd-community/helm-controller -n flux-system
+  helm upgrade --install flux2 fluxcd-community/flux2 -n flux-system
 }
 
 bootstrap_kyverno() {
