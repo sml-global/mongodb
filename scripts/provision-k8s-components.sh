@@ -27,16 +27,36 @@ SCOPE="${1:-}"
 MONGODB_CRD_NAME="perconaservermongodbs.psmdb.percona.com"
 WAIT_TIMEOUT_SECONDS="${MONGODB_OPERATOR_READY_TIMEOUT_SECONDS:-180}"
 
+require_crd() {
+  local crd_name="$1"
+  local install_hint="$2"
+
+  if kubectl get crd "$crd_name" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "ERROR: required CRD not found: $crd_name" >&2
+  echo "Current kubectl context: $(kubectl config current-context 2>/dev/null || echo unknown)" >&2
+  echo "$install_hint" >&2
+  exit 1
+}
+
 if [[ -z "$SCOPE" ]]; then
   usage
   exit 1
 fi
 
 apply_operators() {
+  require_crd "helmreleases.helm.toolkit.fluxcd.io" \
+    "Install Flux source/helm controllers first (HelmRelease CRD is missing), then rerun this command."
+  require_crd "helmrepositories.source.toolkit.fluxcd.io" \
+    "Install Flux source/helm controllers first (HelmRepository CRD is missing), then rerun this command."
   kubectl apply -k "$ROOT_DIR/gitops/operators/base"
 }
 
 apply_policies() {
+  require_crd "clusterpolicies.kyverno.io" \
+    "Install Kyverno first (ClusterPolicy CRD is missing), then rerun this command."
   kubectl apply -k "$ROOT_DIR/policies/kyverno"
 }
 
