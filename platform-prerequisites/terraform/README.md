@@ -516,6 +516,30 @@ kubectl get crd \
   clusterpolicies.kyverno.io
 ```
 
+### Platform Admin Bootstrap Mode
+
+If you are a platform admin with cluster-admin permissions and `helm` installed, you can have the provisioning script bootstrap these controllers for you.
+
+MongoDB full path with controller bootstrap:
+
+```bash
+./scripts/provision.sh mongodb --bootstrap-platform-controllers
+```
+
+SigNoz-only path with Flux bootstrap:
+
+```bash
+./scripts/provision.sh signoz --bootstrap-platform-controllers
+```
+
+What this flag does:
+- installs Flux Source controller
+- installs Flux Helm controller
+- installs Kyverno (for MongoDB scope)
+- re-checks required CRDs before continuing
+
+Use this mode only when your role is allowed to install cluster-scoped controllers.
+
 ### Confirm Repository Location
 
 Run scripts from the repository root:
@@ -732,6 +756,7 @@ Use this section to jump directly to your role.
 |---|---|---|
 | Platform Admin | What permissions and risks matter? | [Access And Permissions Model](#access-and-permissions-model), [Security Posture](#security-posture), [Admin Deep Dive](#admin-deep-dive) |
 | Infra Operator | How do I run this safely? | [Read This First](#read-this-first), [Standard Operator Procedure](#standard-operator-procedure), [Runbook Commands](#runbook-commands) |
+| Platform Admin (bootstrap mode) | How do I provision app resources and bootstrap missing cluster controllers in one flow? | [Verify Cluster Add-On Prerequisites (Flux and Kyverno)](#verify-cluster-add-on-prerequisites-flux-and-kyverno), [Platform Admin Bootstrap Mode](#platform-admin-bootstrap-mode), [Runbook Commands](#runbook-commands) |
 | System Designer | How is provisioning structured? | [Architecture Summary](#architecture-summary), [Terraform Provisioning Model](#terraform-provisioning-model), [Design Decisions And Boundaries](#design-decisions-and-boundaries) |
 | Maintainer | How do I change defaults and keep behavior stable? | [Configuration Reference](#configuration-reference), [Operations And Day-2 Maintenance](#operations-and-day-2-maintenance) |
 | Incident Responder | How do I diagnose common failures quickly? | [Troubleshooting](#troubleshooting) |
@@ -852,14 +877,16 @@ Important rules:
 | Command | What It Does | When To Run | Success Looks Like |
 |---|---|---|---|
 | `bash scripts/provision.sh <all|mongodb|pg|signoz>` | Unified script entrypoint for full or selective provisioning. | Day-1 provisioning and selective reruns. | Selected scope completes successfully. |
+| `bash scripts/provision.sh <mongodb|signoz> --bootstrap-platform-controllers` | Same as above, but also bootstraps missing Flux/Kyverno controllers when the caller has cluster-admin access. | Platform-admin-managed clusters missing these controllers. | Controllers install successfully and the selected scope proceeds without CRD preflight failure. |
 | `bash scripts/provision-platform-prereq.sh <all|mongodb|pg>` | Applies full or targeted Terraform scopes for prerequisites. | Infra provisioning only. | Terraform applies selected scope successfully. |
 | `bash scripts/provision-k8s-components.sh <mongodb|signoz|operators|policies|overlay|all>` | Applies selected Kubernetes stacks/components from git-tracked manifests. | Kubernetes/GitOps provisioning only. | Selected k8s scope applies successfully. |
+| `bash scripts/provision-k8s-components.sh <mongodb|signoz|operators|policies|all> --bootstrap-platform-controllers` | Applies selected Kubernetes scopes and bootstraps required controllers first. | Platform-admin direct Kubernetes apply flow. | Missing controller CRDs are installed before resource apply. |
 | `scripts/bootstrap-terraform-s3-backend.sh` | Creates or reuses the backend bucket and configures/migrates remote state. | Usually through `scripts/provision-platform-prereq.sh`; run directly only for backend recovery. | Terraform backend is initialized against the intended S3 bucket/key. |
 | `scripts/bootstrap-dev-secrets.sh` | Creates missing MongoDB dev secrets from local escrow or generated values. | After Terraform apply and before MongoDB workload manifests. | Required secrets exist in namespace `mongodb`. |
 | `scripts/validate-dev-render.sh` | Renders `k8s/overlays/dev` and checks expected manifest structure. | Before applying MongoDB workload manifests. | Render succeeds and structural checks pass. |
 | `scripts/verify-dev-identity.sh` | Checks that running MongoDB pods use the expected ServiceAccount. | After MongoDB pods are running. | Exits 0 when all checked pods match the expected ServiceAccount. |
 
-MongoDB and SigNoz scopes depend on Flux CRDs; MongoDB scope also depends on Kyverno CRD.
+MongoDB and SigNoz scopes depend on Flux CRDs; MongoDB scope also depends on Kyverno CRD. Use `--bootstrap-platform-controllers` if you want the script to install them automatically.
 
 ## Troubleshooting
 
