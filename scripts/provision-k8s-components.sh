@@ -31,6 +31,8 @@ BOOTSTRAP_PLATFORM_CONTROLLERS="false"
 CLUSTER_NAME="${EKS_CLUSTER_NAME:-EKS-boomi-runtime-cluster}"
 EBS_CSI_ROLE_NAME="${EBS_CSI_ROLE_NAME:-AmazonEKS_EBS_CSI_DriverRole}"
 EBS_CSI_POLICY_ARN="arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+EBS_CSI_CONTROLLER_SERVICE_ACCOUNT="ebs-csi-controller-sa"
+EKS_POD_IDENTITY_AGENT_ADDON_NAME="eks-pod-identity-agent"
 
 MISSING_CRDS=()
 
@@ -93,12 +95,16 @@ ensure_aws_role_with_policy() {
   local trust_policy_json="$3"
   local trust_file
 
+  trust_file="$(mktemp)"
+  printf '%s\n' "$trust_policy_json" > "$trust_file"
+
   if ! aws iam get-role --role-name "$role_name" >/dev/null 2>&1; then
-    trust_file="$(mktemp)"
-    printf '%s\n' "$trust_policy_json" > "$trust_file"
     aws iam create-role --role-name "$role_name" --assume-role-policy-document "file://$trust_file" >/dev/null
-    rm -f "$trust_file"
+  else
+    aws iam update-assume-role-policy --role-name "$role_name" --policy-document "file://$trust_file" >/dev/null
   fi
+
+  rm -f "$trust_file"
 
   aws iam attach-role-policy --role-name "$role_name" --policy-arn "$policy_arn" >/dev/null
 }
@@ -125,6 +131,123 @@ wait_for_eks_addon_active() {
     fi
     sleep 10
   done
+}
+
+wait_for_eks_addon_deleted() {
+  local addon_name="$1"
+  local deadline=$((SECONDS + 600))
+  local addon_status
+
+  while true; do
+    if ! aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" >/dev/null 2>&1; then
+      return 0
+    fi
+
+    addon_status="$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" --query 'addon.status' --output text 2>/dev/null || echo MISSING)"
+    if [[ "$addon_status" == "DELETE_FAILED" ]]; then
+      echo "ERROR: addon '$addon_name' entered status 'DELETE_FAILED'." >&2
+      exit 1
+    fi
+
+    if (( SECONDS >= deadline )); then
+      echo "ERROR: timed out waiting for addon '$addon_name' to be deleted (last status: $addon_status)." >&2
+      exit 1
+    fi
+
+    sleep 10
+  done
+}
+
+has_cluster_oidc_provider() {
+  local oidc_issuer
+  local oidc_provider_path
+
+  oidc_issuer="$(aws eks describe-cluster --name "$CLUSTER_NAME" --query 'cluster.identity.oidc.issuer' --output text 2>/dev/null || true)"
+  if [[ -z "$oidc_issuer" || "$oidc_issuer" == "None" ]]; then
+    return 1
+  fi
+
+  oidc_provider_path="${oidc_issuer#https://}"
+  aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text | tr '\t' '\n' | grep -Fq "$oidc_provider_path"
+}
+
+get_cluster_oidc_issuer() {
+  aws eks describe-cluster --name "$CLUSTER_NAME" --query 'cluster.identity.oidc.issuer' --output text
+}
+
+get_cluster_oidc_provider_arn() {
+  local oidc_issuer
+  local oidc_provider_path
+
+  oidc_issuer="$(get_cluster_oidc_issuer)"
+  oidc_provider_path="${oidc_issuer#https://}"
+  aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[].Arn' --output text | tr '\t' '\n' | grep -F "$oidc_provider_path" | head -n 1
+}
+
+build_pod_identity_trust_policy_json() {
+  cat <<'EOF'
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"pods.eks.amazonaws.com"},"Action":["sts:AssumeRole","sts:TagSession"]}]}
+EOF
+}
+
+build_irsa_trust_policy_json() {
+  local oidc_issuer
+  local oidc_provider_arn
+  local oidc_provider_path
+
+  oidc_issuer="$(get_cluster_oidc_issuer)"
+  oidc_provider_arn="$(get_cluster_oidc_provider_arn)"
+  oidc_provider_path="${oidc_issuer#https://}"
+
+  cat <<EOF
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Federated":"$oidc_provider_arn"},"Action":"sts:AssumeRoleWithWebIdentity","Condition":{"StringEquals":{"$oidc_provider_path:sub":"system:serviceaccount:kube-system:$EBS_CSI_CONTROLLER_SERVICE_ACCOUNT","$oidc_provider_path:aud":"sts.amazonaws.com"}}}]}
+EOF
+}
+
+bootstrap_pod_identity_agent() {
+  local addon_name="$EKS_POD_IDENTITY_AGENT_ADDON_NAME"
+  local addon_status="MISSING"
+  local addon_version
+  local current_version=""
+
+  require_cmd aws
+
+  echo "Ensuring EKS Pod Identity agent addon is installed..."
+  addon_version="$(aws eks describe-addon-versions --addon-name "$addon_name" --kubernetes-version "$(aws eks describe-cluster --name "$CLUSTER_NAME" --query 'cluster.version' --output text)" --query 'addons[0].addonVersions[0].addonVersion' --output text)"
+
+  if aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" >/dev/null 2>&1; then
+    addon_status="$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" --query 'addon.status' --output text)"
+    case "$addon_status" in
+      CREATING|UPDATING)
+        echo "Addon '$addon_name' is currently $addon_status; waiting for it to become ACTIVE..."
+        wait_for_eks_addon_active "$addon_name"
+        ;;
+      DELETING)
+        echo "ERROR: addon '$addon_name' is currently DELETING; wait for deletion to finish before rerunning bootstrap." >&2
+        exit 1
+        ;;
+    esac
+
+    current_version="$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" --query 'addon.addonVersion' --output text)"
+    if [[ "$current_version" == "$addon_version" ]]; then
+      echo "EKS Pod Identity agent addon is already configured with version $addon_version."
+      return 0
+    fi
+
+    aws eks update-addon \
+      --cluster-name "$CLUSTER_NAME" \
+      --addon-name "$addon_name" \
+      --addon-version "$addon_version" \
+      --resolve-conflicts OVERWRITE >/dev/null
+  else
+    aws eks create-addon \
+      --cluster-name "$CLUSTER_NAME" \
+      --addon-name "$addon_name" \
+      --addon-version "$addon_version" \
+      --resolve-conflicts OVERWRITE >/dev/null
+  fi
+
+  wait_for_eks_addon_active "$addon_name"
 }
 
 bootstrap_flux_controllers() {
@@ -162,32 +285,102 @@ bootstrap_cert_manager() {
 
 bootstrap_ebs_csi_driver() {
   local addon_name="aws-ebs-csi-driver"
+  local auth_mode="irsa"
   local addon_version
+  local addon_status="MISSING"
+  local current_role_arn=""
+  local current_version=""
+  local pod_identity_associations_arg=""
   local role_arn
-  local trust_policy_json='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"pods.eks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+  local trust_policy_json
 
   require_cmd aws
   require_cmd kubectl
 
   echo "Bootstrapping AWS EBS CSI driver addon..."
   addon_version="$(aws eks describe-addon-versions --addon-name "$addon_name" --kubernetes-version "$(aws eks describe-cluster --name "$CLUSTER_NAME" --query 'cluster.version' --output text)" --query 'addons[0].addonVersions[0].addonVersion' --output text)"
+
+  if has_cluster_oidc_provider; then
+    auth_mode="irsa"
+    trust_policy_json="$(build_irsa_trust_policy_json)"
+  else
+    auth_mode="pod-identity"
+    trust_policy_json="$(build_pod_identity_trust_policy_json)"
+    bootstrap_pod_identity_agent
+  fi
+
   ensure_aws_role_with_policy "$EBS_CSI_ROLE_NAME" "$EBS_CSI_POLICY_ARN" "$trust_policy_json"
   role_arn="$(aws iam get-role --role-name "$EBS_CSI_ROLE_NAME" --query 'Role.Arn' --output text)"
 
+  if [[ "$auth_mode" == "pod-identity" ]]; then
+    pod_identity_associations_arg="serviceAccount=$EBS_CSI_CONTROLLER_SERVICE_ACCOUNT,roleArn=$role_arn"
+  fi
+
   if aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" >/dev/null 2>&1; then
-    aws eks update-addon \
-      --cluster-name "$CLUSTER_NAME" \
-      --addon-name "$addon_name" \
-      --addon-version "$addon_version" \
-      --service-account-role-arn "$role_arn" \
-      --resolve-conflicts OVERWRITE >/dev/null
+    addon_status="$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" --query 'addon.status' --output text)"
+    current_role_arn="$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" --query 'addon.serviceAccountRoleArn' --output text 2>/dev/null || true)"
+
+    if [[ "$auth_mode" == "pod-identity" && -n "$current_role_arn" && "$current_role_arn" != "None" ]]; then
+      echo "Addon '$addon_name' is configured for IRSA, but this cluster lacks the matching IAM OIDC provider; recreating it with EKS Pod Identity..."
+      aws eks delete-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" >/dev/null
+      wait_for_eks_addon_deleted "$addon_name"
+    else
+      case "$addon_status" in
+        CREATING|UPDATING)
+          echo "Addon '$addon_name' is currently $addon_status; waiting for it to become ACTIVE before reconciling..."
+          wait_for_eks_addon_active "$addon_name"
+          ;;
+        DELETING)
+          echo "ERROR: addon '$addon_name' is currently DELETING; wait for deletion to finish before rerunning bootstrap." >&2
+          exit 1
+          ;;
+      esac
+
+      current_version="$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" --query 'addon.addonVersion' --output text)"
+      current_role_arn="$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" --query 'addon.serviceAccountRoleArn' --output text 2>/dev/null || true)"
+
+      if [[ "$auth_mode" == "irsa" && "$current_version" == "$addon_version" && "$current_role_arn" == "$role_arn" ]]; then
+        echo "AWS EBS CSI driver addon is already configured with version $addon_version and IRSA role $role_arn."
+        return 0
+      fi
+
+      if [[ "$auth_mode" == "pod-identity" && "$current_version" == "$addon_version" && ( -z "$current_role_arn" || "$current_role_arn" == "None" ) ]]; then
+        echo "AWS EBS CSI driver addon is already configured with version $addon_version and EKS Pod Identity."
+        return 0
+      fi
+
+      if [[ "$auth_mode" == "pod-identity" ]]; then
+        aws eks update-addon \
+          --cluster-name "$CLUSTER_NAME" \
+          --addon-name "$addon_name" \
+          --addon-version "$addon_version" \
+          --pod-identity-associations "$pod_identity_associations_arg" \
+          --resolve-conflicts OVERWRITE >/dev/null
+      else
+        aws eks update-addon \
+          --cluster-name "$CLUSTER_NAME" \
+          --addon-name "$addon_name" \
+          --addon-version "$addon_version" \
+          --service-account-role-arn "$role_arn" \
+          --resolve-conflicts OVERWRITE >/dev/null
+      fi
+    fi
   else
-    aws eks create-addon \
-      --cluster-name "$CLUSTER_NAME" \
-      --addon-name "$addon_name" \
-      --addon-version "$addon_version" \
-      --service-account-role-arn "$role_arn" \
-      --resolve-conflicts OVERWRITE >/dev/null
+    if [[ "$auth_mode" == "pod-identity" ]]; then
+      aws eks create-addon \
+        --cluster-name "$CLUSTER_NAME" \
+        --addon-name "$addon_name" \
+        --addon-version "$addon_version" \
+        --pod-identity-associations "$pod_identity_associations_arg" \
+        --resolve-conflicts OVERWRITE >/dev/null
+    else
+      aws eks create-addon \
+        --cluster-name "$CLUSTER_NAME" \
+        --addon-name "$addon_name" \
+        --addon-version "$addon_version" \
+        --service-account-role-arn "$role_arn" \
+        --resolve-conflicts OVERWRITE >/dev/null
+    fi
   fi
 
   wait_for_eks_addon_active "$addon_name"
