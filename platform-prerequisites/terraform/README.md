@@ -490,6 +490,32 @@ Expected result: all three CRDs exist.
 
 If any are missing, ask the platform team to install/enable the corresponding controllers in this cluster first, then rerun provisioning.
 
+If you have cluster-admin permissions and need to bootstrap controllers directly, install with Helm:
+
+```bash
+# Flux controllers that provide HelmRelease + HelmRepository CRDs
+helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts
+helm repo update
+kubectl create namespace flux-system --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install source-controller fluxcd-community/source-controller -n flux-system
+helm upgrade --install helm-controller fluxcd-community/helm-controller -n flux-system
+
+# Kyverno controller that provides ClusterPolicy CRD
+helm repo add kyverno https://kyverno.github.io/kyverno/
+helm repo update
+kubectl create namespace kyverno --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install kyverno kyverno/kyverno -n kyverno
+```
+
+Re-check CRDs after installation:
+
+```bash
+kubectl get crd \
+  helmreleases.helm.toolkit.fluxcd.io \
+  helmrepositories.source.toolkit.fluxcd.io \
+  clusterpolicies.kyverno.io
+```
+
 ### Confirm Repository Location
 
 Run scripts from the repository root:
