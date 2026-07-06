@@ -93,29 +93,51 @@ generate_password() {
   openssl rand -base64 24 | tr -d '\r\n'
 }
 
-write_users_escrow() {
-  local -n pairs=$1
+escrow_value_for_key() {
+  local key="$1"
+  local file="$2"
+
+  awk -F= -v wanted="$key" '$1 == wanted { print substr($0, index($0, "=") + 1); exit }' "$file"
+}
+
+write_generated_users_escrow() {
+  local backup_password="$1"
+  local cluster_admin_password="$2"
+  local cluster_monitor_password="$3"
+  local user_admin_password="$4"
+
   umask 177
-  : > "$USERS_ESCROW_FILE"
-  for key in "${PSMDB_USER_KEYS[@]}"; do
-    printf '%s=%s\n' "$key" "${pairs[$key]}" >> "$USERS_ESCROW_FILE"
-  done
+  cat > "$USERS_ESCROW_FILE" <<EOF
+MONGODB_BACKUP_USER=backup
+MONGODB_BACKUP_PASSWORD=$backup_password
+MONGODB_CLUSTER_ADMIN_USER=clusterAdmin
+MONGODB_CLUSTER_ADMIN_PASSWORD=$cluster_admin_password
+MONGODB_CLUSTER_MONITOR_USER=clusterMonitor
+MONGODB_CLUSTER_MONITOR_PASSWORD=$cluster_monitor_password
+MONGODB_USER_ADMIN_USER=userAdmin
+MONGODB_USER_ADMIN_PASSWORD=$user_admin_password
+EOF
   chmod 600 "$USERS_ESCROW_FILE"
 }
 
-read_users_escrow() {
-  local -n out=$1
-  while IFS='=' read -r k v; do
-    [[ -z "$k" || "$k" == \#* ]] && continue
-    out["$k"]="$v"
-  done < "$USERS_ESCROW_FILE"
+validate_users_escrow() {
+  local missing=0
+
+  for key in "${PSMDB_USER_KEYS[@]}"; do
+    if [[ -z "$(escrow_value_for_key "$key" "$USERS_ESCROW_FILE")" ]]; then
+      echo "ERROR: escrow file '$USERS_ESCROW_FILE' is missing key: $key" >&2
+      missing=1
+    fi
+  done
+
+  return "$missing"
 }
 
-create_users_secret() {
-  local -n creds=$1
+create_users_secret_from_escrow() {
   local -a args=()
+
   for key in "${PSMDB_USER_KEYS[@]}"; do
-    args+=("--from-literal=${key}=${creds[$key]}")
+    args+=("--from-literal=${key}=$(escrow_value_for_key "$key" "$USERS_ESCROW_FILE")")
   done
 
   kubectl create secret generic "$USERS_SECRET_NAME" \
@@ -178,34 +200,30 @@ main() {
   if kubectl -n "$NAMESPACE" get secret "$USERS_SECRET_NAME" >/dev/null 2>&1; then
     echo "Secret '$USERS_SECRET_NAME' already exists in namespace '$NAMESPACE'."
   elif [[ -f "$USERS_ESCROW_FILE" ]]; then
-    declare -A user_creds
-    read_users_escrow user_creds
-    local missing=0
-    for k in "${PSMDB_USER_KEYS[@]}"; do
-      if [[ -z "${user_creds[$k]:-}" ]]; then
-        echo "ERROR: escrow file '$USERS_ESCROW_FILE' is missing key: $k" >&2
-        missing=1
-      fi
-    done
-    if [[ "$missing" -ne 0 ]]; then
+    if ! validate_users_escrow; then
       exit 1
     fi
     echo "Using existing local user credentials escrow from '$USERS_ESCROW_FILE'."
-    create_users_secret user_creds
+    create_users_secret_from_escrow
     echo "Secret '$USERS_SECRET_NAME' created in namespace '$NAMESPACE'."
   else
-    declare -A user_creds
-    user_creds[MONGODB_BACKUP_USER]="backup"
-    user_creds[MONGODB_BACKUP_PASSWORD]="$(generate_password)"
-    user_creds[MONGODB_CLUSTER_ADMIN_USER]="clusterAdmin"
-    user_creds[MONGODB_CLUSTER_ADMIN_PASSWORD]="$(generate_password)"
-    user_creds[MONGODB_CLUSTER_MONITOR_USER]="clusterMonitor"
-    user_creds[MONGODB_CLUSTER_MONITOR_PASSWORD]="$(generate_password)"
-    user_creds[MONGODB_USER_ADMIN_USER]="userAdmin"
-    user_creds[MONGODB_USER_ADMIN_PASSWORD]="$(generate_password)"
-    write_users_escrow user_creds
+    local backup_password
+    local cluster_admin_password
+    local cluster_monitor_password
+    local user_admin_password
+
+    backup_password="$(generate_password)"
+    cluster_admin_password="$(generate_password)"
+    cluster_monitor_password="$(generate_password)"
+    user_admin_password="$(generate_password)"
+
+    write_generated_users_escrow \
+      "$backup_password" \
+      "$cluster_admin_password" \
+      "$cluster_monitor_password" \
+      "$user_admin_password"
     echo "Generated all user credentials and stored escrow at '$USERS_ESCROW_FILE' (mode 600)."
-    create_users_secret user_creds
+    create_users_secret_from_escrow
     echo "Secret '$USERS_SECRET_NAME' created in namespace '$NAMESPACE'."
   fi
 

@@ -106,12 +106,24 @@ bootstrap_kyverno() {
   helm upgrade --install kyverno kyverno/kyverno -n kyverno
 }
 
+bootstrap_cert_manager() {
+  require_cmd helm
+  require_cmd kubectl
+
+  echo "Bootstrapping cert-manager..."
+  helm repo add jetstack https://charts.jetstack.io >/dev/null
+  helm repo update >/dev/null
+  kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  helm upgrade --install cert-manager jetstack/cert-manager -n cert-manager --set crds.enabled=true
+}
+
 preflight_scope() {
   if [[ "$BOOTSTRAP_PLATFORM_CONTROLLERS" == "true" ]]; then
     case "$1" in
       mongodb|mongo)
         bootstrap_flux_controllers
         bootstrap_kyverno
+        bootstrap_cert_manager
         ;;
       signoz|operators)
         bootstrap_flux_controllers
@@ -131,6 +143,10 @@ preflight_scope() {
         "Install Flux source/helm controllers first (HelmRepository CRD is missing), then rerun this command."
       record_missing_crd "clusterpolicies.kyverno.io" \
         "Install Kyverno first (ClusterPolicy CRD is missing), then rerun this command."
+      record_missing_crd "certificates.cert-manager.io" \
+        "Install cert-manager first (Certificate CRD is missing), then rerun this command."
+      record_missing_crd "issuers.cert-manager.io" \
+        "Install cert-manager first (Issuer CRD is missing), then rerun this command."
       ensure_no_missing_crds "$1"
       ;;
     signoz|operators)

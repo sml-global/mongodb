@@ -80,4 +80,3 @@ spec:
       compressionType: gzip
       compressionLevel: 6
       oplogSpanMin: 10
-      storageName: s3-main
