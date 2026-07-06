@@ -468,6 +468,28 @@ kubectl auth can-i get secrets -n mongodb
 kubectl auth can-i create secrets -n mongodb
 ```
 
+### Verify Cluster Add-On Prerequisites (Flux and Kyverno)
+
+`scripts/provision.sh mongodb` includes Kubernetes apply steps that require CRDs from Flux and Kyverno.
+
+Required CRDs:
+- `helmreleases.helm.toolkit.fluxcd.io` (Flux Helm controller)
+- `helmrepositories.source.toolkit.fluxcd.io` (Flux Source controller)
+- `clusterpolicies.kyverno.io` (Kyverno)
+
+Check all required CRDs before running MongoDB scope:
+
+```bash
+kubectl get crd \
+  helmreleases.helm.toolkit.fluxcd.io \
+  helmrepositories.source.toolkit.fluxcd.io \
+  clusterpolicies.kyverno.io
+```
+
+Expected result: all three CRDs exist.
+
+If any are missing, ask the platform team to install/enable the corresponding controllers in this cluster first, then rerun provisioning.
+
 ### Confirm Repository Location
 
 Run scripts from the repository root:
@@ -751,6 +773,7 @@ Do not apply infrastructure until these gates are satisfied.
 | Configuration | `terraform.tfvars` exists, is local only, and required values are real. | Required values are empty or placeholders. |
 | State | Script defaults to `sml-oms-dev-tfstate` in `ap-east-1`. Only override `TF_STATE_BUCKET`/`TF_STATE_REGION` if intentionally targeting a different bucket. | State location changed accidentally via env var override. |
 | Plan/Apply | `bash scripts/provision-platform-prereq.sh <scope>` succeeds for the intended scope. | Init, backend setup, validate, plan, or apply fails. |
+| Kubernetes controllers | Flux (Helm + Source CRDs) and Kyverno (ClusterPolicy CRD) exist in the target cluster. | CRD preflight fails before k8s apply. |
 | MongoDB readiness | Secret bootstrap and render validation succeed. | Secret creation, RBAC, or render validation fails. |
 
 ## Remote State Behavior
@@ -810,6 +833,8 @@ Important rules:
 | `scripts/validate-dev-render.sh` | Renders `k8s/overlays/dev` and checks expected manifest structure. | Before applying MongoDB workload manifests. | Render succeeds and structural checks pass. |
 | `scripts/verify-dev-identity.sh` | Checks that running MongoDB pods use the expected ServiceAccount. | After MongoDB pods are running. | Exits 0 when all checked pods match the expected ServiceAccount. |
 
+MongoDB and SigNoz scopes depend on Flux CRDs; MongoDB scope also depends on Kyverno CRD.
+
 ## Troubleshooting
 
 ### Common First-Run Issues
@@ -825,6 +850,7 @@ Most failures are caused by missing context, not by Terraform syntax. Check thes
 | Placeholder values left in selected `terraform.tfvars` | Plan may fail or create unusable infrastructure. | Review required values for the selected scope. | Replace placeholders with real environment values. |
 | Unexpected state bucket override | An env var override may point Terraform at a different bucket. | `echo "$TF_STATE_BUCKET" "$TF_STATE_REGION" "$TF_STATE_KEY"` | Unset overrides (`unset TF_STATE_BUCKET TF_STATE_REGION TF_STATE_KEY`) to restore script defaults. |
 | Missing CLI tools | Scripts fail before doing useful work. | `command -v terraform aws kubectl kustomize rg openssl` | Install missing tools and rerun from the repository root. |
+| Missing Flux or Kyverno CRDs | `kubectl apply -k` for operators/policies fails with `no matches for kind ...` errors. | `kubectl get crd helmreleases.helm.toolkit.fluxcd.io helmrepositories.source.toolkit.fluxcd.io clusterpolicies.kyverno.io` | Install/enable Flux and Kyverno in the cluster, then rerun `./scripts/provision.sh mongodb`. |
 | No Kubernetes RBAC in `mongodb` namespace | Secret bootstrap fails even if AWS auth works. | `kubectl auth can-i get secrets -n mongodb`; `kubectl auth can-i create secrets -n mongodb` | Fix EKS Access Entry/RBAC for the operator identity. |
 | Running pod identity verification too early | `scripts/verify-dev-identity.sh` exits `1` when no MongoDB pods exist yet. | `kubectl get pods -n mongodb -l app.kubernetes.io/name=percona-server-mongodb` | Apply the workload manifests first, then rerun after pods are created. |
 
@@ -898,6 +924,8 @@ Default posture in this repository:
 |---|---|---|---|
 | `Unauthorized` or `Forbidden` from Kubernetes | AWS identity is authenticated but not authorized in EKS/RBAC. | `kubectl auth can-i get secrets -n mongodb` | Add/fix EKS Access Entry or RBAC mapping for the operator identity. |
 | `namespace-scoped preflight failed for 'mongodb'` | Terraform prerequisites were not applied, wrong cluster is selected, or namespace access is missing. | `kubectl config current-context`; `kubectl get ns mongodb` | Select the correct cluster, apply Terraform prerequisites, or fix namespace access. |
+| `required CRD not found: helmreleases.helm.toolkit.fluxcd.io` or `helmrepositories.source.toolkit.fluxcd.io` | Flux Helm/Source controllers are not installed in the cluster. | `kubectl get crd helmreleases.helm.toolkit.fluxcd.io helmrepositories.source.toolkit.fluxcd.io` | Install Flux Source + Helm controllers, then rerun `./scripts/provision.sh mongodb`. |
+| `required CRD not found: clusterpolicies.kyverno.io` | Kyverno is not installed in the cluster. | `kubectl get crd clusterpolicies.kyverno.io` | Install Kyverno, then rerun `./scripts/provision.sh mongodb`. |
 | `cannot create secrets` | Identity can read namespace resources but cannot create secrets. | `kubectl auth can-i create secrets -n mongodb` | Grant create permission for secrets in namespace `mongodb`. |
 | Escrow file is invalid | `.local-dev-encryption-key.txt` was edited or corrupted. | `wc -c .local-dev-encryption-key.txt`; rerun `scripts/bootstrap-dev-secrets.sh` | Restore the original escrow file if existing encrypted volumes depend on it. For a fresh dev environment only, remove the bad escrow and regenerate. |
 | User credentials escrow has missing keys | `.local-dev-user-passwords.txt` is incomplete. | Check for all `MONGODB_*` keys in the file. | Restore the file, or delete it and regenerate for a fresh environment. |

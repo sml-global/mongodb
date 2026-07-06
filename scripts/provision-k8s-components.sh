@@ -27,6 +27,19 @@ SCOPE="${1:-}"
 MONGODB_CRD_NAME="perconaservermongodbs.psmdb.percona.com"
 WAIT_TIMEOUT_SECONDS="${MONGODB_OPERATOR_READY_TIMEOUT_SECONDS:-180}"
 
+MISSING_CRDS=()
+
+record_missing_crd() {
+  local crd_name="$1"
+  local install_hint="$2"
+
+  if kubectl get crd "$crd_name" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  MISSING_CRDS+=("$crd_name|$install_hint")
+}
+
 require_crd() {
   local crd_name="$1"
   local install_hint="$2"
@@ -39,6 +52,53 @@ require_crd() {
   echo "Current kubectl context: $(kubectl config current-context 2>/dev/null || echo unknown)" >&2
   echo "$install_hint" >&2
   exit 1
+}
+
+ensure_no_missing_crds() {
+  local scope_name="$1"
+  local current_context
+
+  if [[ ${#MISSING_CRDS[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  current_context="$(kubectl config current-context 2>/dev/null || echo unknown)"
+  echo "ERROR: missing required CRDs for scope '$scope_name'." >&2
+  echo "Current kubectl context: $current_context" >&2
+  for entry in "${MISSING_CRDS[@]}"; do
+    local crd_name="${entry%%|*}"
+    local install_hint="${entry#*|}"
+    echo "- $crd_name" >&2
+    echo "  $install_hint" >&2
+  done
+  exit 1
+}
+
+preflight_scope() {
+  MISSING_CRDS=()
+  case "$1" in
+    mongodb|mongo)
+      record_missing_crd "helmreleases.helm.toolkit.fluxcd.io" \
+        "Install Flux source/helm controllers first (HelmRelease CRD is missing), then rerun this command."
+      record_missing_crd "helmrepositories.source.toolkit.fluxcd.io" \
+        "Install Flux source/helm controllers first (HelmRepository CRD is missing), then rerun this command."
+      record_missing_crd "clusterpolicies.kyverno.io" \
+        "Install Kyverno first (ClusterPolicy CRD is missing), then rerun this command."
+      ensure_no_missing_crds "$1"
+      ;;
+    signoz|operators)
+      record_missing_crd "helmreleases.helm.toolkit.fluxcd.io" \
+        "Install Flux source/helm controllers first (HelmRelease CRD is missing), then rerun this command."
+      record_missing_crd "helmrepositories.source.toolkit.fluxcd.io" \
+        "Install Flux source/helm controllers first (HelmRepository CRD is missing), then rerun this command."
+      ensure_no_missing_crds "$1"
+      ;;
+    policies)
+      record_missing_crd "clusterpolicies.kyverno.io" \
+        "Install Kyverno first (ClusterPolicy CRD is missing), then rerun this command."
+      ensure_no_missing_crds "$1"
+      ;;
+  esac
 }
 
 if [[ -z "$SCOPE" ]]; then
@@ -84,6 +144,7 @@ wait_for_mongodb_crd() {
 
 case "$SCOPE" in
   mongodb|mongo)
+    preflight_scope "$SCOPE"
     apply_operators
     "$ROOT_DIR/scripts/bootstrap-dev-secrets.sh"
     apply_policies
@@ -91,12 +152,15 @@ case "$SCOPE" in
     apply_overlay
     ;;
   signoz)
+    preflight_scope "$SCOPE"
     apply_signoz
     ;;
   operators)
+    preflight_scope "$SCOPE"
     apply_operators
     ;;
   policies)
+    preflight_scope "$SCOPE"
     apply_policies
     ;;
   overlay)
