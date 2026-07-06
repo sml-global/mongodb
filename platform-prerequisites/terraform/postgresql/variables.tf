@@ -39,9 +39,9 @@ variable "db_identifier" {
 }
 
 variable "engine_version" {
-  description = "Aurora PostgreSQL engine version. Set null to let AWS select a default for the region."
+  description = "Aurora PostgreSQL engine version. Must be available in the target region (check: aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1)."
   type        = string
-  default     = null
+  default     = "18.3"
 }
 
 variable "instance_class" {

@@ -374,6 +374,216 @@ scripts/write-auditlog-and-telemetry.sh \
 
 ---
 
+## Accessing SigNoz Dashboard
+
+### First-Time Login (Admin Account Creation)
+
+SigNoz open-source uses a **self-service signup** flow. The first user to access the dashboard becomes the admin.
+
+1. Open the dashboard:
+   ```bash
+   # Dev (port-forward)
+   scripts/open-signoz-ui.sh
+   # Then open http://127.0.0.1:3301
+   
+   # Production (ingress)
+   scripts/open-signoz-ui.sh --mode ingress
+   ```
+
+2. On first visit, you see a **Sign Up** form. Fill in:
+   - Name
+   - Email (becomes your login)
+   - Password (your choice, min 8 chars)
+   - Organization name
+
+3. Click **Get Started** — you are now the admin.
+
+4. To invite additional users: **Settings** → **Organization** → **Invite Members**
+
+### Creating Additional Users
+
+As admin:
+1. Go to **Settings** → **Organization** → **Members**
+2. Click **Invite Members**
+3. Enter email, select role (**Admin**, **Editor**, or **Viewer**)
+4. User receives signup link (or navigates to the dashboard URL)
+
+**Role recommendations:**
+- Boomi Admin → **Editor** (can create dashboards, alerts)
+- Enterprise Architect → **Viewer** (read-only access to all dashboards)
+- Compliance reviewer → **Viewer**
+
+### Navigating the Dashboard
+
+After login:
+
+| Tab | What You See | Use Case |
+|---|---|---|
+| **Logs** | All OTLP log records received | Filter by `service.name`, `trace_id`, `action` |
+| **Traces** | Distributed traces across services | End-to-end request flow visualization |
+| **Dashboards** | Custom charts and panels | Create operational views |
+| **Alerts** | Alert rules and firing status | Set up notifications for anomalies |
+| **Services** | Auto-discovered service list | See which services are sending telemetry |
+
+### Finding Audit Events in SigNoz
+
+1. Go to **Logs** tab
+2. In the filter bar, type: `service.name = oms-audit-writer`
+3. You can further filter by:
+   - `trace_id = <specific-trace-id>` — find one specific event
+   - `action = orders.order.confirm` — find all events of a type
+   - `resource_id = ORD-2024-001` — find events for a specific resource
+4. Click any log entry to expand full attributes
+5. Copy the `trace_id` to cross-reference with MongoDB audit record
+
+---
+
+## Querying Audit Logs From MongoDB
+
+### Setting Up Read-Only Access
+
+A dedicated read-only user is required to query audit logs without risking writes.
+
+**Create the user** (run once by an operator or architect):
+
+```bash
+scripts/create-audit-reader.sh --db oms_audit --username audit_reader
+```
+
+This outputs the connection string and password. Save both securely.
+
+**Or with a specific password:**
+
+```bash
+scripts/create-audit-reader.sh --db oms_audit --username audit_reader --password 'MySecurePass123!'
+```
+
+### Connecting to MongoDB (Dev)
+
+1. Start port-forward to MongoDB:
+   ```bash
+   kubectl -n mongodb port-forward svc/psmdb-rs0 27017:27017
+   ```
+
+2. Connect with mongosh:
+   ```bash
+   mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/oms_audit?authSource=oms_audit&directConnection=true'
+   ```
+
+### Common Queries
+
+**Recent audit events:**
+```javascript
+db.auditlogs.find().sort({ time: -1 }).limit(10)
+```
+
+**Events for a specific order:**
+```javascript
+db.auditlogs.find({ resource_id: 'ORD-2024-001' }).sort({ time: -1 })
+```
+
+**Events by action type in a date range:**
+```javascript
+db.auditlogs.find({
+  action: 'orders.order.confirm',
+  time: { $gte: '2026-07-01T00:00:00Z', $lte: '2026-07-06T23:59:59Z' }
+}).sort({ time: -1 })
+```
+
+**Events by user:**
+```javascript
+db.auditlogs.find({ user_id: 'user1' }).sort({ time: -1 }).limit(20)
+```
+
+**Count events by action (aggregation):**
+```javascript
+db.auditlogs.aggregate([
+  { $group: { _id: '$action', count: { $sum: 1 } } },
+  { $sort: { count: -1 } }
+])
+```
+
+**Find by trace_id (cross-reference with SigNoz):**
+```javascript
+db.auditlogs.findOne({ trace_id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' })
+```
+
+---
+
+## Complete Testing Workflow
+
+Step-by-step to validate the entire audit + telemetry pipeline works.
+
+### Prerequisites
+
+- `groovy` installed (see [Environment Setup](environment-setup.md))
+- `kubectl` access to the cluster
+- MongoDB and SigNoz deployed and healthy (`scripts/verify-platform-health.sh`)
+
+### Step 1: Start Port-Forwards
+
+```bash
+# Terminal 1: MongoDB
+kubectl -n mongodb port-forward svc/psmdb-rs0 27017:27017
+
+# Terminal 2: SigNoz
+kubectl -n signoz port-forward svc/signoz 3301:8080
+```
+
+### Step 2: Write Audit Log + Send Telemetry
+
+```bash
+scripts/write-auditlog-and-telemetry.sh
+```
+
+Expected output:
+```
+Writing sample audit log to MongoDB...
+{ "insertedId": "...", "traceId": "abc123...", ... }
+Sending OTLP telemetry event to SigNoz...
+Telemetry sent successfully.
+Done. Trace ID: abc123...
+```
+
+Save the **Trace ID** from the output.
+
+### Step 3: Verify in MongoDB
+
+```bash
+mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/test_db?authSource=test_db&directConnection=true' \
+  --eval "db.auditlogs.find().sort({time:-1}).limit(1)"
+```
+
+Confirm the latest record matches the trace_id from Step 2.
+
+### Step 4: Verify in SigNoz
+
+1. Open `http://127.0.0.1:3301`
+2. Go to **Logs** tab
+3. Filter: `service.name = oms-audit-simulator`
+4. Find the log with matching trace_id
+5. Confirm attributes match (action, resource_id, user_id)
+
+### Step 5: Test Audit-Log Write Only (No Telemetry)
+
+To validate MongoDB write independently of SigNoz:
+
+```bash
+scripts/write-auditlog-and-telemetry.sh --otel-endpoint http://localhost:1/noop
+```
+
+This confirms the library + MongoDB path works even if SigNoz is down.
+
+### Automated Verification
+
+```bash
+scripts/verify-platform-health.sh --smoke-test
+```
+
+This runs the full write → read-back cycle automatically.
+
+---
+
 ## Querying Audit Logs
 
 ### From MongoDB directly

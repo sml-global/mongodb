@@ -33,18 +33,43 @@ Before starting, get these values from the platform or AWS account owner:
 | Tool | Purpose | Minimum Version |
 |---|---|---|
 | `aws` | AWS CLI for SSO auth, EKS, S3, IAM operations | v2.x |
-| `terraform` | Infrastructure provisioning | >= 1.5.0 |
-| `kubectl` | Kubernetes cluster operations | v1.28+ |
+| `tfenv` + `terraform` | Terraform version management + provisioning | tfenv latest; TF pinned via `.terraform-version` |
+| `kubectl` | Kubernetes cluster operations | within ±1 of server (currently: v1.34–v1.36) |
 | `kustomize` | Manifest rendering and overlays | v5.x |
 | `rg` (ripgrep) | Fast text search for validation scripts | any |
 | `openssl` | Secret generation (random bytes, base64) | any |
 | `helm` | Only for platform admin bootstrap mode | v3.x |
 | `groovy` | Only for Boomi audit log library testing | v4.x |
 
+### Terraform Version Management (tfenv)
+
+This repo uses [tfenv](https://github.com/tfutils/tfenv) for Terraform version management. The file `.terraform-version` in the repo root pins the exact version (currently `1.15.7`).
+
+**Why tfenv?** Different projects may need different Terraform versions. tfenv auto-switches when you `cd` into this repo.
+
+Install tfenv first, then Terraform is managed automatically:
+
+```bash
+# macOS
+brew install tfenv
+
+# Linux
+git clone https://github.com/tfutils/tfenv.git ~/.tfenv
+echo 'export PATH="$HOME/.tfenv/bin:$PATH"' >> ~/.bashrc
+
+# Then install the pinned version (reads .terraform-version automatically)
+tfenv install
+tfenv use
+terraform version   # should show 1.15.7
+```
+
+If you prefer not to use tfenv, install Terraform `1.15.7` directly — but you are responsible for version alignment.
+
 ### macOS
 
 ```bash
-brew install awscli terraform kubectl kustomize ripgrep openssl
+brew install awscli tfenv kubectl kustomize ripgrep openssl
+tfenv install   # installs version from .terraform-version
 # Optional (platform admin): brew install helm
 # Optional (Boomi admin): brew install groovy
 ```

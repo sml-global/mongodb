@@ -7,16 +7,19 @@ set -euo pipefail
 #   scripts/verify-platform-health.sh --preflight  # Environment-only preflight
 
 PREFLIGHT_ONLY="false"
+SMOKE_TEST="false"
 FAILURES=0
 CHECKS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --preflight) PREFLIGHT_ONLY="true"; shift ;;
+    --smoke-test) SMOKE_TEST="true"; shift ;;
     -h|--help)
-      echo "Usage: verify-platform-health.sh [--preflight]"
-      echo "  --preflight   Only check environment readiness (tools, AWS, k8s)"
-      echo "  (no flag)     Full platform verification"
+      echo "Usage: verify-platform-health.sh [--preflight] [--smoke-test]"
+      echo "  --preflight    Only check environment readiness (tools, AWS, k8s)"
+      echo "  --smoke-test   Run end-to-end audit write + read-back verification"
+      echo "  (no flag)      Full platform verification"
       exit 0
       ;;
     *) echo "Error: unknown arg '$1'" >&2; exit 1 ;;
@@ -223,6 +226,69 @@ if aws s3api head-bucket --bucket sml-oms-dev-tfstate 2>/dev/null; then
   pass "State bucket accessible"
 else
   fail "State bucket not accessible" "Check AWS permissions or bucket existence"
+fi
+
+# ─── SMOKE TEST (optional) ────────────────────────────────────────────────────
+
+if [[ "$SMOKE_TEST" == "true" ]]; then
+  section "End-to-End Smoke Test"
+
+  # Check if port-forwards are running
+  if ! curl -sf http://127.0.0.1:27017 >/dev/null 2>&1 && ! mongosh --quiet --eval "db.runCommand({ping:1})" 'mongodb://127.0.0.1:27017/?directConnection=true' >/dev/null 2>&1; then
+    fail "MongoDB not reachable on localhost:27017" "Run: kubectl -n mongodb port-forward svc/psmdb-rs0 27017:27017"
+  else
+    pass "MongoDB reachable on localhost:27017"
+
+    # Write a test record
+    TRACE_ID="smoke-test-$(date +%s)"
+    WRITE_RESULT="$(mongosh --quiet 'mongodb://127.0.0.1:27017/?directConnection=true' --eval "
+      const r = db.getSiblingDB('test_db').smoke_test.insertOne({
+        trace_id: '$TRACE_ID', time: new Date().toISOString(), action: 'smoke.test'
+      });
+      print(r.insertedId ? 'OK' : 'FAIL');
+    " 2>/dev/null || echo "FAIL")"
+
+    if [[ "$WRITE_RESULT" == *"OK"* ]]; then
+      pass "MongoDB write succeeded (trace: $TRACE_ID)"
+
+      # Read back
+      READ_RESULT="$(mongosh --quiet 'mongodb://127.0.0.1:27017/?directConnection=true' --eval "
+        const doc = db.getSiblingDB('test_db').smoke_test.findOne({trace_id: '$TRACE_ID'});
+        print(doc ? 'FOUND' : 'NOT_FOUND');
+      " 2>/dev/null || echo "NOT_FOUND")"
+
+      if [[ "$READ_RESULT" == *"FOUND"* ]]; then
+        pass "MongoDB read-back verified"
+      else
+        fail "MongoDB read-back failed" "Document not found after write"
+      fi
+
+      # Cleanup
+      mongosh --quiet 'mongodb://127.0.0.1:27017/?directConnection=true' --eval "
+        db.getSiblingDB('test_db').smoke_test.deleteOne({trace_id: '$TRACE_ID'});
+      " >/dev/null 2>&1
+    else
+      fail "MongoDB write failed" "Check MongoDB auth and connectivity"
+    fi
+  fi
+
+  # SigNoz telemetry send
+  if curl -sf http://127.0.0.1:3301/api/v1/health >/dev/null 2>&1; then
+    pass "SigNoz reachable on localhost:3301"
+
+    TELEM_RESULT="$(curl -sf -o /dev/null -w '%{http_code}' -X POST \
+      -H 'Content-Type: application/json' \
+      -d '{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"smoke-test"}}]},"scopeLogs":[{"logRecords":[{"timeUnixNano":"'"$(date +%s)"'000000000","body":{"stringValue":"smoke-test"}}]}]}]}' \
+      http://127.0.0.1:3301/v1/logs 2>/dev/null || echo "000")"
+
+    if [[ "$TELEM_RESULT" =~ ^2 ]]; then
+      pass "SigNoz telemetry accepted (HTTP $TELEM_RESULT)"
+    else
+      fail "SigNoz telemetry rejected (HTTP $TELEM_RESULT)" "Check SigNoz frontend/collector"
+    fi
+  else
+    fail "SigNoz not reachable on localhost:3301" "Run: kubectl -n signoz port-forward svc/signoz 3301:8080"
+  fi
 fi
 
 # ─── SUMMARY ─────────────────────────────────────────────────────────────────
