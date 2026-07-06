@@ -28,6 +28,9 @@ SCOPE="${1:-}"
 MONGODB_CRD_NAME="perconaservermongodbs.psmdb.percona.com"
 WAIT_TIMEOUT_SECONDS="${MONGODB_OPERATOR_READY_TIMEOUT_SECONDS:-180}"
 BOOTSTRAP_PLATFORM_CONTROLLERS="false"
+CLUSTER_NAME="${EKS_CLUSTER_NAME:-EKS-boomi-runtime-cluster}"
+EBS_CSI_ROLE_NAME="${EBS_CSI_ROLE_NAME:-AmazonEKS_EBS_CSI_DriverRole}"
+EBS_CSI_POLICY_ARN="arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
 
 MISSING_CRDS=()
 
@@ -84,6 +87,46 @@ require_cmd() {
   fi
 }
 
+ensure_aws_role_with_policy() {
+  local role_name="$1"
+  local policy_arn="$2"
+  local trust_policy_json="$3"
+  local trust_file
+
+  if ! aws iam get-role --role-name "$role_name" >/dev/null 2>&1; then
+    trust_file="$(mktemp)"
+    printf '%s\n' "$trust_policy_json" > "$trust_file"
+    aws iam create-role --role-name "$role_name" --assume-role-policy-document "file://$trust_file" >/dev/null
+    rm -f "$trust_file"
+  fi
+
+  aws iam attach-role-policy --role-name "$role_name" --policy-arn "$policy_arn" >/dev/null
+}
+
+wait_for_eks_addon_active() {
+  local addon_name="$1"
+  local deadline=$((SECONDS + 600))
+  local addon_status
+
+  while true; do
+    addon_status="$(aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" --query 'addon.status' --output text 2>/dev/null || echo MISSING)"
+    case "$addon_status" in
+      ACTIVE)
+        return 0
+        ;;
+      DEGRADED|CREATE_FAILED|DELETE_FAILED|UPDATE_FAILED)
+        echo "ERROR: addon '$addon_name' entered status '$addon_status'." >&2
+        exit 1
+        ;;
+    esac
+    if (( SECONDS >= deadline )); then
+      echo "ERROR: timed out waiting for addon '$addon_name' to become ACTIVE (last status: $addon_status)." >&2
+      exit 1
+    fi
+    sleep 10
+  done
+}
+
 bootstrap_flux_controllers() {
   require_cmd helm
   require_cmd kubectl
@@ -117,10 +160,44 @@ bootstrap_cert_manager() {
   helm upgrade --install cert-manager jetstack/cert-manager -n cert-manager --set crds.enabled=true
 }
 
+bootstrap_ebs_csi_driver() {
+  local addon_name="aws-ebs-csi-driver"
+  local addon_version
+  local role_arn
+  local trust_policy_json='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"pods.eks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+
+  require_cmd aws
+  require_cmd kubectl
+
+  echo "Bootstrapping AWS EBS CSI driver addon..."
+  addon_version="$(aws eks describe-addon-versions --addon-name "$addon_name" --kubernetes-version "$(aws eks describe-cluster --name "$CLUSTER_NAME" --query 'cluster.version' --output text)" --query 'addons[0].addonVersions[0].addonVersion' --output text)"
+  ensure_aws_role_with_policy "$EBS_CSI_ROLE_NAME" "$EBS_CSI_POLICY_ARN" "$trust_policy_json"
+  role_arn="$(aws iam get-role --role-name "$EBS_CSI_ROLE_NAME" --query 'Role.Arn' --output text)"
+
+  if aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$addon_name" >/dev/null 2>&1; then
+    aws eks update-addon \
+      --cluster-name "$CLUSTER_NAME" \
+      --addon-name "$addon_name" \
+      --addon-version "$addon_version" \
+      --service-account-role-arn "$role_arn" \
+      --resolve-conflicts OVERWRITE >/dev/null
+  else
+    aws eks create-addon \
+      --cluster-name "$CLUSTER_NAME" \
+      --addon-name "$addon_name" \
+      --addon-version "$addon_version" \
+      --service-account-role-arn "$role_arn" \
+      --resolve-conflicts OVERWRITE >/dev/null
+  fi
+
+  wait_for_eks_addon_active "$addon_name"
+}
+
 preflight_scope() {
   if [[ "$BOOTSTRAP_PLATFORM_CONTROLLERS" == "true" ]]; then
     case "$1" in
       mongodb|mongo)
+        bootstrap_ebs_csi_driver
         bootstrap_flux_controllers
         bootstrap_kyverno
         bootstrap_cert_manager
@@ -147,6 +224,9 @@ preflight_scope() {
         "Install cert-manager first (Certificate CRD is missing), then rerun this command."
       record_missing_crd "issuers.cert-manager.io" \
         "Install cert-manager first (Issuer CRD is missing), then rerun this command."
+      if ! kubectl get csidriver ebs.csi.aws.com >/dev/null 2>&1; then
+        MISSING_CRDS+=("ebs.csi.aws.com|Install the AWS EBS CSI driver addon first, then rerun this command.")
+      fi
       ensure_no_missing_crds "$1"
       ;;
     signoz|operators)
