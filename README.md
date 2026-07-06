@@ -64,7 +64,7 @@ This section explains why each script exists, not only the command name.
 
 | Script | Purpose | Typical Time To Use |
 |---|---|---|
-| `scripts/provision.sh` | Main entrypoint. Chooses scope (`all`, `mongodb`, `pg`, `signoz`) and runs the right steps. | Normal operator usage. |
+| `scripts/provision.sh` | Main entrypoint. Chooses scope (`all`, `mongodb`, `pg`, `signoz`) and runs the right steps. Platform admins can add `--bootstrap-platform-controllers` to also install missing cluster controllers and storage driver. | Normal operator usage; platform-admin bootstrap when needed. |
 | `scripts/provision-platform-prereq.sh` | Runs Terraform for infra scopes and picks the correct Terraform root/state key per scope. | Infra-only operations. |
 | `scripts/provision-k8s-components.sh` | Applies Kubernetes components by scope (`mongodb`, `signoz`, `operators`, `policies`, `overlay`). | K8s-only operations. |
 | `scripts/open-signoz-ui.sh` | Opens local port-forward tunnel to SigNoz frontend service. | Accessing SigNoz UI from workstation. |
