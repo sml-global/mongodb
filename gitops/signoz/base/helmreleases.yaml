@@ -16,5 +16,7 @@ spec:
   values:
     global:
       storageClass: gp3-mongodb
+    clickhouse:
+      password: "CHANGE_ME_BEFORE_PRODUCTION"
   install:
     createNamespace: true

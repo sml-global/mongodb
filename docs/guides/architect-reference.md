@@ -303,13 +303,109 @@ flowchart TD
 
 ### Upgrade Procedures
 
-| Component | How to Upgrade |
-|---|---|
-| Percona Operator | Update chart version in `gitops/operators/base/helmreleases.yaml`, Flux reconciles |
-| SigNoz | Update chart version in `gitops/signoz/base/helmreleases.yaml`, Flux reconciles |
-| EBS CSI Driver | `aws eks update-addon --addon-name aws-ebs-csi-driver --addon-version <new>` |
-| Terraform providers | Update version constraints in root `versions.tf` |
-| MongoDB replica set | Update image/version in PerconaServerMongoDB CR, operator handles rolling upgrade |
+Current versions and latest available: see [Component Catalog § Version Inventory](../references/component-catalog.md#version-inventory).
+
+#### Percona Operator (MongoDB)
+
+Current: chart 1.18.0 → Latest: 1.22.0
+
+**Where to find versions:**
+```bash
+helm search repo percona/psmdb-operator --versions | head -10
+```
+
+**Upgrade path** (one minor version at a time):
+1. Check release notes: https://docs.percona.com/percona-operator-for-mongodb/ReleaseNotes/
+2. Update `gitops/operators/base/helmreleases.yaml`:
+   ```yaml
+   chart:
+     spec:
+       version: "1.19.0"   # one step at a time
+   ```
+3. Commit and push — Flux reconciles automatically
+4. Verify: `kubectl -n mongodb get pods` (operator restarts, then rolling update of mongod pods)
+5. If failed: revert chart version in git, Flux rolls back
+
+**Rollback:** Change version back in git → commit → push → Flux reconciles to previous.
+
+#### SigNoz
+
+Current: chart 0.130.1 → Latest: 0.131.0
+
+**Where to find versions:**
+```bash
+helm search repo signoz/signoz --versions | head -5
+```
+
+**Steps:**
+1. Update `gitops/signoz/base/helmreleases.yaml`:
+   ```yaml
+   chart:
+     spec:
+       version: "0.131.0"
+   ```
+2. Commit and push
+3. Verify: `kubectl -n signoz get pods` + dashboard health check
+
+**Rollback:** Revert version in git → Flux reconciles.
+
+#### PostgreSQL (Aurora)
+
+Current: 18.3
+
+**Where to find versions:**
+```bash
+aws rds describe-db-engine-versions --engine aurora-postgresql \
+  --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1 --output text
+```
+
+**Steps:**
+1. Update `platform-prerequisites/terraform/postgresql/variables.tf` → `engine_version`
+2. Run `bash scripts/provision-platform-prereq.sh pg`
+3. Review plan — Aurora performs in-place upgrade (brief downtime for writer)
+
+**Rollback:** Aurora does not support downgrade. Restore from snapshot if needed.
+
+#### EBS CSI Driver
+
+**Where to find versions:**
+```bash
+aws eks describe-addon-versions --addon-name aws-ebs-csi-driver \
+  --query 'addons[0].addonVersions[*].addonVersion' --output text | tr '\t' '\n' | head -5
+```
+
+**Steps:**
+```bash
+aws eks update-addon \
+  --cluster-name EKS-boomi-runtime-cluster \
+  --addon-name aws-ebs-csi-driver \
+  --addon-version <new-version> \
+  --resolve-conflicts OVERWRITE
+```
+
+**Rollback:** Same command with previous version.
+
+#### MongoDB Server Image
+
+**Where to find compatible images:** Check Percona release notes for the operator version you're running.
+
+**Steps:**
+1. Update `k8s/base/psmdb-cluster.yaml` → `spec.image`
+2. Apply overlay: `bash scripts/provision-k8s-components.sh overlay`
+3. Operator performs rolling upgrade of replica set members
+
+**Rollback:** Revert image in YAML → re-apply.
+
+#### Terraform + Providers
+
+Pinned via `.terraform-version` (tfenv) and `main.tf` constraints.
+
+**Steps:**
+1. Update `.terraform-version` to new version
+2. Run `tfenv install && tfenv use`
+3. Update provider constraints in `platform-prerequisites/terraform/mongodb/main.tf` if needed
+4. Run `terraform init -upgrade` in each root
+5. Run plan to verify no unexpected changes
 
 ### Maintenance Checklist
 - Verify provider versions remain compatible

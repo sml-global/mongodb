@@ -91,6 +91,33 @@ Audit trail (MongoDB) and application data (PostgreSQL) are intentionally separa
 
 ---
 
+## Credential Inventory
+
+All credentials in the system and how to access them:
+
+| Credential | Where Stored | Who Needs It | How to Get |
+|---|---|---|---|
+| AWS SSO login | AWS IAM Identity Center | All infra roles | `aws sso login --profile default` |
+| MongoDB operator users (4) | K8s Secret `psmdb-secrets` + local escrow | Operators (bootstrap only) | `scripts/bootstrap-dev-secrets.sh` auto-creates |
+| MongoDB encryption key | K8s Secret `psmdb-encryption-key` + escrow | Operators (bootstrap only) | `scripts/bootstrap-dev-secrets.sh` auto-creates |
+| MongoDB audit reader | Created in MongoDB | Boomi Admin, Compliance | `scripts/create-audit-reader.sh` (one-time) |
+| PostgreSQL master password | `terraform.tfvars` (local) + TF state | Operators (provision only) | Set manually in tfvars |
+| SigNoz dashboard login | SigNoz internal DB | All who view telemetry | First user signs up as admin, then invites others |
+| SigNoz ClickHouse (internal) | HelmRelease values | No one (internal only) | Chart value `clickhouse.password` |
+| Terraform state | S3 bucket (encrypted) | Operators with S3 access | AWS IAM permissions |
+| PBM S3 bucket | IAM role (Pod Identity) | MongoDB pods (automatic) | No manual credential needed |
+
+### Per-Persona Access Requirements
+
+| Persona | Needs Access To | Does NOT Need |
+|---|---|---|
+| **Infra Operator** | AWS SSO, kubectl, Terraform state, escrow files | MongoDB data, SigNoz dashboard |
+| **Infra Architect** | Everything operator has + SigNoz admin + MongoDB userAdmin | Application data directly |
+| **Boomi Admin** | SigNoz dashboard (Editor), MongoDB audit_reader (read-only) | AWS console, Terraform, kubectl |
+| **Enterprise Architect** | SigNoz dashboard (Viewer), read access to all docs | Direct cluster access, write credentials |
+
+---
+
 ## Access And Permissions Model
 
 ### Required AWS Permissions

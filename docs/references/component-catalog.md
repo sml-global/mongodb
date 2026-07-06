@@ -2,6 +2,66 @@
 
 Every platform component deployed or managed by this repository. For each component: what it is, why we use it, how it helps, who owns it, and what depends on it.
 
+## Version Inventory
+
+Single source of truth for all deployed versions. Update this table when any component is upgraded.
+
+### Application Services
+
+| Component | Version | Source File | How to Find Latest |
+|---|---|---|---|
+| MongoDB Server | 7.0.12-7 | `k8s/base/psmdb-cluster.yaml` | `helm show values percona/psmdb-db --version <op-ver>` → look for image tag |
+| Percona Operator | chart 1.18.0 (app 1.18.0) | `gitops/operators/base/helmreleases.yaml` | `helm search repo percona/psmdb-operator --versions` |
+| PBM (backup agent) | 2.6.0 | `k8s/base/psmdb-cluster.yaml` | Ships with operator version |
+| PostgreSQL (Aurora) | 18.3 | `platform-prerequisites/terraform/postgresql/variables.tf` | `aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1` |
+| SigNoz | chart 0.130.1 (app v0.130.1) | `gitops/signoz/base/helmreleases.yaml` | `helm search repo signoz/signoz --versions` |
+
+### Platform Controllers
+
+| Component | Version | How Installed | How to Find Latest |
+|---|---|---|---|
+| EKS (Kubernetes) | 1.35 | AWS-managed | `aws eks describe-cluster --name EKS-boomi-runtime-cluster --query 'cluster.version'` |
+| EBS CSI Driver | EKS addon (latest) | `aws eks create-addon` | `aws eks describe-addon-versions --addon-name aws-ebs-csi-driver` |
+| Flux | Helm chart `flux2` | Bootstrap script | `helm search repo fluxcd-community/flux2 --versions` |
+| Kyverno | Helm chart | Bootstrap script | `helm search repo kyverno/kyverno --versions` |
+| cert-manager | Helm chart | Bootstrap script | `helm search repo jetstack/cert-manager --versions` |
+
+### Client-Side Tools
+
+| Tool | Required Version | Managed By | How to Pin |
+|---|---|---|---|
+| Terraform | 1.15.7 (pinned via `.terraform-version`) | tfenv | `.terraform-version` file in repo root |
+| AWS CLI | v2.x | brew/apt/winget | OS package manager |
+| kubectl | v1.36.2 (client) | brew/apt/winget | Should be within ±1 of server version |
+| kustomize | v5.x | brew/apt/winget | OS package manager |
+| Helm | v3.x | brew/apt/winget | OS package manager |
+| Groovy | v4.x (Boomi admin only) | brew/apt/sdkman | OS package manager |
+
+### Terraform Providers
+
+| Provider | Version Constraint | Source File |
+|---|---|---|
+| hashicorp/aws | >= 5.0 | `platform-prerequisites/terraform/mongodb/main.tf` |
+| hashicorp/kubernetes | >= 2.26 | `platform-prerequisites/terraform/mongodb/main.tf` |
+| Terraform core | >= 1.5.0 | `platform-prerequisites/terraform/mongodb/main.tf` |
+
+### Library Dependencies (Boomi)
+
+| Library | Version | Used By | Compatibility |
+|---|---|---|---|
+| mongodb-driver-sync | 5.1.2 | `scripts/groovy/boomi/BoomiAuditLogLibrary.groovy` | MongoDB 7.0+ |
+| AWS SDK secretsmanager | 2.25.48 | `scripts/groovy/boomi/BoomiAuditLogLibrary.groovy` | AWS SDK v2 |
+
+### Upgrade Notes
+
+- **Percona Operator**: current 1.18.0 is 4 versions behind latest (1.22.0). Upgrade path: 1.18→1.19→1.20→1.21→1.22 (one minor at a time). See [Architect Reference § Upgrade Procedures](../guides/architect-reference.md#upgrade-procedures).
+- **SigNoz**: current 0.130.1, latest 0.131.0 — minor version bump, generally safe.
+- **PostgreSQL**: pinned at 18.3. AWS may release newer point releases — check before upgrading.
+- **EKS**: AWS manages control plane upgrades. Node groups may need manual update.
+- **MongoDB driver 5.1.2**: compatible with MongoDB 7.0. If upgrading MongoDB to 8.0+, verify driver compatibility.
+
+---
+
 ## Application Services
 
 ### MongoDB (Percona Server for MongoDB)
