@@ -497,8 +497,7 @@ If you have cluster-admin permissions and need to bootstrap controllers directly
 helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts
 helm repo update
 kubectl create namespace flux-system --dry-run=client -o yaml | kubectl apply -f -
-helm upgrade --install source-controller fluxcd-community/source-controller -n flux-system
-helm upgrade --install helm-controller fluxcd-community/helm-controller -n flux-system
+helm upgrade --install flux2 fluxcd-community/flux2 -n flux-system
 
 # Kyverno controller that provides ClusterPolicy CRD
 helm repo add kyverno https://kyverno.github.io/kyverno/
@@ -533,8 +532,7 @@ SigNoz-only path with Flux bootstrap:
 ```
 
 What this flag does:
-- installs Flux Source controller
-- installs Flux Helm controller
+- installs Flux controllers via the `flux2` Helm chart
 - installs Kyverno (for MongoDB scope)
 - re-checks required CRDs before continuing
 
