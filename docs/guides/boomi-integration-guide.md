@@ -572,71 +572,93 @@ db.auditlogs.findOne({ trace_id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' })
 
 ## Complete Testing Workflow
 
-Step-by-step to validate the entire audit + telemetry pipeline works.
+### Option A: In-Cluster Test Pod (Recommended)
 
-### Prerequisites
-
-- `groovy` installed (see [Environment Setup](environment-setup.md))
-- `kubectl` access to the cluster
-- MongoDB and SigNoz deployed and healthy (`scripts/verify-platform-health.sh`)
-
-### Step 1: Start Port-Forwards
+Deploys a test Pod inside the cluster that writes to MongoDB and sends telemetry to SigNoz using internal service endpoints. No port-forwards needed.
 
 ```bash
-# Terminal 1: MongoDB
-kubectl -n mongodb port-forward svc/psmdb-rs0 27017:27017
-
-# Terminal 2: SigNoz
-kubectl -n signoz port-forward svc/signoz 3301:8080
+scripts/run-audit-telemetry-test.sh
 ```
 
-### Step 2: Write Audit Log + Send Telemetry
+What it does:
+1. Creates a temporary Pod in namespace `mongodb`
+2. Pod writes a sample audit record to `oms_audit.auditlogs` via internal MongoDB service
+3. Pod sends matching OTLP telemetry to SigNoz via internal service
+4. Pod reads back the record from MongoDB to verify
+5. Shows Pod logs (pass/fail)
+6. **Deletes the Pod** automatically
 
+The **audit record stays in MongoDB** (not deleted) — it serves as evidence that the pipeline works.
+
+**Keep the pod for debugging:**
+```bash
+scripts/run-audit-telemetry-test.sh --keep
+```
+
+**Expected output:**
+```
+Deploying test pod: audit-telemetry-test-1720263000
+  Namespace: mongodb
+  MongoDB: psmdb-rs0.mongodb.svc.cluster.local / oms_audit.auditlogs
+  SigNoz: signoz.signoz.svc.cluster.local:8080
+  Trace ID: test-a1b2c3d4
+
+Pod created. Waiting for completion...
+
+─── Pod Logs ───
+=== Audit + Telemetry Test Pod ===
+[1/3] Writing audit record to MongoDB...
+  MongoDB write: OK
+[2/3] Sending OTLP telemetry to SigNoz...
+  SigNoz telemetry: OK (HTTP 200)
+[3/3] Verifying record in MongoDB...
+  Read-back: OK (record verified in MongoDB)
+
+=== ALL TESTS PASSED ===
+────────────────
+
+Result: PASSED
+Deleting test pod...
+Pod deleted.
+```
+
+### Option B: Local Test (Groovy Library)
+
+Runs the Groovy test harness locally — requires port-forwards and Groovy installed.
+
+**Prerequisites:**
+- `groovy` installed (see [Environment Setup](environment-setup.md))
+- Port-forwards active:
+  ```bash
+  kubectl -n mongodb port-forward svc/psmdb-rs0 27017:27017
+  kubectl -n signoz port-forward svc/signoz 3301:8080
+  ```
+
+**Run:**
 ```bash
 scripts/write-auditlog-and-telemetry.sh
 ```
 
-Expected output:
-```
-Writing sample audit log to MongoDB...
-{ "insertedId": "...", "traceId": "abc123...", ... }
-Sending OTLP telemetry event to SigNoz...
-Telemetry sent successfully.
-Done. Trace ID: abc123...
-```
+This exercises the Boomi Groovy library directly. Useful for testing library code changes.
 
-Save the **Trace ID** from the output.
-
-### Step 3: Verify in MongoDB
-
-```bash
-mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/oms_audit?authSource=oms_audit&directConnection=true' \
-  --eval "db.auditlogs.find().sort({time:-1}).limit(1)"
-```
-
-Confirm the latest record matches the trace_id from Step 2.
-
-> **Note:** The test harness automatically cleans up test data after a successful run. If you need to inspect the record, run with `--no-cleanup` (not yet implemented) or query immediately after the write step before cleanup runs.
-
-### Step 4: Verify in SigNoz
-
-1. Open `http://127.0.0.1:3301`
-2. Go to **Logs** tab
-3. Filter: `service.name = oms-audit-simulator`
-4. Find the log with matching trace_id
-5. Confirm attributes match (action, resource_id, user_id)
-
-> **Note:** Telemetry data in SigNoz is NOT cleaned up (it's append-only and has its own retention). This is by design — telemetry is for observability, not transactional data.
-
-### Step 5: Test Audit-Log Write Only (No Telemetry)
-
-To validate MongoDB write independently of SigNoz:
-
+**Test write-only (no SigNoz dependency):**
 ```bash
 scripts/write-auditlog-and-telemetry.sh --otel-endpoint http://localhost:1/noop
 ```
 
-This confirms the library + MongoDB path works even if SigNoz is down.
+### Verifying Results
+
+**In MongoDB** (query the audit record):
+```bash
+mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/oms_audit?authSource=oms_audit&directConnection=true' \
+  --eval "db.auditlogs.find({action:'smoke.test.pod'}).sort({time:-1}).limit(1)"
+```
+
+**In SigNoz** (find the telemetry):
+1. Open SigNoz dashboard (`scripts/open-signoz-ui.sh`)
+2. Go to **Logs** tab
+3. Filter: `service.name = oms-audit-test-pod`
+4. Find the entry with matching trace_id
 
 ### Automated Verification
 
@@ -644,4 +666,4 @@ This confirms the library + MongoDB path works even if SigNoz is down.
 scripts/verify-platform-health.sh --smoke-test
 ```
 
-This runs the full write → read-back cycle automatically and **cleans up test data** on success.
+This runs the full write → read-back cycle from within the cluster automatically.

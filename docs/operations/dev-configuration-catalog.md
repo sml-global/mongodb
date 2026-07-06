@@ -247,7 +247,8 @@ File: `scripts/write-auditlog-and-telemetry.sh`
   - resolves Mongo URI in this order: CLI arg, Kubernetes Secret, AWS Secrets Manager, local default
   - inserts one sample audit-log document directly with Mongo Java driver
   - sends one matching OTLP log record to SigNoz endpoint
-  - **cleans up test data** from MongoDB after successful run
+  - audit record is kept in MongoDB (not deleted)
+  - for in-cluster testing, use `scripts/run-audit-telemetry-test.sh` instead (deploys a pod, cleans up pod after)
 
 ## Placeholder Inventory
 - MongoDB dev path: no unresolved placeholders in tracked YAML/TF/SH files.
