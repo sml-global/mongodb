@@ -90,6 +90,30 @@ esac
 
 TF_STATE_KEY="${TF_STATE_KEY:-$DEFAULT_TF_STATE_KEY}"
 
+ensure_tfvars() {
+  local tfvars_file="$TF_DIR/terraform.tfvars"
+  local sample_file="$TF_DIR/terraform.tfvars.sample"
+
+  if [[ -f "$tfvars_file" ]]; then
+    return 0
+  fi
+
+  echo "Error: missing required tfvars file: $tfvars_file" >&2
+  if [[ -f "$sample_file" ]]; then
+    echo "Create it from sample, then edit required values:" >&2
+    if [[ "$SCOPE" == "mongodb" || "$SCOPE" == "mongo" ]]; then
+      echo "  cp platform-prerequisites/terraform/mongodb/terraform.tfvars.sample platform-prerequisites/terraform/mongodb/terraform.tfvars" >&2
+      echo "  # set cluster_name" >&2
+    else
+      echo "  cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-prerequisites/terraform/postgresql/terraform.tfvars" >&2
+      echo "  # set vpc_id, private_subnet_ids, db_master_password" >&2
+    fi
+  else
+    echo "Error: sample file also missing: $sample_file" >&2
+  fi
+  exit 1
+}
+
 init_backend() {
   if [[ ! -x "$BOOTSTRAP_BACKEND_SCRIPT" ]]; then
     echo "Error: backend bootstrap script is not executable: $BOOTSTRAP_BACKEND_SCRIPT" >&2
@@ -112,6 +136,7 @@ run_apply() {
   fi
 }
 
+ensure_tfvars
 init_backend
 terraform -chdir="$TF_DIR" fmt -recursive
 terraform -chdir="$TF_DIR" validate
