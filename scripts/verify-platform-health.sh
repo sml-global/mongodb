@@ -40,15 +40,32 @@ fail() {
   fi
 }
 
+# Use for a failure that makes all remaining checks meaningless (e.g. no AWS
+# auth, no cluster access). Prints the failure, prints the summary so far,
+# and exits immediately instead of cascading into doomed downstream checks.
+fail_fatal() {
+  fail "$1" "$2"
+  echo ""
+  echo "─────────────────────────────────────────"
+  echo "Total: $CHECKS checks, $FAILURES failures"
+  echo "Result: STOPPED EARLY — fix the issue above, then re-run"
+  exit 1
+}
+
 section() {
   echo ""
   echo "[$1]"
 }
 
+count_ready_mongod_pods() {
+  kubectl -n mongodb get pods -l app.kubernetes.io/component=mongod --no-headers 2>/dev/null \
+    | awk '$2=="1/1" && $3=="Running" {c++} END {print c+0}'
+}
+
 # ─── PREFLIGHT ───────────────────────────────────────────────────────────────
 
 section "Required Tools"
-for cmd in aws terraform kubectl kustomize rg openssl; do
+for cmd in aws terraform kubectl kustomize rg openssl python3; do
   if command -v "$cmd" >/dev/null 2>&1; then
     pass "$cmd available"
   else
@@ -56,7 +73,13 @@ for cmd in aws terraform kubectl kustomize rg openssl; do
   fi
 done
 
-tf_version="$(terraform version -json 2>/dev/null | grep -o '"terraform_version":"[^"]*"' | cut -d'"' -f4 || echo "0.0.0")"
+tf_version="$(terraform version -json 2>/dev/null | sed -n 's/.*"terraform_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+if [[ -z "$tf_version" ]]; then
+  tf_version="$(terraform version 2>/dev/null | sed -n '1s/^Terraform v\([0-9][0-9.]*\).*/\1/p')"
+fi
+if [[ -z "$tf_version" ]]; then
+  tf_version="0.0.0"
+fi
 if [[ "$(printf '%s\n' "1.5.0" "$tf_version" | sort -V | head -1)" == "1.5.0" ]]; then
   pass "terraform >= 1.5.0 ($tf_version)"
 else
@@ -68,7 +91,7 @@ if aws sts get-caller-identity >/dev/null 2>&1; then
   account="$(aws sts get-caller-identity --query 'Account' --output text 2>/dev/null)"
   pass "AWS authenticated (account: $account)"
 else
-  fail "AWS not authenticated" "Run: aws sso login --profile default"
+  fail_fatal "AWS not authenticated" "Run: aws sso login --profile default"
 fi
 
 region="$(aws configure get region 2>/dev/null || echo "")"
@@ -85,7 +108,7 @@ if kubectl cluster-info >/dev/null 2>&1; then
   ctx="$(kubectl config current-context 2>/dev/null)"
   pass "Cluster reachable (context: $ctx)"
 else
-  fail "Cluster not reachable" "Run: aws eks update-kubeconfig --name EKS-boomi-runtime-cluster --region ap-east-1"
+  fail_fatal "Cluster not reachable" "Run: aws eks update-kubeconfig --name EKS-boomi-runtime-cluster --region ap-east-1"
 fi
 
 section "Repository Root"
@@ -159,20 +182,55 @@ for secret in psmdb-encryption-key psmdb-secrets; do
   fi
 done
 
-pod_count="$(kubectl -n mongodb get pods -l app.kubernetes.io/component=mongod --no-headers 2>/dev/null | grep -c Running || echo 0)"
-if [[ "$pod_count" -ge 3 ]]; then
-  pass "MongoDB pods: $pod_count Running"
-elif [[ "$pod_count" -ge 1 ]]; then
-  fail "MongoDB pods: only $pod_count Running (expected 3)" "Check pod events"
-else
-  fail "No MongoDB pods running" "Apply workload manifests"
+pod_count="$(count_ready_mongod_pods)"
+if [[ "$pod_count" -lt 3 ]]; then
+  kubectl -n mongodb rollout status statefulset/psmdb-rs0 --timeout=300s >/dev/null 2>&1 || true
+  pod_count="$(count_ready_mongod_pods)"
 fi
 
-pvc_bound="$(kubectl -n mongodb get pvc --no-headers 2>/dev/null | grep -c Bound || echo 0)"
+if [[ "$pod_count" -ge 3 ]]; then
+  pass "MongoDB pods: $pod_count Ready"
+elif [[ "$pod_count" -ge 1 ]]; then
+  fail "MongoDB pods: only $pod_count Ready (expected 3)" "Check pod events"
+else
+  fail "No MongoDB pods Ready" "Apply workload manifests"
+fi
+
+pvc_bound="$(kubectl -n mongodb get pvc --no-headers 2>/dev/null | awk '/Bound/{c++} END{print c+0}')"
 if [[ "$pvc_bound" -ge 3 ]]; then
   pass "MongoDB PVCs: $pvc_bound Bound"
 else
   fail "MongoDB PVCs: $pvc_bound Bound (expected 3)" "Check StorageClass and EBS CSI"
+fi
+
+# Replica set auth/health check catches split-brain where pods are present but secondaries are unreachable.
+if [[ "$pod_count" -ge 1 ]] && kubectl -n mongodb get secret internal-psmdb-users >/dev/null 2>&1; then
+  if kubectl -n mongodb rollout status statefulset/psmdb-rs0 --timeout=300s >/dev/null 2>&1; then
+    pass "MongoDB rollout stabilized before auth/health check"
+  else
+    fail "MongoDB rollout did not stabilize in 300s" "StatefulSet is still reconciling; re-run after convergence"
+  fi
+
+  pod_count="$(count_ready_mongod_pods)"
+  mongo_user="$(kubectl -n mongodb get secret internal-psmdb-users -o jsonpath='{.data.MONGODB_CLUSTER_ADMIN_USER}' 2>/dev/null | base64 -d || true)"
+  mongo_pass="$(kubectl -n mongodb get secret internal-psmdb-users -o jsonpath='{.data.MONGODB_CLUSTER_ADMIN_PASSWORD}' 2>/dev/null | base64 -d || true)"
+
+  if [[ "$pod_count" -lt 3 ]]; then
+    fail "MongoDB replica set auth/health skipped" "Only $pod_count/3 mongod pods are Ready"
+  elif [[ -n "$mongo_user" && -n "$mongo_pass" ]]; then
+    rs_health="$(kubectl -n mongodb exec psmdb-rs0-0 -c mongod -- sh -c "mongosh --host 127.0.0.1 --port 27017 --username '$mongo_user' --password '$mongo_pass' --authenticationDatabase admin --tls --tlsAllowInvalidCertificates --tlsCAFile /etc/mongodb-ssl/ca.crt --tlsCertificateKeyFile /tmp/tls.pem --quiet --eval 'const m=rs.status().members||[]; const ok=m.length>=3 && m.every(x=>x.health===1); print(ok?\"OK\":\"FAIL\")'" 2>/dev/null || true)"
+    rs_health="$(echo "$rs_health" | tr -d '[:space:]')"
+
+    if [[ "$rs_health" == "OK" ]]; then
+      pass "MongoDB replica set auth/health: all members reachable"
+    else
+      fail "MongoDB replica set auth/health failed" "Check rs.status() and mongod logs for x509/internal user issues"
+    fi
+  else
+    fail "MongoDB cluster-admin credentials unavailable" "Check secret internal-psmdb-users keys"
+  fi
+else
+  fail "MongoDB replica set auth/health skipped" "MongoDB pod or internal user secret missing"
 fi
 
 # ─── POSTGRESQL ──────────────────────────────────────────────────────────────
@@ -196,7 +254,7 @@ else
   fail "Namespace signoz missing" "Run: scripts/provision.sh signoz"
 fi
 
-signoz_pods="$(kubectl -n signoz get pods --no-headers 2>/dev/null | grep -c Running || echo 0)"
+signoz_pods="$(kubectl -n signoz get pods --no-headers 2>/dev/null | awk '/Running/{c++} END{print c+0}')"
 if [[ "$signoz_pods" -ge 3 ]]; then
   pass "SigNoz pods: $signoz_pods Running"
 elif [[ "$signoz_pods" -ge 1 ]]; then

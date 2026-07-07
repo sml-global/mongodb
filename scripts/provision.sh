@@ -7,17 +7,19 @@ Usage:
   provision.sh <scope> [--auto-approve] [--bootstrap-platform-controllers]
 
 Scopes:
-  all       Provision MongoDB + PostgreSQL prerequisites (separate states), then MongoDB k8s stack.
-  mongodb   Provision MongoDB prerequisites only, then MongoDB k8s stack.
-  mongo     Alias of mongodb.
-  pg        Provision PostgreSQL prerequisites only.
-  signoz    Provision SigNoz application telemetry stack.
+  all                  Provision MongoDB + PostgreSQL prerequisites (separate states), then MongoDB k8s stack.
+  mongodb              Provision MongoDB prerequisites only, then MongoDB k8s stack.
+  mongo                Alias of mongodb.
+  pg                   Provision PostgreSQL prerequisites only.
+  signoz               Provision SigNoz application telemetry stack.
+  signoz-observability Apply dashboards + alert rules as code (requires signoz-api-key Secret; see docs/references/signoz-dashboard-import-pack.md).
 
 Examples:
   bash scripts/provision.sh all
   bash scripts/provision.sh mongodb
   bash scripts/provision.sh mongo
   bash scripts/provision.sh pg --auto-approve
+  bash scripts/provision.sh signoz-observability --auto-approve
   bash scripts/provision.sh signoz
   bash scripts/provision.sh mongodb --bootstrap-platform-controllers
 EOF
@@ -95,8 +97,15 @@ case "$SCOPE" in
   signoz)
     run_k8s signoz
     ;;
+  signoz-observability)
+    signoz_obs_args=()
+    if [[ "$AUTO_APPROVE" == "true" ]]; then
+      signoz_obs_args+=("--auto-approve")
+    fi
+    bash "$ROOT_DIR/scripts/provision-signoz-observability.sh" "${signoz_obs_args[@]}"
+    ;;
   *)
-    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, signoz" >&2
+    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, signoz, signoz-observability" >&2
     usage
     exit 1
     ;;

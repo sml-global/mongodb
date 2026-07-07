@@ -4,9 +4,18 @@ Rollback, disaster recovery, credential rotation, and state recovery procedures.
 
 **Who this is for:** Infra Operators (execute) and Infra Architects (design/approve).
 
+**When to use this document:**
+- A verification command fails and the component is unhealthy
+- A credential is lost, rotated, or compromised
+- Terraform state is corrupted or diverged
+- A full environment rebuild is required (last resort)
+
+All procedures here are **trigger-based** — run only when an incident or planned maintenance requires it. They are not part of routine recurring checks.
+
 **Related docs:**
 - [Verification Commands](verification-commands.md) — confirm recovery succeeded
 - [Operator Runbook](../guides/operator-runbook.md) — normal operating procedures
+- [Operator Runbook § Day-2 Operations](../guides/operator-runbook.md#day-2-operations-ongoing-maintenance) — trigger table referencing this doc
 - [Component Catalog](component-catalog.md) — component dependencies
 
 ---
@@ -281,21 +290,57 @@ aws rds restore-db-cluster-to-point-in-time \
 For a complete fresh dev environment:
 
 ```bash
-# 1. Delete workloads
-kubectl delete -k k8s/overlays/dev
-kubectl -n signoz delete helmrelease signoz
+# 1. Teardown provisioned components (all-at-once)
+bash scripts/destroy.sh all --auto-approve
 
-# 2. Delete secrets and escrow
-kubectl -n mongodb delete secret psmdb-encryption-key psmdb-secrets
-rm -f .local-dev-encryption-key.txt .local-dev-user-passwords.txt
-
-# 3. Re-provision from scratch
+# 2. Re-provision from scratch
 bash scripts/provision.sh all
 scripts/bootstrap-dev-secrets.sh
+scripts/create-audit-writer-secret.sh
 scripts/validate-dev-render.sh
+
+# 3. Re-provision SigNoz + its dashboards/alerts
+scripts/create-signoz-root-user-secret.sh
+bash scripts/provision.sh signoz
+# Service Account + API key are bootstrapped automatically on first run
+# (headless browser script) -- see docs/references/signoz-dashboard-import-pack.md
+bash scripts/provision.sh signoz-observability --auto-approve
 
 # 4. Verify
 scripts/verify-platform-health.sh
+scripts/run-audit-telemetry-test.sh
+
+# If MongoDB is reconciling/rolling during verification, wait for settle then re-run:
+kubectl -n mongodb rollout status statefulset/psmdb-rs0 --timeout=300s
+scripts/verify-platform-health.sh
+scripts/run-audit-telemetry-test.sh
+```
+
+### Component-by-component teardown
+
+Use these to remove stacks one by one after tests:
+
+```bash
+# Remove SigNoz dashboards/alerts Terraform state only (run before 'signoz'
+# below so the API is still reachable for a clean delete)
+bash scripts/destroy.sh signoz-observability --auto-approve
+
+# Remove MongoDB stack only (k8s workloads + mongodb terraform scope)
+bash scripts/destroy.sh mongodb --auto-approve
+
+# Remove PostgreSQL only (postgresql terraform scope)
+bash scripts/destroy.sh pg --auto-approve
+
+# Remove SigNoz only (helmrelease + namespace)
+bash scripts/destroy.sh signoz
+```
+
+If the signoz namespace is stuck in `Terminating`, clear ClickHouse and namespace finalizers:
+
+```bash
+kubectl -n signoz get clickhouseinstallations.clickhouse.altinity.com -o name \
+  | xargs -I{} kubectl -n signoz patch {} --type='json' -p='[{"op":"remove","path":"/metadata/finalizers"}]'
+kubectl patch namespace signoz --type='json' -p='[{"op":"replace","path":"/spec/finalizers","value":[]}]'
 ```
 
 > **Warning:** This destroys all MongoDB data and SigNoz telemetry history. Only use for dev environments.

@@ -8,3 +8,5 @@ resources:
   - certificates.yaml
   - pdb.yaml
   - psmdb-cluster.yaml
+  - mongodb-metrics-collector.yaml
+  - postgres-metrics-collector.yaml

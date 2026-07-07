@@ -15,12 +15,12 @@ Each service can be provisioned independently or together (`scripts/provision.sh
 
 ## Read This First
 
-| I am a... | I want to... | Start here |
-|---|---|---|
-| **Infra Operator** | Provision infrastructure, troubleshoot | [Environment Setup](docs/guides/environment-setup.md) → [Operator Runbook](docs/guides/operator-runbook.md) |
-| **Infra Architect** | Understand components, architecture, maintain | [Component Catalog](docs/references/component-catalog.md) → [Architect Reference](docs/guides/architect-reference.md) |
-| **Boomi Admin** | Write audit logs, use telemetry | [Boomi Integration Guide](docs/guides/boomi-integration-guide.md) |
-| **Enterprise Architect** | Review design, security, compliance | [Enterprise Architecture](docs/guides/enterprise-architecture.md) |
+| I am a... | I want to... | Why | Start here |
+|---|---|---|---|
+| **Infra Operator** | Provision infrastructure, troubleshoot | You run the scripts that create/destroy real AWS + Kubernetes resources — you need the full setup and step-by-step runbook. | [Environment Setup](docs/guides/environment-setup.md) → [Operator Runbook](docs/guides/operator-runbook.md) |
+| **Infra Architect** | Understand components, architecture, maintain | You own the design decisions behind each component and need the full dependency/state picture to change them safely. | [Component Catalog](docs/references/component-catalog.md) → [Architect Reference](docs/guides/architect-reference.md) |
+| **Boomi Admin** | Write audit logs, use telemetry | You integrate against this platform (MongoDB + SigNoz) from Boomi — you need the API/library contract, not infrastructure provisioning. | [Boomi Integration Guide](docs/guides/boomi-integration-guide.md) |
+| **Enterprise Architect** | Review design, security, compliance | You need risk/compliance/production-readiness context, not hands-on provisioning steps. | [Enterprise Architecture](docs/guides/enterprise-architecture.md) |
 
 Full documentation hub: [docs/index.md](docs/index.md)
 
@@ -79,6 +79,8 @@ This section explains why each script exists, not only the command name.
 | `scripts/open-signoz-ui.sh` | Access helper for SigNoz dashboard. Supports dev port-forward and production ingress URL discovery. | Opening SigNoz UI in dev and production. |
 | `scripts/bootstrap-dev-secrets.sh` | Creates MongoDB encryption key and all four Percona operator user credential secrets (backup, clusterAdmin, clusterMonitor, userAdmin). If `.local-dev-user-passwords.txt` exists, reads passwords from it; if the file does not exist, auto-generates all passwords and saves them there. Skips any secret that already exists in the cluster. | After infra provisioning, before MongoDB overlay apply. |
 | `scripts/validate-dev-render.sh` | Renders and checks dev overlay output locally. | Before applying MongoDB manifests. |
+| `scripts/create-signoz-root-user-secret.sh` | Bootstraps the SigNoz admin account automatically (no manual UI signup) via SigNoz's root-user feature. | Once per environment, before/with `provision.sh signoz`. |
+| `scripts/provision.sh signoz-observability` | Applies SigNoz dashboards + alert rules as code (K8s, MongoDB, PostgreSQL, OTel Collector, Boomi telemetry) via Terraform. Idempotent — safe to re-run. | After SigNoz is up and a one-time Service Account/API key exists — see [SigNoz Dashboard Import Pack](docs/references/signoz-dashboard-import-pack.md). |
 
 ## SigNoz (Application Telemetry)
 
@@ -95,6 +97,18 @@ How to install:
 ```bash
 bash scripts/provision.sh signoz
 ```
+
+The admin account is bootstrapped automatically (no manual "Sign Up" race) —
+run `scripts/create-signoz-root-user-secret.sh` once before/with the command
+above. Dashboards and alert rules for K8s, MongoDB, PostgreSQL, the OTel
+Collector, and Boomi app telemetry are also managed as code:
+
+```bash
+bash scripts/provision.sh signoz-observability --auto-approve
+```
+
+See [docs/references/signoz-dashboard-import-pack.md](docs/references/signoz-dashboard-import-pack.md)
+for the one-time prerequisite and the full list of what's created.
 
 How to open the dashboard in development:
 

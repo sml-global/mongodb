@@ -1,0 +1,222 @@
+# Collects Aurora PostgreSQL metrics from AWS CloudWatch (namespace AWS/RDS) via
+# the Prometheus CloudWatch Exporter, scraped by an OpenTelemetry Collector and
+# forwarded as OTLP to the SigNoz otel-collector — the same "external metrics
+# source -> local scrape -> OTLP forward" pattern used for MongoDB, but here the
+# source is CloudWatch instead of MongoDB directly (Aurora is fully managed;
+# there is no host/pod to run an agent on).
+#
+# Requires the `postgres-cloudwatch-monitor-role` IAM role + EKS Pod Identity
+# association created by platform-prerequisites/terraform/postgresql (read-only:
+# cloudwatch:ListMetrics, GetMetricData, GetMetricStatistics — no database
+# credentials or write access of any kind).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-metrics-collector
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-cloudwatch-exporter-config
+data:
+  config.yml: |
+    region: ap-east-1
+    metrics:
+      # Cluster-level (Aurora) metrics
+      - aws_namespace: AWS/RDS
+        aws_metric_name: AuroraReplicaLag
+        aws_dimensions: [DBClusterIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: VolumeBytesUsed
+        aws_dimensions: [DBClusterIdentifier]
+        aws_statistics: [Average]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: VolumeReadIOPs
+        aws_dimensions: [DBClusterIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: VolumeWriteIOPs
+        aws_dimensions: [DBClusterIdentifier]
+        aws_statistics: [Average, Maximum]
+      # Instance-level (writer) metrics
+      - aws_namespace: AWS/RDS
+        aws_metric_name: CPUUtilization
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: DatabaseConnections
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: FreeableMemory
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: FreeLocalStorage
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: ReadIOPS
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: WriteIOPS
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: ReadLatency
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: WriteLatency
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: NetworkReceiveThroughput
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: NetworkTransmitThroughput
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: SwapUsage
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: ReadThroughput
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: WriteThroughput
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average, Maximum]
+      # Instance-storage metrics: exist for this Aurora instance class but are
+      # of limited/no operational meaning for Aurora (no classic EBS-attached
+      # volume — see docs/guides/architect-reference.md "PostgreSQL Metrics"
+      # for why these panels may still legitimately show flat/zero data).
+      - aws_namespace: AWS/RDS
+        aws_metric_name: DiskQueueDepth
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: EBSByteBalance%
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average]
+      - aws_namespace: AWS/RDS
+        aws_metric_name: EBSIOBalance%
+        aws_dimensions: [DBInstanceIdentifier]
+        aws_statistics: [Average]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-metrics-collector-config
+data:
+  config.yaml: |
+    receivers:
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'aws-cloudwatch-rds-metrics'
+              scrape_interval: 300s
+              scrape_timeout: 120s
+              static_configs:
+                - targets: ['127.0.0.1:9106']
+      # Self-telemetry: scrape this collector's own internal Prometheus metrics
+      # endpoint (otelcol_* series) and forward them too, so the "OpenTelemetry
+      # Collector Pipeline Health" dashboard has data for this collector instance.
+      prometheus/self:
+        config:
+          scrape_configs:
+            - job_name: 'otelcol-self'
+              scrape_interval: 60s
+              static_configs:
+                - targets: ['127.0.0.1:8888']
+
+    processors:
+      batch: {}
+      resource:
+        attributes:
+          - key: service.name
+            value: "aurora-pg18-dev"
+            action: upsert
+      resource/self:
+        attributes:
+          - key: service.name
+            value: "postgres-metrics-collector"
+            action: upsert
+
+    exporters:
+      otlp:
+        endpoint: signoz-otel-collector.signoz.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+    service:
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          processors: [resource, batch]
+          exporters: [otlp]
+        metrics/self:
+          receivers: [prometheus/self]
+          processors: [resource/self, batch]
+          exporters: [otlp]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-metrics-collector
+  labels:
+    app.kubernetes.io/name: postgres-metrics-collector
+    app.kubernetes.io/part-of: mongodb-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-metrics-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-metrics-collector
+    spec:
+      serviceAccountName: postgres-metrics-collector
+      containers:
+        - name: cloudwatch-exporter
+          image: quay.io/prometheus/cloudwatch-exporter:v0.18.0
+          ports:
+            - containerPort: 9106
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 200m
+              memory: 512Mi
+          volumeMounts:
+            - name: cloudwatch-exporter-config
+              mountPath: /config
+              readOnly: true
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.155.0
+          args: ["--config=/etc/otel/config.yaml"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: otel-config
+              mountPath: /etc/otel
+              readOnly: true
+      volumes:
+        - name: cloudwatch-exporter-config
+          configMap:
+            name: postgres-cloudwatch-exporter-config
+        - name: otel-config
+          configMap:
+            name: postgres-metrics-collector-config

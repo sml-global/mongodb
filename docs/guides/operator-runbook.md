@@ -26,7 +26,7 @@ nano platform-prerequisites/terraform/mongodb/terraform.tfvars
 nano platform-prerequisites/terraform/postgresql/terraform.tfvars
 
 # Provision everything
-bash scripts/provision-platform-prereq.sh all
+bash scripts/provision.sh all
 scripts/bootstrap-dev-secrets.sh
 scripts/create-audit-writer-secret.sh
 scripts/validate-dev-render.sh
@@ -164,9 +164,124 @@ bash scripts/provision.sh signoz
 
 Expected: SigNoz pods running in namespace `signoz`.
 
-> **Note:** SigNoz uses a first-user signup model. The first person to open the dashboard becomes the admin. See [Boomi Integration Guide § SigNoz Dashboard](boomi-integration-guide.md#accessing-signoz-dashboard).
-
 > **Security:** The ClickHouse password in `gitops/signoz/base/helmreleases.yaml` is set to a placeholder (`CHANGE_ME_BEFORE_PRODUCTION`). Replace it with a real password before deploying to any shared or production environment.
+
+### Step 7A: Bootstrap the SigNoz Admin Account (Automated, No Manual Signup)
+
+This environment uses SigNoz's **root user** feature (v0.112.0+) so the admin
+account is created automatically at pod startup -- nobody needs to race to be
+"first to sign up". Run this **before** Step 7 on a fresh environment (or
+before restarting `signoz-0` if SigNoz is already up):
+
+```bash
+bash scripts/create-signoz-root-user-secret.sh
+bash scripts/provision.sh signoz
+```
+
+What this does:
+- Creates the `signoz-root-user` Secret (namespace `signoz`) with a generated
+  email/password meeting SigNoz's password policy (12+ chars, upper/lower/
+  digit/symbol)
+- The HelmRelease (`gitops/signoz/base/helmreleases.yaml`) wires
+  `SIGNOZ_USER_ROOT_*` env vars to that Secret, so the admin account exists
+  the moment the `signoz-0` pod starts
+
+Retrieve the credentials any time (source of truth is the Secret, not any
+file):
+
+```bash
+kubectl -n signoz get secret signoz-root-user -o jsonpath='{.data.email}' | base64 -d; echo
+kubectl -n signoz get secret signoz-root-user -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+A convenience copy is also appended to the gitignored
+`.local-dev-user-passwords.txt` the first time the script runs.
+
+After logging in with those credentials:
+1. **Settings** -> **Organization** -> invite additional admins (at least one
+   backup admin) and least-privilege users:
+   - Boomi Admin: **Editor**
+   - Enterprise Architect: **Viewer**
+2. Record admin ownership in your team runbook.
+3. Confirm ingress controls for production (SSO/OIDC + restricted source
+   networks) before broad access.
+
+> **Fallback (pre-v0.112 SigNoz, or if you prefer manual control):** skip
+> `create-signoz-root-user-secret.sh` and instead let the first person to
+> open the dashboard sign up manually -- that person becomes the admin. See
+> [Boomi Integration Guide § SigNoz Dashboard](boomi-integration-guide.md#accessing-signoz-dashboard).
+
+### Step 7A.1: SigNoz First-Login Checklist (Do This In Order)
+
+Use this when the SigNoz dashboard shows onboarding cards ("add data source", "send logs/traces/metrics", and similar).
+
+| Dashboard prompt | What to do in this repo | Required now? |
+|---|---|---|
+| Add your first data source | Skip for now. OTLP ingestion path is already wired by platform setup. | Optional |
+| Send your logs | Validate with `scripts/verify-platform-health.sh --smoke-test` or `scripts/run-audit-telemetry-test.sh`. | Yes |
+| Send your traces | Covered by the same smoke/test scripts. | Yes |
+| Send your metrics | Not required for current audit-log acceptance path. | Optional |
+| Setup alerts | Automated -- see Step 7B below (`signoz-observability`). Add extra alerts by hand only for cases the baseline set doesn't cover. | Automated |
+| Setup saved views | Save baseline log filters (for example `service.name = oms-audit-writer`). | Recommended (day-2) |
+| Setup dashboards | Automated -- see Step 7B below (`signoz-observability`). | Automated |
+
+Minimum Day-1 completion criteria:
+1. Admin account created (automated root-user bootstrap, or manual first signup as fallback).
+2. Role-based users invited (Admin backup, Editor, Viewer).
+3. Log/trace ingestion verified by smoke/test script.
+4. Baseline dashboards + alerts applied (Step 7B).
+
+Notification setup note:
+- SMTP is only required if you want email alert notifications.
+- If you use Slack/webhook/PagerDuty notification channels, SMTP is not required.
+
+### Step 7B: Provision Dashboards & Alerts (as Code)
+
+Once SigNoz is reachable and the admin account exists, dashboards and alert
+rules for every monitored signal (K8s nodes, MongoDB, PostgreSQL, the OTel
+Collector pipelines, Boomi app telemetry) are applied as code via Terraform --
+not clicked together by hand.
+
+**Fully automated, including the Service Account/API key**: SigNoz itself
+requires a Service Account + API key before its Terraform provider can
+authenticate, but this is no longer a manual step -- the first time you run
+the command below and the `signoz-api-key` Secret doesn't exist yet, it
+automatically invokes `scripts/bootstrap-signoz-service-account.sh`, which
+drives a headless Chromium browser (Playwright) through the same steps a
+human would use (create Service Account -> assign `signoz-admin` role ->
+create an API key) and stores the result as the `signoz-api-key` Secret. No
+UI clicking, no separate port-forward session required.
+
+One-time setup for the headless browser itself (uses `python3`, already a
+required tool -- see [Environment Setup](environment-setup.md)):
+
+```bash
+python3 -m pip install playwright
+python3 -m playwright install chromium
+```
+
+From then on, applying (and re-applying) dashboards/alerts is one command,
+safe to run repeatedly (idempotent -- verified: two consecutive runs produce
+the same 5 dashboard + 5 alert IDs with `0 added, 0 destroyed`):
+
+```bash
+bash scripts/provision.sh signoz-observability --auto-approve
+```
+
+Full details, the exact list of dashboards/alerts created, and a manual
+JSON-import fallback: [SigNoz Dashboard Import Pack](../references/signoz-dashboard-import-pack.md).
+
+### Step 7C: Validate SigNoz Reachability For Intended Persona
+
+Before handing off dashboard usage, verify the access path matches the target user:
+
+- Infra Operator/Architect in dev: `scripts/open-signoz-ui.sh`
+- Shared/prod users: `scripts/open-signoz-ui.sh --mode ingress`
+
+Checks:
+- Viewer account can log in and open dashboards
+- Editor account can access logs/traces query pages
+- Non-admin accounts cannot access organization admin settings
 
 ### Step 8: Verify Deployment
 
@@ -175,6 +290,45 @@ scripts/verify-platform-health.sh
 ```
 
 Or check specific components — see [Verification Commands](../references/verification-commands.md).
+
+---
+
+## Day-2 Operations (Ongoing Maintenance)
+
+Use this section after initial provisioning to run recurring checks and controlled changes.
+
+### Recurring Health Checks
+
+Run at least daily in active environments and after any infrastructure or integration change:
+
+```bash
+scripts/verify-platform-health.sh
+```
+
+For path-level confidence (write/read/telemetry), run post-change smoke:
+
+```bash
+scripts/verify-platform-health.sh --smoke-test
+```
+
+### Trigger-Based Maintenance
+
+Run these only when a trigger occurs:
+
+| Trigger | Action |
+|---|---|
+| MongoDB URI or credentials changed | Re-run `scripts/create-audit-writer-secret.sh` |
+| New telemetry users need access | Update SigNoz users/roles in Settings |
+| Secret rotation or controlled rebuild | Re-run `scripts/bootstrap-dev-secrets.sh` with change record |
+| Incident or failed health check | Follow [Recovery Procedures](../references/recovery-procedures.md) |
+
+### Day-2 Change Checklist
+
+1. Confirm target scope and rollback approach.
+2. Run the minimum provisioning scope (`mongodb`, `pg`, or `signoz`).
+3. Execute post-change verification (`scripts/verify-platform-health.sh`).
+4. Run smoke validation for integration-impacting changes.
+5. Record outcome, owner, and timestamp in team runbook.
 
 ---
 
@@ -231,6 +385,9 @@ Do not apply infrastructure until these gates are satisfied.
 | `scripts/verify-platform-health.sh --preflight` | Environment-only check | Before provisioning |
 | `scripts/open-signoz-ui.sh` | SigNoz dashboard access (dev) | When viewing telemetry |
 | `scripts/open-signoz-ui.sh --mode ingress` | SigNoz dashboard URL (prod) | Production access |
+| `scripts/create-signoz-root-user-secret.sh` | Bootstrap SigNoz admin account (no manual signup) | Once per environment, before/with `provision.sh signoz` |
+| `bash scripts/provision.sh signoz-observability --auto-approve` | Apply dashboards + alert rules as code | After SigNoz is up and the one-time API key Secret exists |
+| `bash scripts/destroy.sh <mongodb\|pg\|signoz\|all>` | Scoped teardown | Post-test cleanup, controlled rebuild — see [Recovery Procedures § Component-by-component teardown](../references/recovery-procedures.md#component-by-component-teardown) |
 
 ---
 
@@ -288,6 +445,11 @@ Do not apply infrastructure until these gates are satisfied.
 | Escrow file invalid | Restore from backup or regenerate for fresh environment |
 | Pod CrashLooping | Check logs: `kubectl -n mongodb logs <pod> -c mongod --tail=60` |
 | Wrong ServiceAccount | Run `scripts/verify-dev-identity.sh` to identify mismatch |
+| Verification fails during rolling reconcile | Wait for rollout completion: `kubectl -n mongodb rollout status statefulset/psmdb-rs0 --timeout=300s`, then re-run `scripts/verify-platform-health.sh` |
+| Replica set auth/health check intermittently fails right after clean rebuild | Wait for all three mongod pods to be Ready and CR status to stabilize, then re-run verification |
+| Repeated cert-manager re-issuance (`psmdb-ssl*` revisions climbing rapidly) with continuous Mongo pod rotation | Keep `psmdb-ssl` and `psmdb-ssl-internal` operator-managed only; do not define duplicate `Certificate` resources in `k8s/base/certificates.yaml` |
+| `run-audit-telemetry-test.sh` pod exits OOMKilled | Re-run with updated script defaults; if still constrained, raise pod memory limit in `scripts/run-audit-telemetry-test.sh` |
+| `run-audit-telemetry-test.sh` fails with `not primary`, `not authorized`, or `MongoServerSelectionError ... connection <monitor> ... closed` | Use the updated script flow (rollout gate + replicaSet URI + database-admin creds + mounted internal TLS cert); if failures persist, confirm `scripts/verify-platform-health.sh` is green first |
 
 ### SigNoz Issues
 
@@ -297,8 +459,11 @@ Do not apply infrastructure until these gates are satisfied.
 | HelmRelease not reconciling | Check Flux: `kubectl -n flux-system logs deployment/helm-controller --tail=30` |
 | Dashboard unreachable | Verify port-forward: `kubectl -n signoz port-forward svc/signoz 3301:8080` |
 | Telemetry send fails | Use frontend endpoint (`3301/v1/logs`), not collector directly |
-
-### Render And Identity Checks
+| Namespace stuck `Terminating` after `scripts/destroy.sh signoz` | ClickHouse finalizer stuck; see [Recovery Procedures § Component-by-component teardown](../references/recovery-procedures.md#component-by-component-teardown) |
+| `signoz-0` pod crash-loops right after adding root-user env vars: `failed to validate config "user"` | Root-user password doesn't meet policy (12+ chars, upper/lower/digit/symbol from `~!@#$%^&*()_+`-={}\|[]\:"<>?,./`, no other characters). Delete and re-run `scripts/create-signoz-root-user-secret.sh` (its generator already satisfies this). |
+| `bash scripts/provision.sh signoz-observability` fails with `Secret 'signoz-api-key' not found` | This should self-heal automatically (the script bootstraps it via headless browser). If it still fails, ensure `playwright` is installed (`python3 -m pip install playwright && python3 -m playwright install chromium`) and that `scripts/create-signoz-root-user-secret.sh` + `scripts/provision.sh signoz` ran first. |
+| `bash scripts/provision.sh signoz-observability` fails with `dial tcp 127.0.0.1:3301: connect: connection refused` | The local port-forward isn't running; start one with `scripts/open-signoz-ui.sh` (or pass `--endpoint` pointing at a reachable SigNoz URL). |
+| `terraform apply` for `signoz-observability` reports `Error: Provider returned invalid result object after apply` | Known cosmetic limitation in the early-stage SigNoz Terraform provider (v0.0.14) on `signoz_alert` resources; the alert is usually already correctly created. Verify with `curl $SIGNOZ_ENDPOINT/api/v1/rules -H "SIGNOZ-API-KEY: $SIGNOZ_ACCESS_TOKEN"`, then `terraform untaint <resource>` if needed. See the Terraform root's [README.md](../../platform-prerequisites/terraform/signoz-observability/README.md). |
 
 | Symptom | Fix |
 |---|---|

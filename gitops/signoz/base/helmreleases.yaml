@@ -18,5 +18,23 @@ spec:
       storageClass: gp3-mongodb
     clickhouse:
       password: "CHANGE_ME_BEFORE_PRODUCTION"
+    signoz:
+      # Bootstraps the SigNoz admin (root) user at pod startup so no manual
+      # "Sign Up" step is needed in the UI. Requires SigNoz v0.112.0+.
+      # Secret is created by scripts/create-signoz-root-user-secret.sh.
+      # Ref: https://signoz.io/docs/manage/administrator-guide/configuration/root-user/
+      env:
+        SIGNOZ_USER_ROOT_ENABLED: "true"
+        SIGNOZ_USER_ROOT_ORG_NAME: "oms"
+        SIGNOZ_USER_ROOT_EMAIL:
+          valueFrom:
+            secretKeyRef:
+              name: signoz-root-user
+              key: email
+        SIGNOZ_USER_ROOT_PASSWORD:
+          valueFrom:
+            secretKeyRef:
+              name: signoz-root-user
+              key: password
   install:
     createNamespace: true

@@ -2,6 +2,14 @@
 
 Every platform component deployed or managed by this repository. For each component: what it is, why we use it, how it helps, who owns it, and what depends on it.
 
+**When to consult this document:**
+- Understanding what a component does before provisioning or troubleshooting
+- Planning upgrades (check version inventory and upgrade notes)
+- Assessing impact of a change (check dependency chains)
+- Onboarding new team members to the platform
+
+**Maintenance cadence:** Review the Version Inventory quarterly (or when notified of security patches) and update versions after validated upgrades.
+
 ## Version Inventory
 
 Single source of truth for all deployed versions. Update this table when any component is upgraded.
@@ -82,7 +90,7 @@ Single source of truth for all deployed versions. Update this table when any com
 
 | Aspect | Detail |
 |---|---|
-| **What** | AWS Aurora PostgreSQL 16-compatible cluster with a single provisioned writer instance. |
+| **What** | AWS Aurora PostgreSQL 18-compatible cluster with a single provisioned writer instance. |
 | **Why** | Primary application database for OMS — stores orders, inventory, customers, and operational data. Relational model suits transactional workloads with strong consistency. |
 | **How it helps** | Managed service with automatic backups, failover, and patching. Single writer is cost-effective for dev; scales to multi-AZ in production. |
 | **Namespace** | N/A (AWS managed service, not in Kubernetes) |
@@ -105,6 +113,62 @@ Single source of truth for all deployed versions. Update this table when any com
 | **Depended on by** | Boomi audit log library (telemetry send), operators (dashboard) |
 | **Provisioned by** | `scripts/provision.sh signoz` |
 | **Verification** | [Verification Commands § SigNoz](verification-commands.md#signoz) |
+
+### SigNoz K8s Infra Monitoring
+
+| Aspect | Detail |
+|---|---|
+| **What** | The official SigNoz `k8s-infra` Helm chart — a DaemonSet (host metrics per node) plus a Deployment (cluster-level k8s object metrics), both OpenTelemetry Collector agents. |
+| **Why** | Without it, SigNoz only sees application-level audit-log telemetry. This adds EKS node/pod CPU, memory, disk, and network visibility in the same dashboard. |
+| **How it helps** | Operators can see node capacity and pod health without a separate monitoring stack (e.g., Prometheus/Grafana). Directly answers "is the cluster healthy" without leaving SigNoz. |
+| **Namespace** | `signoz` |
+| **Owner** | Infra Architect / Platform team |
+| **Depends on** | SigNoz otel-collector (data destination), Flux (HelmRelease delivery) |
+| **Depended on by** | Operators (Infrastructure Monitoring → Hosts dashboard) |
+| **Provisioned by** | `bash scripts/provision.sh signoz` (applies `gitops/signoz/base/helmrelease-k8s-infra.yaml`) |
+| **Verification** | `kubectl -n signoz get pods -l app.kubernetes.io/name=k8s-infra` — see [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring) |
+
+### MongoDB Metrics Collector
+
+| Aspect | Detail |
+|---|---|
+| **What** | A dedicated lightweight OpenTelemetry Collector (`otel/opentelemetry-collector-contrib`) running in the `mongodb` namespace with the native `mongodb` receiver. |
+| **Why** | MongoDB is not monitored as infrastructure by default — only Boomi's application-level audit writes are visible in SigNoz. This adds replica-set connections, operations, replication, memory, and cache metrics. |
+| **How it helps** | Reuses the Percona-Operator-provisioned `clusterMonitor` credentials (no new secrets) and the existing `psmdb-ssl-internal` TLS cert, so MongoDB health is visible in the same SigNoz instance as everything else. |
+| **Namespace** | `mongodb` |
+| **Owner** | Infra Architect / Platform team |
+| **Depends on** | MongoDB ReplicaSet (`psmdb-secrets`, `psmdb-ssl-internal`), SigNoz otel-collector (data destination) |
+| **Depended on by** | Operators (MongoDB dashboards/alerts in SigNoz) |
+| **Provisioned by** | `kubectl apply -k k8s/overlays/dev` (applies `k8s/base/mongodb-metrics-collector.yaml`) |
+| **Verification** | `kubectl -n mongodb logs deployment/mongodb-metrics-collector --tail=50` — see [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring) |
+
+### PostgreSQL Metrics Collector
+
+| Aspect | Detail |
+|---|---|
+| **What** | A two-container Deployment in the `mongodb` namespace: a Prometheus CloudWatch Exporter (`quay.io/prometheus/cloudwatch-exporter`) polling AWS CloudWatch `AWS/RDS` metrics, plus an OpenTelemetry Collector scraping and forwarding them via OTLP. |
+| **Why** | Aurora PostgreSQL is fully managed — there is no host/pod to run a direct monitoring agent on. CloudWatch already publishes CPU, IOPS, connections, replication lag, and volume metrics for it; this brings those into the same SigNoz dashboard as MongoDB and Boomi telemetry. |
+| **How it helps** | Uses a dedicated least-privilege IAM role (read-only: `cloudwatch:ListMetrics`, `GetMetricData`, `GetMetricStatistics`) bound via EKS Pod Identity — no database credentials, no write access to any AWS resource. |
+| **Namespace** | `mongodb` |
+| **Owner** | Infra Architect / Platform team |
+| **Depends on** | `aws_iam_role.postgres_cloudwatch_monitor` + `aws_eks_pod_identity_association.postgres_cloudwatch_monitor` (Terraform), Aurora cluster `pg18-dev` / instance `pg18-dev-writer`, SigNoz otel-collector (data destination) |
+| **Depended on by** | Operators (PostgreSQL dashboards/alerts in SigNoz) |
+| **Provisioned by** | `bash scripts/provision-platform-prereq.sh pg` (IAM role/pod identity) then `kubectl apply -k k8s/overlays/dev` (applies `k8s/base/postgres-metrics-collector.yaml`) |
+| **Verification** | `kubectl -n mongodb logs deployment/postgres-metrics-collector -c cloudwatch-exporter --tail=50` — see [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring) |
+
+### SigNoz Dashboards & Alerts (as Code)
+
+| Aspect | Detail |
+|---|---|
+| **What** | A Terraform root using the official `SigNoz/signoz` provider that declares dashboards and alert rules for every monitored signal (K8s, MongoDB, PostgreSQL, OTel Collector pipelines, Boomi app telemetry). |
+| **Why** | Dashboards/alerts are otherwise UI-only (clicked together by hand). Managing them as code makes them reviewable, reproducible across environments, and re-appliable with one command. |
+| **How it helps** | Sources dashboard JSON from [dashboards/signoz-import-pack](../../dashboards/signoz-import-pack) via `jsondecode()`, so templates aren't hand-transcribed into HCL. |
+| **Namespace** | N/A (SigNoz application-layer config, not a k8s workload) |
+| **Owner** | Infra Architect / Platform team |
+| **Depends on** | SigNoz root user bootstrap (`signoz-root-user` Secret), a Service Account + API key (`signoz-api-key` Secret) — auto-bootstrapped via a headless-browser script if missing, see [SigNoz Dashboard Import Pack](signoz-dashboard-import-pack.md) |
+| **Depended on by** | Operators / EA (dashboard views, alert notifications) |
+| **Provisioned by** | `bash scripts/provision.sh signoz-observability` (wraps `platform-prerequisites/terraform/signoz-observability`) |
+| **Verification** | `curl $SIGNOZ_ENDPOINT/api/v1/rules -H "SIGNOZ-API-KEY: $SIGNOZ_ACCESS_TOKEN"` — see the Terraform root's [README.md](../../platform-prerequisites/terraform/signoz-observability/README.md) for a known provider-side cosmetic drift caveat |
 
 ## Platform Controllers
 

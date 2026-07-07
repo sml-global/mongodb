@@ -24,7 +24,7 @@ cli._(longOpt: 'mongo-uri-k8s-key', args: 1, argName: 'key', 'Kubernetes secret 
 cli._(longOpt: 'mongo-uri-secret-id', args: 1, argName: 'id', 'AWS Secrets Manager secret ID containing MongoDB URI')
 cli._(longOpt: 'aws-region', args: 1, argName: 'region', 'AWS region for Secrets Manager lookup')
 
-cli._(longOpt: 'db', args: 1, argName: 'name', 'MongoDB database name (default: test_db)')
+cli._(longOpt: 'db', args: 1, argName: 'name', 'MongoDB database name (default: oms_audit)')
 cli._(longOpt: 'collection', args: 1, argName: 'name', 'MongoDB collection name (default: auditlogs)')
 cli._(longOpt: 'otel-endpoint', args: 1, argName: 'url', 'OTLP logs endpoint (default: http://127.0.0.1:3301/v1/logs)')
 cli._(longOpt: 'service-name', args: 1, argName: 'name', 'Service name for telemetry (default: oms-audit-simulator)')
