@@ -111,3 +111,52 @@ resource "aws_rds_cluster_instance" "postgresql_writer" {
     ManagedBy   = "terraform"
   }
 }
+
+# ─── CloudWatch metrics monitoring (read-only) ──────────────────────────────
+# Grants a Kubernetes pod (via EKS Pod Identity) least-privilege, read-only
+# access to CloudWatch metrics so Aurora/RDS metrics (CPU, IOPS, connections,
+# replication lag) can be scraped and forwarded into SigNoz, without exposing
+# any database credentials or write access to AWS resources.
+data "aws_iam_policy_document" "postgres_cloudwatch_monitor_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "postgres_cloudwatch_monitor" {
+  name               = var.cloudwatch_monitor_role_name
+  assume_role_policy = data.aws_iam_policy_document.postgres_cloudwatch_monitor_assume_role.json
+}
+
+data "aws_iam_policy_document" "postgres_cloudwatch_monitor" {
+  statement {
+    sid    = "CloudWatchMetricsReadOnly"
+    effect = "Allow"
+    actions = [
+      "cloudwatch:ListMetrics",
+      "cloudwatch:GetMetricData",
+      "cloudwatch:GetMetricStatistics",
+    ]
+    # CloudWatch metric-read actions do not support resource-level restriction.
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "postgres_cloudwatch_monitor" {
+  name   = "${var.cloudwatch_monitor_role_name}-policy"
+  role   = aws_iam_role.postgres_cloudwatch_monitor.id
+  policy = data.aws_iam_policy_document.postgres_cloudwatch_monitor.json
+}
+
+resource "aws_eks_pod_identity_association" "postgres_cloudwatch_monitor" {
+  cluster_name    = var.eks_cluster_name
+  namespace       = var.cloudwatch_monitor_namespace
+  service_account = var.cloudwatch_monitor_service_account_name
+  role_arn        = aws_iam_role.postgres_cloudwatch_monitor.arn
+}

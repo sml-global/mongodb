@@ -27,3 +27,8 @@ output "postgresql_subnet_group_name" {
   description = "DB subnet group used by PostgreSQL cluster."
   value       = aws_db_subnet_group.postgresql.name
 }
+
+output "postgres_cloudwatch_monitor_role_arn" {
+  description = "IAM role ARN used by the PostgreSQL/Aurora CloudWatch metrics collector pod."
+  value       = aws_iam_role.postgres_cloudwatch_monitor.arn
+}

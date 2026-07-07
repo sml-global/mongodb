@@ -84,6 +84,19 @@ scripts/verify-platform-health.sh
 
 Full step-by-step: [Operator Runbook](../../docs/guides/operator-runbook.md)
 
+## Teardown
+
+To remove a scope (post-test cleanup or before a controlled rebuild), use the
+scoped destroy entrypoint rather than running `terraform destroy` directly:
+
+```bash
+bash scripts/destroy.sh mongodb --auto-approve
+bash scripts/destroy.sh pg --auto-approve
+bash scripts/destroy.sh signoz
+```
+
+Full details and one-by-one validation guidance: [Recovery Procedures § Component-by-component teardown](../../docs/references/recovery-procedures.md#component-by-component-teardown)
+
 ## Terraform Roots
 
 | Root | Scope | State Key |

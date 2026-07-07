@@ -5,3 +5,4 @@ resources:
   - namespace.yaml
   - helmrepositories.yaml
   - helmreleases.yaml
+  - helmrelease-k8s-infra.yaml

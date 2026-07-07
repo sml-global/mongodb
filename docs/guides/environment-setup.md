@@ -4,10 +4,35 @@ Complete this guide once per workstation before running any provisioning command
 
 **Who this is for:** All personas (Infra Operator, Infra Architect, Boomi Admin, Enterprise Architect).
 
+**Typical effort:**
+- Infra Operator / Infra Architect: 45-90 minutes on a fresh workstation
+- Boomi Admin (local harness use): 30-60 minutes
+- Viewer-only report consumer: 10-20 minutes (SSO + dashboard access only)
+
+**Access needed before you start:**
+- Internet access to AWS endpoints
+- Local admin rights to install tools
+- AWS SSO start URL and assigned permission set
+
 **Related docs:**
 - After setup, operators proceed to the [Operator Runbook](operator-runbook.md)
 - Boomi admins proceed to the [Boomi Integration Guide](boomi-integration-guide.md)
 - Full component context in the [Component Catalog](../references/component-catalog.md)
+
+## Persona-Specific Setup Paths
+
+Use the smallest setup path that matches your role. The "Why" column explains
+why your role needs (or doesn't need) each piece — so you're not just
+following steps blindly.
+
+| Persona | What You Need To Do | Why |
+|---|---|---|
+| Infra Operator | Complete this full guide | You run Terraform and kubectl directly to provision/destroy infrastructure — you need every tool this guide installs. |
+| Infra Architect | Complete this full guide | You review and modify the same Terraform/Kubernetes definitions the Operator applies, and need to reproduce/validate changes locally before they're rolled out. |
+| Boomi Admin (integration development) | AWS SSO + required tools + optional Groovy + optional kubectl (if local testing) | You call the audit-log library and read telemetry — you don't provision infrastructure, so Terraform/kustomize aren't needed. Groovy/kubectl are only needed if you run the test harness locally instead of relying on an Operator-provisioned environment. |
+| Enterprise Architect / report viewer | AWS SSO login + SigNoz dashboard access only (tool installation not required) | Your job is reviewing telemetry/compliance reports and design posture, not changing infrastructure — no CLI tooling touches production state on your behalf. |
+
+If you are only reviewing telemetry reports, skip Terraform and kubectl sections.
 
 ---
 
@@ -38,8 +63,18 @@ Before starting, get these values from the platform or AWS account owner:
 | `kustomize` | Manifest rendering and overlays | v5.x |
 | `rg` (ripgrep) | Fast text search for validation scripts | any |
 | `openssl` | Secret generation (random bytes, base64) | any |
+| `python3` | URL-encodes passwords in `scripts/create-audit-writer-secret.sh` (required for Day-1 MongoDB setup) | v3.8+ |
 | `helm` | Only for platform admin bootstrap mode | v3.x |
 | `groovy` | Only for Boomi audit log library testing | v4.x |
+| `playwright` (Python package) | Only for the SigNoz Service Account/API key bootstrap (`scripts/bootstrap-signoz-service-account.sh`) -- drives a headless browser so no manual UI step is needed | v1.x |
+
+> **Note:** `python3` is required, not optional — `scripts/create-audit-writer-secret.sh` fails without it. It is not covered by `scripts/verify-platform-health.sh --preflight`, so verify it manually with `python3 --version` on every platform.
+
+> **Note:** `playwright` is only needed by whoever runs `scripts/provision.sh signoz-observability` for the first time in an environment (typically the Infra Operator/Architect) -- install it once with:
+> ```bash
+> python3 -m pip install playwright
+> python3 -m playwright install chromium
+> ```
 
 ### Terraform Version Management (tfenv)
 
@@ -67,28 +102,39 @@ If you prefer not to use tfenv, install Terraform `1.15.7` directly — but you 
 
 ### macOS
 
+> **Homebrew prerequisite:** these commands assume Homebrew is already installed. On a fresh Mac, install it first:
+> ```bash
+> /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+> ```
+
 ```bash
-brew install awscli tfenv kubectl kustomize ripgrep openssl
-tfenv install   # installs version from .terraform-version
+# tfenv + terraform: already covered by "Terraform Version Management (tfenv)" above
+#   brew install tfenv && tfenv install && tfenv use
+brew install awscli kubectl kustomize ripgrep openssl python3
 # Optional (platform admin): brew install helm
 # Optional (Boomi admin): brew install groovy
 ```
 
+> macOS no longer ships `python3` by default (Xcode Command Line Tools only provide a stub that prompts an install). `brew install python3` guarantees it is present.
+
 ### Ubuntu/Debian
 
 ```bash
-# Base packages
+# Base packages (includes python3, which ships by default on Ubuntu but is listed
+# explicitly since minimal/container base images may omit it)
 sudo apt-get update
-sudo apt-get install -y curl wget unzip gnupg lsb-release ca-certificates ripgrep openssl
+sudo apt-get install -y curl wget unzip gnupg lsb-release ca-certificates ripgrep openssl python3
 
 # AWS CLI v2
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
 unzip awscliv2.zip && sudo ./aws/install && rm -rf aws awscliv2.zip
 
-# Terraform
-wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
-sudo apt-get update && sudo apt-get install -y terraform
+# Terraform: do NOT install via apt here — it installs the latest version and
+# bypasses the tfenv version pinning described above. Instead, follow
+# "Terraform Version Management (tfenv)" above:
+#   git clone https://github.com/tfutils/tfenv.git ~/.tfenv
+#   echo 'export PATH="$HOME/.tfenv/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+#   tfenv install && tfenv use
 
 # kubectl
 sudo install -d -m 0755 /etc/apt/keyrings
@@ -99,46 +145,76 @@ sudo apt-get update && sudo apt-get install -y kubectl
 # kustomize
 curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
 sudo mv kustomize /usr/local/bin/kustomize
+
+# Optional (platform admin): helm
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Optional (Boomi admin): groovy, via SDKMAN (apt does not carry a current groovy package)
+curl -s "https://get.sdkman.io" | bash
+source "$HOME/.sdkman/bin/sdkman-init.sh"
+sdk install groovy
 ```
 
 ### Windows
+
+> **tfenv note:** tfenv is a bash tool and has no native Windows build. Either run the setup inside WSL2 (Ubuntu) and follow the Ubuntu/Debian instructions above, or pin the exact Terraform version manually on native Windows (see below) instead of installing an unpinned "latest" version.
 
 Using `winget`:
 
 ```powershell
 winget install --id Amazon.AWSCLI -e
-winget install --id Hashicorp.Terraform -e
+winget install --id Hashicorp.Terraform -e   # installs latest; pin manually, see note below
 winget install --id Kubernetes.kubectl -e
 winget install --id Kubernetes.kustomize -e
 winget install --id BurntSushi.ripgrep.MSVC -e
 winget install --id ShiningLight.OpenSSL.Light -e
+winget install --id Python.Python.3.12 -e
+# Optional (platform admin):
+winget install --id Helm.Helm -e
+# Optional (Boomi admin) — groovy has no winget package; install via SDKMAN in WSL2,
+# or download the Groovy Windows installer from https://groovy.apache.org/download.html
+```
+
+To pin Terraform to `1.15.7` on native Windows instead of the winget "latest" package:
+
+```powershell
+choco install terraform --version=1.15.7 -y
+terraform version   # should show 1.15.7
 ```
 
 Using Chocolatey:
 
+> **Chocolatey prerequisite:** unlike winget, Chocolatey does not ship with Windows. Install it first (in an elevated PowerShell prompt) — see the [official install docs](https://chocolatey.org/install) — or use the winget path above instead.
+
 ```powershell
-choco install awscli terraform kubernetes-cli kustomize ripgrep openssl -y
+choco install awscli terraform --version=1.15.7 kubernetes-cli kustomize ripgrep openssl python3 -y
+# Optional (platform admin):
+choco install kubernetes-helm -y
 ```
 
 ### Verify Installation
 
 ```bash
-command -v aws terraform kubectl kustomize rg openssl
+command -v aws terraform kubectl kustomize rg openssl python3
 terraform version
 aws --version
 kubectl version --client
+python3 --version
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Get-Command aws, terraform, kubectl, kustomize, rg, openssl
+Get-Command aws, terraform, kubectl, kustomize, rg, openssl, python
 terraform version
 aws --version
 kubectl version --client
+python --version
 ```
 
 ## Configure AWS CLI With SSO
+
+AWS SSO (IAM Identity Center) is your centralized login. You authenticate once in a browser and then CLI tools use temporary credentials instead of long-lived access keys.
 
 This repository uses AWS SSO session `oms-dev`.
 
@@ -196,6 +272,13 @@ aws configure list-profiles
 cat ~/.aws/config
 ```
 
+On Windows PowerShell:
+
+```powershell
+aws configure list-profiles
+Get-Content "$env:USERPROFILE\.aws\config"
+```
+
 ## Configure Kubernetes Access
 
 ### Update Kubeconfig
@@ -205,6 +288,15 @@ aws eks update-kubeconfig \
   --name EKS-boomi-runtime-cluster \
   --region ap-east-1 \
   --profile "$AWS_PROFILE"
+```
+
+On Windows PowerShell:
+
+```powershell
+aws eks update-kubeconfig `
+  --name EKS-boomi-runtime-cluster `
+  --region ap-east-1 `
+  --profile $env:AWS_PROFILE
 ```
 
 ### Verify Cluster Connectivity

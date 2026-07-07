@@ -6,21 +6,18 @@ metadata:
 spec:
   selfSigned: {}
 ---
+# CA certificate issued by the self-signed issuer
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: psmdb-ssl
+  name: mongodb-ca
   namespace: mongodb
 spec:
-  secretName: psmdb-ssl
-  duration: 2160h
-  renewBefore: 360h
-  commonName: psmdb
-  dnsNames:
-    - psmdb-rs0
-    - psmdb-rs0.mongodb
-    - psmdb-rs0.mongodb.svc
-    - psmdb-rs0.mongodb.svc.cluster.local
+  isCA: true
+  secretName: mongodb-ca-keypair
+  duration: 87600h   # 10 years
+  renewBefore: 8760h # 1 year
+  commonName: mongodb-ca
   privateKey:
     algorithm: RSA
     size: 2048
@@ -28,24 +25,15 @@ spec:
     kind: Issuer
     name: mongodb-selfsigned
 ---
+# CA issuer that signs all MongoDB TLS certs from the shared CA
 apiVersion: cert-manager.io/v1
-kind: Certificate
+kind: Issuer
 metadata:
-  name: psmdb-ssl-internal
+  name: mongodb-ca-issuer
   namespace: mongodb
 spec:
-  secretName: psmdb-ssl-internal
-  duration: 2160h
-  renewBefore: 360h
-  commonName: psmdb-internal
-  dnsNames:
-    - "*.psmdb-rs0.mongodb.svc.cluster.local"
-  privateKey:
-    algorithm: RSA
-    size: 2048
-  issuerRef:
-    kind: Issuer
-    name: mongodb-selfsigned
+  ca:
+    secretName: mongodb-ca-keypair
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate

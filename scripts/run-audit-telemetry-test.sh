@@ -12,11 +12,11 @@ NAMESPACE="mongodb"
 DB_NAME="oms_audit"
 COLLECTION="auditlogs"
 POD_NAME="audit-telemetry-test-$(date +%s)"
-MONGO_SERVICE="psmdb-rs0-0.psmdb-rs0.mongodb.svc.cluster.local,psmdb-rs0-1.psmdb-rs0.mongodb.svc.cluster.local,psmdb-rs0-2.psmdb-rs0.mongodb.svc.cluster.local"
+MONGO_HOST="psmdb-rs0.mongodb.svc.cluster.local"
 SIGNOZ_SERVICE="signoz.signoz.svc.cluster.local"
 SIGNOZ_PORT="8080"
 KEEP_POD="false"
-TIMEOUT="120"
+TIMEOUT="180"
 
 usage() {
   cat <<'EOF'
@@ -33,7 +33,7 @@ Options:
   --namespace   Pod namespace (default: mongodb)
   --db          Target database (default: oms_audit)
   --keep        Keep the pod after completion (do not delete)
-  --timeout     Seconds to wait for pod completion (default: 120)
+  --timeout     Seconds to wait for pod completion (default: 180)
   -h, --help    Show this help
 
 The test record is NOT deleted from MongoDB — it remains as evidence.
@@ -52,15 +52,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Read MongoDB credentials from existing secret
-echo "Reading MongoDB credentials from psmdb-secrets..."
+# Read MongoDB credentials from psmdb-secrets (database admin user).
+echo "Reading MongoDB database-admin credentials from psmdb-secrets..."
 ADMIN_USER="$(kubectl -n "$NAMESPACE" get secret psmdb-secrets \
-  -o jsonpath='{.data.MONGODB_CLUSTER_ADMIN_USER}' | base64 -d)"
+  -o jsonpath='{.data.MONGODB_DATABASE_ADMIN_USER}' | base64 -d)"
 ADMIN_PASS="$(kubectl -n "$NAMESPACE" get secret psmdb-secrets \
-  -o jsonpath='{.data.MONGODB_CLUSTER_ADMIN_PASSWORD}' | base64 -d)"
+  -o jsonpath='{.data.MONGODB_DATABASE_ADMIN_PASSWORD}' | base64 -d)"
 
 if [[ -z "$ADMIN_USER" || -z "$ADMIN_PASS" ]]; then
-  echo "Error: cannot read credentials from psmdb-secrets" >&2
+  echo "Error: cannot read database-admin credentials from psmdb-secrets" >&2
+  exit 1
+fi
+
+count_ready_mongod_pods() {
+  kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/component=mongod --no-headers 2>/dev/null \
+    | awk '$2=="1/1" && $3=="Running" {c++} END {print c+0}'
+}
+
+echo "Waiting for MongoDB StatefulSet rollout to stabilize (up to 300s)..."
+if kubectl -n "$NAMESPACE" rollout status statefulset/psmdb-rs0 --timeout=300s >/dev/null 2>&1; then
+  echo "  MongoDB rollout: stabilized"
+else
+  echo "Error: MongoDB StatefulSet did not stabilize within 300s" >&2
+  kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/component=mongod >&2 || true
+  exit 1
+fi
+
+ready_mongod="$(count_ready_mongod_pods)"
+if [[ "$ready_mongod" -lt 3 ]]; then
+  echo "Error: only $ready_mongod/3 mongod pods are Ready; aborting test" >&2
+  kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/component=mongod >&2 || true
   exit 1
 fi
 
@@ -70,7 +91,7 @@ NOW_NANO="$(($(date -u +%s) * 1000000000))"
 
 echo "Deploying test pod: $POD_NAME"
 echo "  Namespace: $NAMESPACE"
-echo "  MongoDB: psmdb-rs0-{0,1,2} (replica set) / $DB_NAME.$COLLECTION"
+echo "  MongoDB: $MONGO_HOST (replica set) / $DB_NAME.$COLLECTION"
 echo "  SigNoz: $SIGNOZ_SERVICE:$SIGNOZ_PORT"
 echo "  Trace ID: $TRACE_ID"
 echo ""
@@ -87,9 +108,17 @@ metadata:
     test-run: "${TRACE_ID}"
 spec:
   restartPolicy: Never
+  volumes:
+  - name: mongo-ssl-internal
+    secret:
+      secretName: psmdb-ssl-internal
   containers:
   - name: test
     image: mongo:7.0
+    volumeMounts:
+    - name: mongo-ssl-internal
+      mountPath: /etc/mongodb-ssl-internal
+      readOnly: true
     command:
     - /bin/bash
     - -c
@@ -99,10 +128,16 @@ spec:
       echo "Trace ID: ${TRACE_ID}"
       echo ""
 
+      # Build client certificate PEM from mounted internal TLS secret.
+      cat /etc/mongodb-ssl-internal/tls.key /etc/mongodb-ssl-internal/tls.crt > /tmp/tls-internal.pem
+
       # Step 1: Write audit record to MongoDB
       echo "[1/3] Writing audit record to MongoDB..."
-      mongosh --quiet --tls --tlsAllowInvalidCertificates \
-        "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_SERVICE}/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
+      mongosh --quiet \
+        --tls --tlsAllowInvalidCertificates \
+        --tlsCAFile /etc/mongodb-ssl-internal/ca.crt \
+        --tlsCertificateKeyFile /tmp/tls-internal.pem \
+        "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_HOST}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
           const record = {
             trace_id: "${TRACE_ID}",
@@ -121,6 +156,20 @@ spec:
 
       # Step 2: Send OTLP telemetry to SigNoz
       echo "[2/3] Sending OTLP telemetry to SigNoz..."
+      if ! command -v curl >/dev/null 2>&1; then
+        if command -v apt-get >/dev/null 2>&1; then
+          apt-get update >/dev/null 2>&1 && apt-get install -y curl >/dev/null 2>&1
+        elif command -v microdnf >/dev/null 2>&1; then
+          microdnf install -y curl >/dev/null 2>&1
+        elif command -v yum >/dev/null 2>&1; then
+          yum install -y curl >/dev/null 2>&1
+        fi
+      fi
+      if ! command -v curl >/dev/null 2>&1; then
+        echo "  SigNoz telemetry: FAILED (curl unavailable in test image)" >&2
+        exit 1
+      fi
+
       TELEM_RESULT=\$(curl -sf -o /dev/null -w '%{http_code}' -X POST \
         -H 'Content-Type: application/json' \
         -d '{
@@ -159,8 +208,11 @@ spec:
 
       # Step 3: Read back from MongoDB to verify
       echo "[3/3] Verifying record in MongoDB..."
-      FOUND=\$(mongosh --quiet --tls --tlsAllowInvalidCertificates \
-        "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_SERVICE}/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
+      FOUND=\$(mongosh --quiet \
+        --tls --tlsAllowInvalidCertificates \
+        --tlsCAFile /etc/mongodb-ssl-internal/ca.crt \
+        --tlsCertificateKeyFile /tmp/tls-internal.pem \
+        "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_HOST}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
           const doc = db.getCollection("${COLLECTION}").findOne({trace_id: "${TRACE_ID}"});
           if (doc) { print("FOUND"); } else { print("NOT_FOUND"); }
@@ -180,10 +232,10 @@ spec:
     resources:
       requests:
         cpu: 100m
-        memory: 128Mi
+        memory: 256Mi
       limits:
         cpu: 200m
-        memory: 256Mi
+        memory: 512Mi
 EOF
 
 echo "Pod created. Waiting for completion (timeout: ${TIMEOUT}s)..."

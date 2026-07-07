@@ -12,8 +12,8 @@ spec:
   pause: false
   unmanaged: false
   tls:
-    mode: requireTLS
-    allowInvalidCertificates: false
+    mode: preferTLS
+    allowInvalidCertificates: true
   secrets:
     users: psmdb-secrets
     encryptionKey: psmdb-encryption-key

@@ -7,6 +7,23 @@ scripts/verify-platform-health.sh          # Full platform check
 scripts/verify-platform-health.sh --preflight  # Environment-only preflight
 ```
 
+**Recommended cadence:**
+
+| Scenario | What to run | Frequency |
+|---|---|---|
+| Post-change validation | `scripts/verify-platform-health.sh` | After every provisioning or config change |
+| Routine confidence check | `scripts/verify-platform-health.sh` | Daily in active dev, weekly in stable |
+| Integration path validation | `scripts/verify-platform-health.sh --smoke-test` | After changes touching audit write or telemetry path |
+| Workstation setup | `scripts/verify-platform-health.sh --preflight` | Once per setup, or after tool/credential changes |
+| Incident investigation | Individual component sections below | As needed |
+
+After full rebuilds, MongoDB may still be reconciling when first checks run. If verification fails with partial pod readiness, wait for StatefulSet rollout convergence and re-run:
+
+```bash
+kubectl -n mongodb rollout status statefulset/psmdb-rs0 --timeout=300s
+scripts/verify-platform-health.sh
+```
+
 **Related docs:**
 - [Component Catalog](component-catalog.md) — what each component does
 - [Operator Runbook](../guides/operator-runbook.md) — when to run these
@@ -197,6 +214,52 @@ kubectl -n mongodb get secret psmdb-encryption-key psmdb-secrets
 
 **Pass criteria:** 3 pods Running, PVCs Bound, correct ServiceAccount, replica set healthy with 1 primary + 2 secondaries, encryption active.
 
+## MongoDB Metrics Collector
+
+```bash
+# Pod running
+kubectl -n mongodb get pods -l app.kubernetes.io/name=mongodb-metrics-collector
+# Expect: 1 pod Running
+
+# Successfully scraping (only the known index-stats permission error is expected)
+kubectl -n mongodb logs deployment/mongodb-metrics-collector --tail=50
+# Expect: no connection/auth/TLS errors other than the documented $indexStats Unauthorized message
+
+# Confirm metrics reached SigNoz's collector
+kubectl -n signoz port-forward svc/signoz-otel-collector 8888:8888 &
+PF_PID=$!
+sleep 2
+curl -s http://127.0.0.1:8888/metrics | grep 'otelcol_receiver_accepted_metric_points.*transport="grpc"'
+kill $PF_PID 2>/dev/null
+# Expect: a nonzero, increasing counter value
+```
+
+**Pass criteria:** Pod Running, no unexpected errors in logs, accepted metric points counter on the SigNoz collector is nonzero and increasing. See [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring).
+
+## PostgreSQL Metrics Collector
+
+```bash
+# Pod running (2/2 containers)
+kubectl -n mongodb get pods -l app.kubernetes.io/name=postgres-metrics-collector
+# Expect: 1 pod, 2/2 Running
+
+# CloudWatch Exporter successfully calling AWS (no AccessDenied/credentials errors)
+kubectl -n mongodb logs deployment/postgres-metrics-collector -c cloudwatch-exporter --tail=50
+
+# OTel Collector successfully scraping + exporting
+kubectl -n mongodb logs deployment/postgres-metrics-collector -c otel-collector --tail=50
+
+# Confirm metrics reached SigNoz's collector
+kubectl -n signoz port-forward svc/signoz-otel-collector 8888:8888 &
+PF_PID=$!
+sleep 2
+curl -s http://127.0.0.1:8888/metrics | grep 'otelcol_receiver_accepted_metric_points.*receiver="prometheus"'
+kill $PF_PID 2>/dev/null
+# Expect: a nonzero, increasing counter value (scrape interval is 300s, so allow a few minutes)
+```
+
+**Pass criteria:** Pod 2/2 Running, no AWS auth/permission errors in the `cloudwatch-exporter` container logs, no scrape/export errors in the `otel-collector` container logs, accepted metric points counter on the SigNoz collector is nonzero. See [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring).
+
 ## PostgreSQL (Aurora)
 
 ```bash
@@ -252,6 +315,27 @@ kill $PF_PID 2>/dev/null
 
 **Pass criteria:** All pods Running, HelmRelease reconciled, PVCs Bound, dashboard returns healthy.
 
+## SigNoz K8s Infra Monitoring
+
+```bash
+# HelmRelease reconciled
+kubectl -n signoz get helmrelease signoz-k8s-infra
+# Expect: Ready=True in a cluster with enough spare node CPU for all agent
+# pods. In resource-constrained dev clusters this commonly shows Ready=False
+# with message "timeout waiting for: [DaemonSet/.../otel-agent status:
+# 'InProgress']" -- this is Helm's own install-timeout expiring while some
+# DaemonSet pods stay Pending (node CPU capacity), not a broken deployment.
+# Verify with the pod check below instead of relying on Ready=True alone.
+
+# Agent pods (DaemonSet, one per node) and cluster-metrics deployment
+kubectl -n signoz get pods -l app.kubernetes.io/name=k8s-infra
+# Expect: one otel-agent pod per node Running, plus otel-deployment pod Running
+# Note: in resource-constrained dev clusters some agent pods may stay Pending
+# due to node CPU capacity, not a config issue — see Architect Reference.
+```
+
+**Pass criteria:** At least the cluster-metrics Deployment pod and some otel-agent pods are Running (partial DaemonSet coverage is expected/acceptable in capacity-constrained dev clusters, and will show HelmRelease `Ready=False` with an install-timeout message rather than `Ready=True` — that is not a failure). See [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring).
+
 ## StorageClass
 
 ```bash
@@ -302,6 +386,8 @@ aws s3api get-public-access-block --bucket sml-aw-gb0-d-oms-gen-s3-01 --query 'P
 ## End-to-End Smoke Test
 
 Validates the full audit-log write path: MongoDB insert → telemetry send → SigNoz receives.
+
+**When to run:** After any change to MongoDB secrets, SigNoz config, audit library, or network paths. Also recommended as a weekly confidence check in active environments.
 
 ```bash
 # Requires: MongoDB port-forward + SigNoz port-forward active

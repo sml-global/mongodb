@@ -73,3 +73,27 @@ variable "db_master_password" {
   type        = string
   sensitive   = true
 }
+
+variable "eks_cluster_name" {
+  description = "EKS cluster name used to register the CloudWatch monitoring pod identity association."
+  type        = string
+  default     = "EKS-boomi-runtime-cluster"
+}
+
+variable "cloudwatch_monitor_role_name" {
+  description = "IAM role name for the read-only PostgreSQL/Aurora CloudWatch metrics collector pod."
+  type        = string
+  default     = "postgres-cloudwatch-monitor-role"
+}
+
+variable "cloudwatch_monitor_namespace" {
+  description = "Kubernetes namespace of the CloudWatch metrics collector pod's ServiceAccount."
+  type        = string
+  default     = "mongodb"
+}
+
+variable "cloudwatch_monitor_service_account_name" {
+  description = "Kubernetes ServiceAccount name bound to the CloudWatch monitoring IAM role via Pod Identity."
+  type        = string
+  default     = "postgres-metrics-collector"
+}

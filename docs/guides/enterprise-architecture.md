@@ -10,6 +10,18 @@ Design decisions, security posture, compliance rationale, integration boundaries
 - [Boomi Integration Guide](boomi-integration-guide.md) — application integration contract
 - [Recovery Procedures](../references/recovery-procedures.md) — disaster recovery
 
+## Executive Summary
+
+- The OMS data layer intentionally separates concerns: MongoDB for immutable audit trail, PostgreSQL for transactional records, SigNoz for observability.
+- Current environment is dev-leaning but production-aligned in structure; key remaining gaps are secrets lifecycle, network hardening, and automated operations.
+- SigNoz admin bootstrap is automated (root-user env vars, no manual signup race); dashboards and alert rules for every monitored signal are also managed as code via Terraform. The Service Account/API key SigNoz's own design requires is also fully automated, via a headless-browser (Playwright) script invoked automatically on first run -- no manual UI interaction anywhere in the flow. See [Operator Runbook § Step 7A/7B](operator-runbook.md#step-7a-bootstrap-the-signoz-admin-account-automated-no-manual-signup).
+- The target operating model is clear day-1 provisioning plus recurring day-2 verification and controlled change management.
+
+If you only need reporting and governance context, start with:
+1. [Per-Persona Access Requirements](#per-persona-access-requirements)
+2. [Production Readiness Assessment](#production-readiness-assessment)
+3. [Compliance And Governance](#compliance-and-governance)
+
 ---
 
 ## Design Rationale
@@ -103,7 +115,7 @@ All credentials in the system and how to access them:
 | MongoDB audit-writer URI | K8s Secret `oms-audit-writer` | Boomi library (automatic) | `scripts/create-audit-writer-secret.sh` (one-time) |
 | MongoDB audit reader | Created in MongoDB | Boomi Admin, Compliance | `scripts/create-audit-reader.sh` (one-time) |
 | PostgreSQL master password | `terraform.tfvars` (local) + TF state | Operators (provision only) | Set manually in tfvars |
-| SigNoz dashboard login | SigNoz internal DB | All who view telemetry | First user signs up as admin, then invites others |
+| SigNoz dashboard login | SigNoz internal DB | All who view telemetry | Root user auto-created at pod startup (`scripts/create-signoz-root-user-secret.sh`); Infra Architect/Admin then invites Editor/Viewer users |
 | SigNoz ClickHouse (internal) | HelmRelease values | No one (internal only) | Chart value — **must change placeholder before production** |
 | Terraform state | S3 bucket (encrypted) | Operators with S3 access | AWS IAM permissions |
 | PBM S3 bucket | IAM role (Pod Identity) | MongoDB pods (automatic) | No manual credential needed |
@@ -116,6 +128,10 @@ All credentials in the system and how to access them:
 | **Infra Architect** | Everything operator has + SigNoz admin + MongoDB userAdmin | Application data directly |
 | **Boomi Admin** | SigNoz dashboard (Editor), MongoDB audit_reader (read-only) | AWS console, Terraform, kubectl |
 | **Enterprise Architect** | SigNoz dashboard (Viewer), read access to all docs | Direct cluster access, write credentials |
+
+First-time SigNoz admin bootstrap owner: **Infra Architect/Admin**. This avoids assigning permanent administrative control to integration or viewer personas.
+
+For Enterprise Architects without operational duties, Viewer access is sufficient for telemetry review and governance reporting.
 
 ---
 

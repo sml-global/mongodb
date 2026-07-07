@@ -10,6 +10,27 @@ How to use the audit log library and telemetry from Boomi processes.
 - [Verification Commands § End-to-End](../references/verification-commands.md#end-to-end-smoke-test) — validate the full path
 - [Environment Setup](environment-setup.md) — workstation setup (if running test harness locally)
 
+## Quick Start: First Audit Log And Telemetry Flow
+
+Use this path when you want a fast confidence check before deep customization.
+
+1. Confirm your role access.
+  - Write/integration testing: Boomi Admin (Editor)
+  - Read-only reporting: Viewer
+2. Ensure prerequisites:
+  - `scripts/create-audit-writer-secret.sh` already run by operator
+  - SigNoz is reachable (`scripts/open-signoz-ui.sh` in dev)
+3. Run the end-to-end test:
+
+```bash
+scripts/run-audit-telemetry-test.sh
+```
+
+4. Validate outputs:
+  - Test reports successful write/read-back from MongoDB
+  - In SigNoz Logs, filter `service.name = oms-audit-writer`
+5. Then continue with this guide for schema, API usage, and production integration patterns.
+
 ---
 
 ## System Overview For Boomi
@@ -367,6 +388,17 @@ In the dashboard, navigate to **Logs** → filter `service.name = oms-audit-writ
 
 For first-time login and full navigation guide, see [Accessing SigNoz Dashboard](#accessing-signoz-dashboard) below.
 
+### Boomi Admin View-Only Path (No Editor Permissions)
+
+If your account is intentionally restricted to **Viewer**:
+
+1. Open SigNoz with `scripts/open-signoz-ui.sh` (or ingress mode).
+2. Go to **Logs** and apply filter `service.name = oms-audit-writer`.
+3. Save links/queries for operational reporting.
+4. Request an Editor account only when dashboard authoring or alert changes are required.
+
+This path supports separation-of-duties for teams where telemetry authorship is controlled by platform operations.
+
 ---
 
 ## Runtime Dependencies
@@ -438,7 +470,73 @@ scripts/write-auditlog-and-telemetry.sh \
 
 ### First-Time Login (Admin Account Creation)
 
-SigNoz open-source uses a **self-service signup** flow. The first user to access the dashboard becomes the admin.
+In this repo, the SigNoz admin account is normally **already bootstrapped
+automatically** by an Infra Operator/Architect (SigNoz's root-user feature --
+no self-service "first to sign up" race). As a Boomi Admin, you should
+receive an **Editor**-role invite from that admin rather than performing
+first-time signup yourself.
+
+> **Fallback:** only if you are personally standing up a brand-new
+> environment and the automated bootstrap hasn't been run yet, SigNoz falls
+> back to a **self-service signup** flow -- the first user to access the
+> dashboard becomes the admin. See
+> [Operator Runbook § Step 7A](operator-runbook.md#step-7a-bootstrap-the-signoz-admin-account-automated-no-manual-signup)
+> for the recommended automated path, or use the manual **Sign Up** steps
+> further down this section if you must do it by hand.
+
+### First-Login Action Checklist (What To Do In Dashboard)
+
+After logging in (whether via automated bootstrap + invite, or manual first
+signup), use this order:
+
+1. **Add your first data source**
+  - Optional in this repo. OTLP ingestion path is already part of platform setup.
+2. **Send logs / traces / metrics**
+  - Logs and traces are validated by:
+    - `scripts/verify-platform-health.sh --smoke-test`
+    - `scripts/run-audit-telemetry-test.sh`
+  - Metrics are optional for the current audit-log integration path.
+3. **Setup alerts**
+  - Automated: `bash scripts/provision.sh signoz-observability --auto-approve`
+    already creates 5 baseline alerts (MongoDB, PostgreSQL, K8s, OTel
+    Collector, app telemetry). Add more by hand only for cases the baseline
+    set doesn't cover. See [SigNoz Dashboard Import Pack](../references/signoz-dashboard-import-pack.md).
+4. **Setup saved views**
+  - Recommended. Save baseline filters (for example `service.name = oms-audit-writer`).
+5. **Setup dashboards**
+  - Automated by the same `signoz-observability` command as alerts above.
+
+Minimum requirement to operate safely: validate ingestion + create role-based users.
+Saved views should still be treated as a day-2 hardening task; alerts and dashboards are already automated.
+
+### Notifications (SMTP And Alternatives)
+
+You only need SMTP if you want **email** alert notifications from SigNoz.
+
+- If email is required: configure SMTP in SigNoz deployment values and test a notification channel.
+- If email is not required: use Slack/webhook/PagerDuty channels instead (no SMTP needed).
+- For dev/local-only environments: you can defer notification channel setup until shared usage begins.
+
+### Recommended Account Model (Minimum)
+
+Use at least two user accounts per environment:
+
+1. **Setup Admin account** (platform owner)
+  - Persona: Infra Architect/Admin
+  - Role: **Admin**
+  - Purpose: first signup, workspace setup, user invitations, role management
+
+2. **Report Viewer account** (general telemetry consumer)
+  - Persona: Enterprise Architect, stakeholder, compliance reviewer
+  - Role: **Viewer**
+  - Purpose: open dashboards/reports, inspect traces/logs, no configuration changes
+
+For integration operations, add a third account pattern:
+
+3. **Boomi Admin account**
+  - Persona: Boomi Admin
+  - Role: **Editor**
+  - Purpose: build and maintain operational dashboards/alerts for integration flows
 
 1. Open the dashboard:
    ```bash
@@ -450,13 +548,16 @@ SigNoz open-source uses a **self-service signup** flow. The first user to access
    scripts/open-signoz-ui.sh --mode ingress
    ```
 
-2. On first visit, you see a **Sign Up** form. Fill in:
+2. If the admin account was already bootstrapped automatically, log in with
+   the credentials from `kubectl -n signoz get secret signoz-root-user ...`
+   (see Operator Runbook Step 7A) or your invited Editor/Viewer account.
+   Otherwise (manual fallback only), you see a **Sign Up** form. Fill in:
    - Name
    - Email (becomes your login)
    - Password (your choice, min 8 chars)
    - Organization name
 
-3. Click **Get Started** — you are now the admin.
+3. Click **Get Started** — you are now the admin (manual fallback only).
 
 4. To invite additional users: **Settings** → **Organization** → **Invite Members**
 
@@ -484,6 +585,35 @@ After login:
 | **Dashboards** | Custom charts and panels | Create operational views |
 | **Alerts** | Alert rules and firing status | Set up notifications for anomalies |
 | **Services** | Auto-discovered service list | See which services are sending telemetry |
+| **Infrastructure Monitoring → Hosts** | EKS node CPU/memory/disk/network | Cluster-level capacity and health (see [Architect Reference § Infrastructure Monitoring](architect-reference.md#infrastructure-and-database-monitoring)) |
+
+### Visualizing `run-audit-telemetry-test.sh` Output (Beginner Walkthrough)
+
+If you have never used SigNoz before, this is the fastest way to see real data end to end.
+
+1. Run the smoke test and keep the trace ID it prints:
+   ```bash
+   scripts/run-audit-telemetry-test.sh
+   ```
+   Note the line `Trace ID: test-xxxxxxxxxxxxxxxx` in the output.
+2. Open the dashboard: `scripts/open-signoz-ui.sh`, then browse to `http://127.0.0.1:3301`.
+3. Go to the **Logs** tab (left sidebar).
+4. In the search bar, filter by the test pod's service name (this script uses a
+   different service name than the production Boomi library — see note below):
+   ```
+   service.name = oms-audit-test-pod
+   ```
+5. You should see one log line with `body = "smoke.test.pod"`. Click it to expand
+   attributes — you will see `trace_id`, `action`, and `pod_name` matching what
+   the script printed.
+6. Go to the **Services** tab — `oms-audit-test-pod` should now be listed as a
+   service that has sent telemetry (it may take up to ~1 minute to appear).
+
+> **Note:** `scripts/run-audit-telemetry-test.sh` only sends a **log** record (via
+> `/v1/logs`), not a trace span, so the **Traces** tab will stay empty for this
+> script. It also uses `service.name = oms-audit-test-pod`, distinct from the
+> production Boomi library's `service.name = oms-audit-writer` used in real audit
+> writes (see [Finding Audit Events](#finding-audit-events-in-signoz) below).
 
 ### Finding Audit Events in SigNoz
 
@@ -571,6 +701,11 @@ db.auditlogs.findOne({ trace_id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' })
 ---
 
 ## Complete Testing Workflow
+
+Recommended cadence:
+- After integration code changes: run Option A or Option B before release
+- Weekly confidence check in active environments: run Option A
+- Incident follow-up: rerun test immediately after remediation
 
 ### Option A: In-Cluster Test Pod (Recommended)
 

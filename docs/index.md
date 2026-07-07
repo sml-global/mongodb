@@ -4,10 +4,10 @@
 
 | I am a... | I want to... | Start here |
 |---|---|---|
-| **Infra Operator** | Provision infrastructure, troubleshoot issues, run verification | [Environment Setup](guides/environment-setup.md) → [Operator Runbook](guides/operator-runbook.md) |
+| **Infra Operator** | Provision infrastructure, run day-2 maintenance, troubleshoot issues, run verification | [Environment Setup](guides/environment-setup.md) → [Operator Runbook](guides/operator-runbook.md) |
 | **Infra Architect / Admin** | Understand components, architecture, maintain the platform | [Component Catalog](references/component-catalog.md) → [Architect Reference](guides/architect-reference.md) |
-| **Boomi Admin** | Write audit logs, use telemetry, integrate with the platform | [Boomi Integration Guide](guides/boomi-integration-guide.md) |
-| **Enterprise Architect** | Understand design decisions, security, compliance, roadmap | [Enterprise Architecture](guides/enterprise-architecture.md) |
+| **Boomi Admin** | Write audit logs, use telemetry, review operational reports | [Boomi Integration Guide](guides/boomi-integration-guide.md) |
+| **Enterprise Architect** | Understand design decisions, security, compliance, roadmap, review telemetry reports | [Enterprise Architecture](guides/enterprise-architecture.md) |
 
 ## Quick Access By Topic
 
@@ -15,13 +15,26 @@
 |---|---|---|
 | First-time workstation setup | [Environment Setup](guides/environment-setup.md) | Tools, AWS SSO, Kubernetes access, preflight checks |
 | Provisioning commands and troubleshooting | [Operator Runbook](guides/operator-runbook.md) | Step-by-step, safety gates, runbook commands, error resolution |
+| SigNoz first-login actions | [Operator Runbook § SigNoz First-Login Checklist](guides/operator-runbook.md#step-7a1-signoz-first-login-checklist-do-this-in-order) | What to click (and skip) in the SigNoz dashboard after signup |
+| Ongoing day-2 operations | [Operator Runbook](guides/operator-runbook.md#day-2-operations-ongoing-maintenance) | Recurring health checks, routine maintenance, trigger-based actions |
 | Component inventory (what/why/how) | [Component Catalog](references/component-catalog.md) | Every platform component: purpose, value, dependencies |
 | Architecture and state model | [Architect Reference](guides/architect-reference.md) | Diagrams, dependency graph, state strategy, day-2 maintenance |
 | Audit log library and telemetry | [Boomi Integration Guide](guides/boomi-integration-guide.md) | Library API, schema, SigNoz access, endpoint contracts |
 | Design rationale and security | [Enterprise Architecture](guides/enterprise-architecture.md) | Design decisions, security posture, compliance, production roadmap |
 | Per-component health checks | [Verification Commands](references/verification-commands.md) | Health check commands for every component + end-to-end smoke test |
+| SigNoz dashboards & alerts (as code) | [SigNoz Dashboard Import Pack](references/signoz-dashboard-import-pack.md) | Fully-automated Terraform IaC path (recommended) + manual JSON-import fallback for K8s, MongoDB, PostgreSQL, and OTel collector dashboards/alerts |
 | Rollback, recovery, credential rotation | [Recovery Procedures](references/recovery-procedures.md) | What to do when things go wrong |
 | Embedded defaults and constants | [Configuration Catalog](operations/dev-configuration-catalog.md) | Source of truth for hardcoded values |
+| Infrastructure/MongoDB/PostgreSQL monitoring | [Architect Reference § Infrastructure And Database Monitoring](guides/architect-reference.md#infrastructure-and-database-monitoring) | What SigNoz monitors today across K8s, MongoDB, and PostgreSQL/Aurora (CloudWatch import), with coverage and verification notes |
+
+## Journey Map (Day-1 vs Day-2)
+
+| Persona | Day-1 (first setup) | Day-2 (ongoing) |
+|---|---|---|
+| **Infra Operator** | [Environment Setup](guides/environment-setup.md) → [Operator Runbook](guides/operator-runbook.md#standard-operator-procedure) | [Operator Runbook](guides/operator-runbook.md#day-2-operations-ongoing-maintenance) |
+| **Infra Architect / Admin** | [Component Catalog](references/component-catalog.md) + [Enterprise Architecture](guides/enterprise-architecture.md) | [Architect Reference](guides/architect-reference.md) + [Recovery Procedures](references/recovery-procedures.md) |
+| **Boomi Admin** | [Boomi Integration Guide](guides/boomi-integration-guide.md#quick-start-first-audit-log-and-telemetry-flow) | [Boomi Integration Guide](guides/boomi-integration-guide.md#complete-testing-workflow) |
+| **Enterprise Architect** | [Enterprise Architecture](guides/enterprise-architecture.md) | [Enterprise Architecture](guides/enterprise-architecture.md#production-readiness-assessment) + [Verification Commands](references/verification-commands.md#signoz) |
 
 ## System Overview
 
@@ -42,6 +55,9 @@ Supporting platform components:
 | cert-manager | TLS automation — issues and renews certificates | `cert-manager` | [Component Catalog § cert-manager](references/component-catalog.md#cert-manager) |
 | AWS EBS CSI Driver | Block storage — provisions gp3 EBS volumes for PVCs | `kube-system` | [Component Catalog § EBS CSI](references/component-catalog.md#aws-ebs-csi-driver) |
 | EKS Pod Identity Agent | IAM binding — maps ServiceAccounts to IAM roles | `kube-system` | [Component Catalog § Pod Identity](references/component-catalog.md#eks-pod-identity-agent) |
+| SigNoz K8s Infra Monitoring | Node/pod/cluster metrics via SigNoz `k8s-infra` chart | `signoz` | [Component Catalog § SigNoz K8s Infra Monitoring](references/component-catalog.md#signoz-k8s-infra-monitoring) |
+| MongoDB Metrics Collector | Replica-set metrics (connections, ops, replication) into SigNoz | `mongodb` | [Component Catalog § MongoDB Metrics Collector](references/component-catalog.md#mongodb-metrics-collector) |
+| PostgreSQL Metrics Collector | Aurora CloudWatch metrics (CPU, IOPS, connections, replication lag) into SigNoz | `mongodb` | [Component Catalog § PostgreSQL Metrics Collector](references/component-catalog.md#postgresql-metrics-collector) |
 
 ## Dependency Graph
 
@@ -101,19 +117,32 @@ Components must be deployed in this sequence due to dependencies:
 
 ### Key Scripts (in deployment order)
 
-| Script | Purpose | Run By |
-|---|---|---|
-| `scripts/provision.sh <scope>` | Full provisioning entrypoint | Operator |
-| `scripts/bootstrap-dev-secrets.sh` | Create MongoDB encryption + credential secrets | Operator |
-| `scripts/create-audit-writer-secret.sh` | Create K8s Secret with MongoDB URI for Boomi library | Operator |
-| `scripts/create-audit-reader.sh` | Create read-only MongoDB user for querying audit logs | Operator/Architect |
-| `scripts/verify-platform-health.sh` | Validate all components are healthy | All infra roles |
-| `scripts/verify-platform-health.sh --smoke-test` | End-to-end write + read-back (local, needs port-forwards) | All infra roles |
-| `scripts/run-audit-telemetry-test.sh` | Deploy test Pod in cluster: write + telemetry + verify + delete pod | All roles |
-| `scripts/write-auditlog-and-telemetry.sh` | Local Groovy test harness for Boomi library (needs port-forwards) | Boomi Admin |
-| `scripts/open-signoz-ui.sh` | Access SigNoz dashboard | All |
+| Script | Purpose | Run By | Cadence |
+|---|---|---|---|
+| `scripts/provision.sh <scope>` | Full provisioning entrypoint | Operator | Day-1 and change-driven reruns |
+| `scripts/destroy.sh <scope>` | Scoped teardown entrypoint (`mongodb`, `pg`, `signoz`, `all`) | Operator | Post-test cleanup and rebuild prep |
+| `scripts/bootstrap-dev-secrets.sh` | Create MongoDB encryption + credential secrets | Operator | Day-1 or when secrets are intentionally regenerated |
+| `scripts/create-audit-writer-secret.sh` | Create K8s Secret with MongoDB URI for Boomi library | Operator | Day-1 and when Mongo URI changes |
+| `scripts/create-audit-reader.sh` | Create read-only MongoDB user for querying audit logs | Operator/Architect | Day-1 and user onboarding |
+| `scripts/create-signoz-root-user-secret.sh` | Bootstrap SigNoz admin account (no manual signup) | Operator | Once per environment, before/with `provision.sh signoz` |
+| `scripts/provision.sh signoz-observability` | Apply SigNoz dashboards + alerts as code (auto-bootstraps Service Account/API key via headless browser if needed) | Operator | Once per environment, then safe to re-run |
+| `scripts/verify-platform-health.sh` | Validate all components are healthy | All infra roles | Recurring (daily/weekly) and post-change |
+| `scripts/verify-platform-health.sh --smoke-test` | End-to-end write + read-back (local, needs port-forwards) | All infra roles | Post-change verification |
+| `scripts/run-audit-telemetry-test.sh` | Deploy test Pod in cluster: write + telemetry + verify + delete pod | All roles | Post-change verification |
+| `scripts/write-auditlog-and-telemetry.sh` | Local Groovy test harness for Boomi library (needs port-forwards) | Boomi Admin | Local development and troubleshooting |
+| `scripts/open-signoz-ui.sh` | Access SigNoz dashboard | All | As needed |
 
 See [Verification Commands](references/verification-commands.md) for per-step health checks.
+
+## Terminology Primer
+
+| Term | Meaning in this repo |
+|---|---|
+| **CR / CRD** | Custom resource and its definition in Kubernetes (for example Percona and Flux resources) |
+| **HelmRelease** | Flux object that continuously installs/updates a Helm chart |
+| **PVC** | PersistentVolumeClaim, storage requested by stateful workloads |
+| **OTLP** | OpenTelemetry Protocol used to send logs, traces, and metrics to SigNoz |
+| **PSMDB** | Percona Server for MongoDB |
 
 ## Document Maintenance Rules
 

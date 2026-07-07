@@ -6,6 +6,11 @@ This catalog is the source of truth for embedded configuration in this repositor
 Use this file to answer: "Where is this value defined?".
 Use [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md) to answer: "What should I run next?".
 
+**Maintenance cadence:**
+- Update this catalog in the same PR/commit as any tracked default, hardcoded value, or script constant change.
+- Review quarterly alongside version inventory in [Component Catalog](../references/component-catalog.md).
+- After a provisioning change, confirm no configuration drift with `scripts/verify-platform-health.sh`.
+
 ## Read This First
 
 | Question | Answer |
@@ -93,6 +98,31 @@ File: `k8s/base/psmdb-cluster.yaml`
 
 Change method: manual YAML edit in git.
 
+### MongoDB Metrics Collector Defaults
+File: `k8s/base/mongodb-metrics-collector.yaml`
+
+- image: `otel/opentelemetry-collector-contrib:0.155.0`
+- receiver: `mongodb` — hosts `psmdb-rs0-{0,1,2}.psmdb-rs0.mongodb.svc.cluster.local:27017`, `collection_interval: 60s`
+- auth: `MONGODB_CLUSTER_MONITOR_USER`/`MONGODB_CLUSTER_MONITOR_PASSWORD` from existing `psmdb-secrets` (via `envFrom`)
+- TLS: mounts existing `psmdb-ssl-internal` secret (`ca.crt`/`tls.crt`/`tls.key`)
+- exporter endpoint: `signoz-otel-collector.signoz.svc.cluster.local:4317` (OTLP/gRPC, insecure — in-cluster only)
+- resources: requests `50m`/`128Mi`, limits `200m`/`256Mi`
+
+Change method: manual YAML edit in git. See [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring).
+
+### PostgreSQL Metrics Collector Defaults
+Files:
+- `k8s/base/postgres-metrics-collector.yaml`
+- `platform-prerequisites/terraform/postgresql/main.tf` (IAM role + Pod Identity association)
+
+- cloudwatch-exporter image: `quay.io/prometheus/cloudwatch-exporter:v0.18.0`, port `9106`, config `AWS/RDS` namespace, dimensions `DBClusterIdentifier=pg18-dev` / `DBInstanceIdentifier=pg18-dev-writer`, region `ap-east-1`
+- otel-collector image: `otel/opentelemetry-collector-contrib:0.155.0`, `prometheus` receiver scraping `127.0.0.1:9106`, `scrape_interval: 300s`
+- IAM role: `postgres-cloudwatch-monitor-role` (read-only: `cloudwatch:ListMetrics`, `GetMetricData`, `GetMetricStatistics`), bound via EKS Pod Identity to ServiceAccount `postgres-metrics-collector` in namespace `mongodb`
+- exporter endpoint: `signoz-otel-collector.signoz.svc.cluster.local:4317` (OTLP/gRPC, insecure — in-cluster only)
+- resources: cloudwatch-exporter requests `50m`/`256Mi`, limits `200m`/`512Mi`; otel-collector requests `50m`/`128Mi`, limits `200m`/`256Mi`
+
+Change method: manual YAML/Terraform edit in git. See [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring).
+
 ### StorageClass and Certificate Defaults
 Files:
 - `k8s/base/storageclass-gp3-mongodb.yaml`
@@ -116,6 +146,16 @@ Defaults:
 - production recommendation: ingress controller (ALB/NGINX) with SSO/OIDC and restricted source networks
 
 Change method: manual YAML edit in git.
+
+### SigNoz K8s Infra Monitoring Defaults
+File: `gitops/signoz/base/helmrelease-k8s-infra.yaml`
+
+- HelmRelease chart: `k8s-infra`, version `0.16.0` (from the existing `signoz` HelmRepository)
+- `global.cloud: aws`, `global.clusterName: EKS-boomi-runtime-cluster`, `global.deploymentEnvironment: dev`
+- `otelCollectorEndpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318` (OTLP/HTTP, in-cluster, insecure)
+- `presets.resourceDetection.detectors: [eks, system]`
+
+Change method: manual YAML edit in git. See [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring).
 
 ## Terraform Configuration
 
