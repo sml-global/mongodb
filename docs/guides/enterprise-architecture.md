@@ -84,7 +84,7 @@ Audit trail (MongoDB) and application data (PostgreSQL) are intentionally separa
 
 | Data | Sensitivity | Location | Protection |
 |---|---|---|---|
-| Terraform state | **High** (contains PG password) | S3 `sml-oms-dev-tfstate` | Encryption, versioning, IAM |
+| Terraform state | **High** (contains PG password) | S3 `sml-oms-dev-tfstate` (one bucket, per-root state keys -- see [Component Catalog § Terraform S3 State Backend](../references/component-catalog.md#terraform-s3-state-backend) for the exact key per root) | Encryption, versioning, IAM |
 | Local `terraform.tfvars` | **High** (contains PG password) | Operator workstation | Not committed, local only |
 | Escrow files | **High** (encryption key + credentials) | Operator workstation | Mode 600, gitignored |
 | MongoDB encryption key | **High** | Kubernetes Secret + escrow | Encrypted at rest in etcd |

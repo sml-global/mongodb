@@ -162,16 +162,29 @@ Expected: render succeeds, structural checks pass.
 bash scripts/provision.sh signoz
 ```
 
-Expected: SigNoz pods running in namespace `signoz`.
+Expected: SigNoz pods running in namespace `signoz`, including `signoz-0` at
+`1/1 Ready` (see Step 7A below for what makes that possible without a manual
+signup step).
 
 > **Security:** The ClickHouse password in `gitops/signoz/base/helmreleases.yaml` is set to a placeholder (`CHANGE_ME_BEFORE_PRODUCTION`). Replace it with a real password before deploying to any shared or production environment.
 
-### Step 7A: Bootstrap the SigNoz Admin Account (Automated, No Manual Signup)
+### Step 7A: SigNoz Admin Account Bootstrap (Automated, No Manual Signup)
 
 This environment uses SigNoz's **root user** feature (v0.112.0+) so the admin
 account is created automatically at pod startup -- nobody needs to race to be
-"first to sign up". Run this **before** Step 7 on a fresh environment (or
-before restarting `signoz-0` if SigNoz is already up):
+"first to sign up". `gitops/signoz/base/helmreleases.yaml` wires
+`SIGNOZ_USER_ROOT_EMAIL`/`SIGNOZ_USER_ROOT_PASSWORD` to a `signoz-root-user`
+Secret **without** `optional: true` -- if that Secret doesn't exist, the
+`signoz-0` pod fails to start with `CreateContainerConfigError`.
+
+**`scripts/provision.sh signoz` (Step 7) now handles this automatically** --
+it creates the `signoz-root-user` Secret first if missing, and restarts the
+`signoz` StatefulSet afterward if it had already been created without one
+(Kubernetes does not hot-inject a newly created Secret's values into an
+already-running or already-erroring pod, so a restart is required in that
+specific case). You do not need to run the two steps in a particular order
+anymore -- but if you want explicit control over the generated credentials
+before SigNoz ever starts, you can still run the bootstrap first:
 
 ```bash
 bash scripts/create-signoz-root-user-secret.sh
@@ -185,6 +198,15 @@ What this does:
 - The HelmRelease (`gitops/signoz/base/helmreleases.yaml`) wires
   `SIGNOZ_USER_ROOT_*` env vars to that Secret, so the admin account exists
   the moment the `signoz-0` pod starts
+
+If you ever see `signoz-0` stuck in `CreateContainerConfigError`, that
+Secret is missing -- re-run `scripts/provision.sh signoz` (self-heals) or
+manually:
+
+```bash
+kubectl -n signoz get secret signoz-root-user || bash scripts/create-signoz-root-user-secret.sh
+kubectl -n signoz rollout restart statefulset/signoz
+```
 
 Retrieve the credentials any time (source of truth is the Secret, not any
 file):

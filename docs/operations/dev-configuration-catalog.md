@@ -46,6 +46,12 @@ Boundary note:
 | `all` | Runs `mongodb` then `pg` sequentially | Two separate keys (see below) |
 | `mongodb` | `platform-prerequisites/terraform/mongodb` | `oms/dev/mongo.tfstate` |
 | `pg` | `platform-prerequisites/terraform/postgresql` | `oms/dev/pg.tfstate` |
+| `signoz` | No Terraform root (Flux HelmRelease + kustomize only) | N/A |
+| `signoz-observability` | `platform-prerequisites/terraform/signoz-observability` | `oms/dev/signoz-observability.tfstate` |
+
+All three state keys live in the same S3 bucket (`sml-oms-dev-tfstate`, see
+[Component Catalog § Terraform S3 State Backend](../references/component-catalog.md#terraform-s3-state-backend)) --
+do not reuse one root's state key for another.
 
 Use this map when validating whether a setting is in the correct root.
 
