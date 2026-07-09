@@ -263,6 +263,21 @@ else
   fail "No SigNoz pods running" "Run: scripts/provision.sh signoz"
 fi
 
+# The aggregate count above can pass even when the core SigNoz application
+# pod itself is down (e.g. CreateContainerConfigError from a missing
+# signoz-root-user Secret) as long as enough satellite pods (ClickHouse,
+# Zookeeper, otel-collector, k8s-infra agents) are Running -- check the
+# actual app pod's readiness explicitly too.
+signoz_app_ready="$(kubectl -n signoz get pod signoz-0 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "")"
+if [[ "$signoz_app_ready" == "true" ]]; then
+  pass "SigNoz application pod (signoz-0): Ready"
+elif kubectl -n signoz get pod signoz-0 >/dev/null 2>&1; then
+  signoz_app_status="$(kubectl -n signoz get pod signoz-0 -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "NotReady")"
+  fail "SigNoz application pod (signoz-0): $signoz_app_status" "kubectl -n signoz describe pod signoz-0 -- if CreateContainerConfigError, check 'signoz-root-user' Secret exists (scripts/create-signoz-root-user-secret.sh) then restart: kubectl -n signoz rollout restart statefulset/signoz"
+else
+  fail "SigNoz application pod (signoz-0) not found" "Run: scripts/provision.sh signoz"
+fi
+
 # ─── STORAGE ─────────────────────────────────────────────────────────────────
 
 section "Storage"

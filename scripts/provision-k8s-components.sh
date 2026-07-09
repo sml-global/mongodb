@@ -480,7 +480,27 @@ apply_overlay() {
 }
 
 apply_signoz() {
+  # gitops/signoz/base/helmreleases.yaml wires SIGNOZ_USER_ROOT_EMAIL/PASSWORD
+  # to the 'signoz-root-user' Secret via secretKeyRef (no `optional: true`),
+  # so the signoz-0 pod hits CreateContainerConfigError if that Secret
+  # doesn't exist yet. Ensure it exists BEFORE applying, so this scope is
+  # self-sufficient regardless of call order.
+  local secret_existed_before="false"
+  if kubectl -n signoz get secret signoz-root-user >/dev/null 2>&1; then
+    secret_existed_before="true"
+  fi
+  "$ROOT_DIR/scripts/create-signoz-root-user-secret.sh"
+
   kubectl apply -k "$ROOT_DIR/gitops/signoz/base"
+
+  # If the Secret didn't exist before (this run just created it) AND the
+  # signoz-0 pod already existed from a prior apply, it was created without
+  # the env var resolving -- Kubernetes does not hot-inject secretKeyRef
+  # values into a running/errored pod, so force a restart to pick it up.
+  if [[ "$secret_existed_before" == "false" ]] && kubectl -n signoz get statefulset signoz >/dev/null 2>&1; then
+    echo "Restarting signoz StatefulSet so it picks up the newly created signoz-root-user Secret ..."
+    kubectl -n signoz rollout restart statefulset/signoz
+  fi
 }
 
 wait_for_mongodb_crd() {

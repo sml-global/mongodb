@@ -73,14 +73,15 @@ This section explains why each script exists, not only the command name.
 
 | Script | Purpose | Typical Time To Use |
 |---|---|---|
-| `scripts/provision.sh` | Main entrypoint. Chooses scope (`all`, `mongodb`, `pg`, `signoz`) and runs the right steps. Platform admins can add `--bootstrap-platform-controllers` to also install missing cluster controllers and storage driver. | Normal operator usage; platform-admin bootstrap when needed. |
-| `scripts/provision-platform-prereq.sh` | Runs Terraform for infra scopes and picks the correct Terraform root/state key per scope. | Infra-only operations. |
-| `scripts/provision-k8s-components.sh` | Applies Kubernetes components by scope (`mongodb`, `signoz`, `operators`, `policies`, `overlay`). | K8s-only operations. |
-| `scripts/open-signoz-ui.sh` | Access helper for SigNoz dashboard. Supports dev port-forward and production ingress URL discovery. | Opening SigNoz UI in dev and production. |
-| `scripts/bootstrap-dev-secrets.sh` | Creates MongoDB encryption key and all four Percona operator user credential secrets (backup, clusterAdmin, clusterMonitor, userAdmin). If `.local-dev-user-passwords.txt` exists, reads passwords from it; if the file does not exist, auto-generates all passwords and saves them there. Skips any secret that already exists in the cluster. | After infra provisioning, before MongoDB overlay apply. |
-| `scripts/validate-dev-render.sh` | Renders and checks dev overlay output locally. | Before applying MongoDB manifests. |
-| `scripts/create-signoz-root-user-secret.sh` | Bootstraps the SigNoz admin account automatically (no manual UI signup) via SigNoz's root-user feature. | Once per environment, before/with `provision.sh signoz`. |
-| `scripts/provision.sh signoz-observability` | Applies SigNoz dashboards + alert rules as code (K8s, MongoDB, PostgreSQL, OTel Collector, Boomi telemetry) via Terraform. Idempotent — safe to re-run. | After SigNoz is up and a one-time Service Account/API key exists — see [SigNoz Dashboard Import Pack](docs/references/signoz-dashboard-import-pack.md). |
+| [`scripts/provision.sh`](scripts/provision.sh) | Main entrypoint. Chooses scope (`all`, `mongodb`, `pg`, `signoz`) and runs the right steps. Platform admins can add `--bootstrap-platform-controllers` to also install missing cluster controllers and storage driver. | Normal operator usage; platform-admin bootstrap when needed. |
+| [`scripts/provision-platform-prereq.sh`](scripts/provision-platform-prereq.sh) | Runs Terraform for infra scopes and picks the correct Terraform root/state key per scope. | Infra-only operations. |
+| [`scripts/provision-k8s-components.sh`](scripts/provision-k8s-components.sh) | Applies Kubernetes components by scope (`mongodb`, `signoz`, `operators`, `policies`, `overlay`). | K8s-only operations. |
+| [`scripts/open-signoz-ui.sh`](scripts/open-signoz-ui.sh) | Access helper for SigNoz dashboard. Supports dev port-forward and production ingress URL discovery. | Opening SigNoz UI in dev and production. |
+| [`scripts/bootstrap-dev-secrets.sh`](scripts/bootstrap-dev-secrets.sh) | Creates MongoDB encryption key and all four Percona operator user credential secrets (backup, clusterAdmin, clusterMonitor, userAdmin). If `.local-dev-user-passwords.txt` exists, reads passwords from it; if the file does not exist, auto-generates all passwords and saves them there. Skips any secret that already exists in the cluster. | After infra provisioning, before MongoDB overlay apply. |
+| [`scripts/validate-dev-render.sh`](scripts/validate-dev-render.sh) | Renders and checks dev overlay output locally. | Before applying MongoDB manifests. |
+| [`scripts/create-signoz-root-user-secret.sh`](scripts/create-signoz-root-user-secret.sh) | Bootstraps the SigNoz admin account automatically (no manual UI signup) via SigNoz's root-user feature. | Once per environment, before/with `provision.sh signoz`. |
+| [`scripts/provision.sh`](scripts/provision.sh) `signoz-observability` | Applies SigNoz dashboards + alert rules as code (K8s, MongoDB, PostgreSQL, OTel Collector, Boomi telemetry) via Terraform. Idempotent — safe to re-run. | After SigNoz is up and a one-time Service Account/API key exists — see [SigNoz Dashboard Import Pack](docs/references/signoz-dashboard-import-pack.md). |
+| [`scripts/destroy.sh`](scripts/destroy.sh) | Scoped teardown entrypoint (`mongodb`, `pg`, `signoz`, `signoz-observability`, `all`). | Post-test cleanup and rebuild prep. |
 
 ## SigNoz (Application Telemetry)
 
@@ -99,9 +100,13 @@ bash scripts/provision.sh signoz
 ```
 
 The admin account is bootstrapped automatically (no manual "Sign Up" race) —
-run `scripts/create-signoz-root-user-secret.sh` once before/with the command
-above. Dashboards and alert rules for K8s, MongoDB, PostgreSQL, the OTel
-Collector, and Boomi app telemetry are also managed as code:
+`scripts/provision.sh signoz` auto-creates the required `signoz-root-user`
+Secret if it doesn't exist yet (restarting the `signoz` StatefulSet if it was
+already running without it), so there's no ordering pitfall between the two
+scripts. You can still run `scripts/create-signoz-root-user-secret.sh`
+explicitly first if you want to control the timing. Dashboards and alert
+rules for K8s, MongoDB, PostgreSQL, the OTel Collector, and Boomi app
+telemetry are also managed as code:
 
 ```bash
 bash scripts/provision.sh signoz-observability --auto-approve

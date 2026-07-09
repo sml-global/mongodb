@@ -261,7 +261,7 @@ Single source of truth for all deployed versions. Update this table when any com
 
 | Aspect | Detail |
 |---|---|
-| **What** | An S3 bucket (`sml-oms-dev-tfstate`) storing Terraform state files with versioning, encryption, and public access block. |
+| **What** | A single S3 bucket (`sml-oms-dev-tfstate`, region `ap-east-1`) storing all Terraform state files with versioning, encryption, and public access block. Each Terraform root writes to its own **key** (S3's term for the object path/"folder+filename") inside that one bucket -- there is no separate bucket per root. |
 | **Why** | Terraform state must be shared across operators and persisted durably. Local state creates drift and ownership conflicts. |
 | **How it helps** | All operators read/write the same infrastructure state. Versioning allows state recovery if corruption occurs. |
 | **Owner** | Platform team |
@@ -269,6 +269,21 @@ Single source of truth for all deployed versions. Update this table when any com
 | **Depended on by** | All Terraform operations |
 | **Provisioned by** | `scripts/bootstrap-terraform-s3-backend.sh` |
 | **Verification** | [Verification Commands § Terraform State](verification-commands.md#terraform-state-backend) |
+
+Every root shares the same bucket and region; only the key (path) differs:
+
+| Terraform root | Bucket | Region | State key (path within bucket) |
+|---|---|---|---|
+| `platform-prerequisites/terraform/mongodb` | `sml-oms-dev-tfstate` | `ap-east-1` | `oms/dev/mongo.tfstate` |
+| `platform-prerequisites/terraform/postgresql` | `sml-oms-dev-tfstate` | `ap-east-1` | `oms/dev/pg.tfstate` |
+| `platform-prerequisites/terraform/signoz-observability` | `sml-oms-dev-tfstate` | `ap-east-1` | `oms/dev/signoz-observability.tfstate` |
+
+So, for example, the MongoDB prerequisites' state is the single object at
+`s3://sml-oms-dev-tfstate/oms/dev/mongo.tfstate` -- "`oms/dev/`" is the shared
+key prefix (S3 has no real folders; this just groups objects visually), and
+`mongo.tfstate` is that root's own file within it. There is no separate
+Terraform root/state for the plain `signoz` scope -- that scope is a Flux
+HelmRelease + kustomize apply only, with no Terraform state at all.
 
 ### PBM Backup Bucket
 
