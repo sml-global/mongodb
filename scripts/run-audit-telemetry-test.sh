@@ -224,7 +224,7 @@ spec:
           };
 
           const result = db.getCollection("${COLLECTION}").insertMany([normalRecord, errorRecord]);
-          print("Inserted: " + result.insertedIds.length + " docs");
+          print("Inserted: " + Object.keys(result.insertedIds).length + " docs");
         '
       echo "  MongoDB write: OK"
       echo ""
