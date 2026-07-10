@@ -24,9 +24,9 @@ Usage:
   run-audit-telemetry-test.sh [--namespace <ns>] [--db <name>] [--keep] [--timeout <seconds>]
 
 Deploys a test Pod in the cluster that:
-  1. Writes a sample audit log record to MongoDB (cluster-internal)
+  1. Writes Boomi-style sample audit log records to MongoDB (cluster-internal)
   2. Sends matching OTLP telemetry to SigNoz (cluster-internal)
-  3. Verifies the record exists in MongoDB (read-back)
+  3. Verifies the records exist in MongoDB (read-back)
   4. Prints results and deletes the Pod
 
 Options:
@@ -36,7 +36,7 @@ Options:
   --timeout     Seconds to wait for pod completion (default: 180)
   -h, --help    Show this help
 
-The test record is NOT deleted from MongoDB — it remains as evidence.
+The test records are NOT deleted from MongoDB — they remain as evidence.
 The Pod is deleted after showing logs (unless --keep is used).
 EOF
 }
@@ -131,25 +131,100 @@ spec:
       # Build client certificate PEM from mounted internal TLS secret.
       cat /etc/mongodb-ssl-internal/tls.key /etc/mongodb-ssl-internal/tls.crt > /tmp/tls-internal.pem
 
-      # Step 1: Write audit record to MongoDB
-      echo "[1/3] Writing audit record to MongoDB..."
+      # Step 1: Write Boomi-style audit records to MongoDB
+      echo "[1/3] Writing Boomi-style audit records to MongoDB..."
       mongosh --quiet \
         --tls --tlsAllowInvalidCertificates \
         --tlsCAFile /etc/mongodb-ssl-internal/ca.crt \
         --tlsCertificateKeyFile /tmp/tls-internal.pem \
         "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_HOST}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
-          const record = {
-            trace_id: "${TRACE_ID}",
-            time: "${NOW_ISO}",
-            action: "smoke.test.pod",
-            resource_type: "test.record",
-            resource_id: "TEST-001",
-            user_id: "test-pod",
-            meta: { source: "audit-telemetry-test-pod", pod: "${POD_NAME}" }
+          const normalRecord = {
+            trace_id: "${TRACE_ID}-n",
+            ip: "192.168.1.78",
+            time: "2026-05-26T17:25:47Z",
+            action: "boomi.process.track",
+            error_code: null,
+            resource_type: "boomi.process",
+            resource_id: "{6808CCD2-D77A-49C8-A96C-ED2CB38F9916}",
+            user_id: "EDI_EPlatform_UpdateFixItem_V3",
+            message: null,
+            tpl_message: {
+              key: "boomi.process.track.logged",
+              params: {
+                source_system: "boomi",
+                sheet: "Normal",
+                event: "Track",
+                source: "EDI_EPlatform_UpdateFixItem_V3",
+                source_info: "sysvar025256F066A-NV26061231-FAST26050490+KILYH(Uniqlo)_6b09992e-1ca5-4a36-81e3-d124fccae19d",
+                process_id: "{6808CCD2-D77A-49C8-A96C-ED2CB38F9916}",
+                event_id: "246964931",
+                server_name: "DBPDHKC15 [SX] 192.168.1.78 //SS2014",
+                start_time: "2026-05-26 17:25:47",
+                original_message_log: "Updated fixed item:25256F066A-NV26061231-FAST26050490+KILYH(Uniqlo)_6b09992e-1ca5-4a36-81e3-d124fccae19d Rows updated:12",
+                message_log: "Updated fixed item:25256F066A-NV26061231-FAST26050490+KILYH(Uniqlo)_6b09992e-1ca5-4a36-81e3-d124fccae19d Rows updated:12",
+                notify: "0",
+                fileconfig_id: "0"
+              }
+            },
+            resource_changes: {
+              event: ["Track", "Track"]
+            },
+            meta: {
+              method: "BOOMI",
+              path: "EDI_EPlatform_UpdateFixItem_V3",
+              status: 200,
+              ua: "DBPDHKC15 [SX] 192.168.1.78 //SS2014",
+              sheet: "Normal",
+              source_system: "boomi",
+              pod: "${POD_NAME}"
+            }
           };
-          const result = db.getCollection("${COLLECTION}").insertOne(record);
-          print("Inserted: " + result.insertedId);
+
+          const errorRecord = {
+            trace_id: "${TRACE_ID}-e",
+            ip: "192.168.0.132",
+            time: "2026-05-26T17:20:45Z",
+            action: "boomi.process.error",
+            error_code: "BOOMI_ON_ERROR",
+            resource_type: "boomi.process",
+            resource_id: "{23FC181C-7804-41BF-89F0-217BE9041A7C}",
+            user_id: "EDI_Eplatform_OrderGrouping_V8",
+            message: "Exception has been thrown by the target of an invocation.",
+            tpl_message: {
+              key: "boomi.process.error.logged",
+              params: {
+                source_system: "boomi",
+                sheet: "Error",
+                event: "On Error",
+                source: "EDI_Eplatform_OrderGrouping_V8",
+                source_info: "sysvar0: 2025121300047f1ff161-a393-415d-a739-7148f6b0c517",
+                process_id: "{23FC181C-7804-41BF-89F0-217BE9041A7C}",
+                event_id: "255802025",
+                server_name: "DBPDHKC12 [NI] 192.168.0.132 //SS2014",
+                start_time: "2026-05-26 17:20:45",
+                original_message_log: "Exception has been thrown by the target of an invocation.",
+                message_log: "Exception has been thrown by the target of an invocation.",
+                notify: "0",
+                fileconfig_id: "30069"
+              }
+            },
+            resource_changes: {
+              event: ["On Error", "On Error"]
+            },
+            meta: {
+              method: "BOOMI",
+              path: "EDI_Eplatform_OrderGrouping_V8",
+              status: 500,
+              ua: "DBPDHKC12 [NI] 192.168.0.132 //SS2014",
+              sheet: "Error",
+              source_system: "boomi",
+              pod: "${POD_NAME}"
+            }
+          };
+
+          const result = db.getCollection("${COLLECTION}").insertMany([normalRecord, errorRecord]);
+          print("Inserted: " + result.insertedIds.length + " docs");
         '
       echo "  MongoDB write: OK"
       echo ""
@@ -186,10 +261,12 @@ spec:
                 "timeUnixNano": "${NOW_NANO}",
                 "severityNumber": 9,
                 "severityText": "INFO",
-                "body": {"stringValue": "smoke.test.pod"},
+                "body": {"stringValue": "boomi.process.track"},
                 "attributes": [
                   {"key": "trace_id", "value": {"stringValue": "${TRACE_ID}"}},
-                  {"key": "action", "value": {"stringValue": "smoke.test.pod"}},
+                  {"key": "action", "value": {"stringValue": "boomi.process.track"}},
+                  {"key": "resource_type", "value": {"stringValue": "boomi.process"}},
+                  {"key": "records.inserted", "value": {"intValue": "2"}},
                   {"key": "pod_name", "value": {"stringValue": "${POD_NAME}"}}
                 ]
               }]
@@ -207,21 +284,21 @@ spec:
       echo ""
 
       # Step 3: Read back from MongoDB to verify
-      echo "[3/3] Verifying record in MongoDB..."
+      echo "[3/3] Verifying records in MongoDB..."
       FOUND=\$(mongosh --quiet \
         --tls --tlsAllowInvalidCertificates \
         --tlsCAFile /etc/mongodb-ssl-internal/ca.crt \
         --tlsCertificateKeyFile /tmp/tls-internal.pem \
         "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_HOST}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
-          const doc = db.getCollection("${COLLECTION}").findOne({trace_id: "${TRACE_ID}"});
-          if (doc) { print("FOUND"); } else { print("NOT_FOUND"); }
+          const count = db.getCollection("${COLLECTION}").countDocuments({trace_id: {$in: ["${TRACE_ID}-n", "${TRACE_ID}-e"]}});
+          if (count === 2) { print("FOUND"); } else { print("NOT_FOUND:" + count); }
         ')
 
       if [[ "\$FOUND" == "FOUND" ]]; then
-        echo "  Read-back: OK (record verified in MongoDB)"
+        echo "  Read-back: OK (both records verified in MongoDB)"
       else
-        echo "  Read-back: FAILED (record not found)" >&2
+        echo "  Read-back: FAILED (records not found: \$FOUND)" >&2
         exit 1
       fi
 
