@@ -291,7 +291,7 @@ spec:
         --tlsCertificateKeyFile /tmp/tls-internal.pem \
         "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_HOST}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
-          const count = db.getCollection("${COLLECTION}").countDocuments({trace_id: {$in: ["${TRACE_ID}-n", "${TRACE_ID}-e"]}});
+          const count = db.getCollection("${COLLECTION}").countDocuments({trace_id: {\$in: ["${TRACE_ID}-n", "${TRACE_ID}-e"]}});
           if (count === 2) { print("FOUND"); } else { print("NOT_FOUND:" + count); }
         ')
 
