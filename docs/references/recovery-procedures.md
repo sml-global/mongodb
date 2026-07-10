@@ -13,6 +13,7 @@ Rollback, disaster recovery, credential rotation, and state recovery procedures.
 All procedures here are **trigger-based** — run only when an incident or planned maintenance requires it. They are not part of routine recurring checks.
 
 **Related docs:**
+- [Glossary](glossary.md) — jargon/acronym lookup (finalizers, taint, split-brain, PITR, and more)
 - [Verification Commands](verification-commands.md) — confirm recovery succeeded
 - [Operator Runbook](../guides/operator-runbook.md) — normal operating procedures
 - [Operator Runbook § Day-2 Operations](../guides/operator-runbook.md#day-2-operations-ongoing-maintenance) — trigger table referencing this doc

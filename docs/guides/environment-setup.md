@@ -36,6 +36,125 @@ If you are only reviewing telemetry reports, skip Terraform and kubectl sections
 
 ---
 
+## Core Concepts (Read Before You Run Any Command)
+
+If you have never worked with Kubernetes, AWS, or Terraform before, read this
+section first. It explains the "what" and "why" behind terms this repo's docs
+and scripts use constantly (`kubectl`, `port-forward`, `Secret`, `Terraform
+state`) — so commands stop looking like magic incantations you copy blindly.
+If you already know these terms, skip ahead to [Prerequisites Checklist](#prerequisites-checklist).
+
+### The Cluster Is A Private Network You Are Not Automatically Inside Of
+
+This repository provisions software that runs inside an **EKS cluster** — a
+managed Kubernetes cluster in AWS. Kubernetes runs your applications inside
+**Pods** (the smallest running unit — think "one running instance of a
+program"), grouped into **Namespaces** (logical folders, like `mongodb` or
+`signoz`, that keep one application's resources separate from another's).
+
+Your laptop is not automatically part of this private network. By design,
+you cannot open a browser and type a Pod's internal address directly — the
+cluster's internal network is isolated from the public internet as a
+security boundary. Every tool and technique described below exists to solve
+one problem: **how do I, sitting outside the cluster, safely reach something
+running inside it?**
+
+```mermaid
+flowchart LR
+  subgraph laptop[Your laptop - outside the cluster]
+    YOU[You]
+  end
+  subgraph cluster[EKS cluster - private network]
+    NS1[Namespace: mongodb]
+    NS2[Namespace: signoz]
+    POD1[Pod: psmdb-rs0-0]
+    POD2[Pod: signoz-0]
+    NS1 --> POD1
+    NS2 --> POD2
+  end
+  YOU -.->|cannot reach directly| POD1
+  YOU -.->|cannot reach directly| POD2
+```
+
+### `kubectl`: Your Remote Control For The Cluster
+
+`kubectl` is the command-line tool that talks to the cluster's API server on
+your behalf, using your AWS/Kubernetes identity. Every `kubectl ...` command
+you see in this repo's scripts is asking the cluster to do something (create
+a resource, read a Secret, open a tunnel) — it does not run anything on your
+laptop except the `kubectl` process itself.
+
+### Port-Forwarding: A Temporary, Personal Tunnel Into The Cluster
+
+**What it is:** `kubectl port-forward` opens a port on your own laptop (for
+example `127.0.0.1:3301`) and relays any traffic sent to it, through the
+cluster's API server, into a specific Pod's port inside the cluster (for
+example the SigNoz Pod's port `8080`).
+
+**Why we need it:** In dev, we don't want to stand up a permanent public URL
+(an Ingress protected by SSO) just so one operator can glance at a
+dashboard. Port-forward gives you a private, temporary, zero-infrastructure
+way to reach one internal service for as long as the command keeps running —
+nothing is exposed to anyone else, and closing the terminal (or `Ctrl+C`)
+closes the tunnel immediately.
+
+**How it works:**
+
+```mermaid
+flowchart LR
+  subgraph laptop[Your laptop]
+    BROWSER[Your browser or curl] -->|http://127.0.0.1:3301| KUBECTL[kubectl port-forward process]
+  end
+  KUBECTL -->|authenticated tunnel| API[Kubernetes API Server]
+  subgraph cluster[EKS cluster - private network]
+    API --> SVC[Service: signoz]
+    SVC --> POD[Pod: signoz-0, port 8080]
+  end
+```
+
+1. You run: `kubectl -n signoz port-forward svc/signoz 3301:8080`.
+2. `kubectl` opens `127.0.0.1:3301` on your laptop and keeps running in your
+   terminal — this is a foreground tunnel, not a background service, so the
+   terminal must stay open for as long as you need access.
+3. Anything you send to `http://127.0.0.1:3301` (for example, opening it in a
+   browser) is relayed through the API server into the SigNoz Pod's port
+   `8080`.
+4. Stop the tunnel any time with `Ctrl+C` — nothing was ever made public, so
+   there is nothing to clean up afterward.
+
+**When to use it vs. the alternative:**
+
+| Situation | Use | Why |
+|---|---|---|
+| Local dev, one person, temporary | Port-forward (`scripts/open-signoz-ui.sh`) | No infrastructure to set up or tear down; automatically private to you |
+| Shared/production, many users, permanent | Ingress (`scripts/open-signoz-ui.sh --mode ingress`) | Gives a real, stable URL protected by SSO/OIDC; no terminal needs to stay open |
+
+### Secrets: Where Passwords And Keys Actually Live
+
+A Kubernetes **Secret** is a small piece of cluster-stored data (a password,
+API key, or connection string) that Pods can read without that value ever
+being written into a YAML file you edit by hand. Scripts in this repo (for
+example `scripts/bootstrap-dev-secrets.sh`) create these Secrets so you
+rarely handle raw passwords yourself — when you do need one (to log in
+somewhere), you read it back with a command like:
+
+```bash
+kubectl -n signoz get secret signoz-root-user -o jsonpath='{.data.password}' | base64 -d
+```
+
+### Terraform State: Why We Never Run `terraform apply` By Hand Here
+
+**Terraform** is the tool that creates real AWS resources (S3 buckets, IAM
+roles, the Aurora database) from code. Every time it runs, it needs to know
+what it already created — that record is the **Terraform state**, stored in
+an S3 bucket (`sml-oms-dev-tfstate`) rather than on your laptop, so any
+operator can pick up from the same shared state. This repo's wrapper scripts
+(`scripts/provision.sh`, `scripts/provision-platform-prereq.sh`) always point
+Terraform at the correct state file for you — this is why the runbooks tell
+you to use those scripts instead of running bare `terraform apply` yourself.
+
+---
+
 ## Prerequisites Checklist
 
 Before starting, get these values from the platform or AWS account owner:

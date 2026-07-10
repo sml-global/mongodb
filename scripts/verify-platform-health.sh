@@ -273,6 +273,9 @@ if [[ "$signoz_app_ready" == "true" ]]; then
   pass "SigNoz application pod (signoz-0): Ready"
 elif kubectl -n signoz get pod signoz-0 >/dev/null 2>&1; then
   signoz_app_status="$(kubectl -n signoz get pod signoz-0 -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "NotReady")"
+  if [[ -z "$signoz_app_status" ]]; then
+    signoz_app_status="$(kubectl -n signoz get pod signoz-0 -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotReady")"
+  fi
   fail "SigNoz application pod (signoz-0): $signoz_app_status" "kubectl -n signoz describe pod signoz-0 -- if CreateContainerConfigError, check 'signoz-root-user' Secret exists (scripts/create-signoz-root-user-secret.sh) then restart: kubectl -n signoz rollout restart statefulset/signoz"
 else
   fail "SigNoz application pod (signoz-0) not found" "Run: scripts/provision.sh signoz"
@@ -306,52 +309,49 @@ fi
 if [[ "$SMOKE_TEST" == "true" ]]; then
   section "End-to-End Smoke Test"
 
-  # Check if port-forwards are running
-  if ! curl -sf http://127.0.0.1:27017 >/dev/null 2>&1 && ! mongosh --quiet --eval "db.runCommand({ping:1})" 'mongodb://127.0.0.1:27017/?directConnection=true' >/dev/null 2>&1; then
-    fail "MongoDB not reachable on localhost:27017" "Run: kubectl -n mongodb port-forward svc/psmdb-rs0 27017:27017"
+  # MongoDB smoke in-cluster with authenticated TLS, no local port-forward required.
+  TRACE_ID="smoke-test-$(date +%s)"
+  mongo_user="$(kubectl -n mongodb get secret psmdb-secrets -o jsonpath='{.data.MONGODB_DATABASE_ADMIN_USER}' 2>/dev/null | base64 -d || true)"
+  mongo_pass="$(kubectl -n mongodb get secret psmdb-secrets -o jsonpath='{.data.MONGODB_DATABASE_ADMIN_PASSWORD}' 2>/dev/null | base64 -d || true)"
+
+  if [[ -z "$mongo_user" || -z "$mongo_pass" ]]; then
+    fail "MongoDB smoke test skipped" "Application admin credentials missing from secret psmdb-secrets"
+  elif ! kubectl -n mongodb get pod psmdb-rs0-0 >/dev/null 2>&1; then
+    fail "MongoDB smoke test skipped" "Pod psmdb-rs0-0 not found"
   else
-    pass "MongoDB reachable on localhost:27017"
+    MONGO_SMOKE_RESULT="$(kubectl -n mongodb exec psmdb-rs0-0 -c mongod -- sh -c "mongosh --host 127.0.0.1 --port 27017 --username '$mongo_user' --password '$mongo_pass' --authenticationDatabase admin --tls --tlsAllowInvalidCertificates --tlsCAFile /etc/mongodb-ssl/ca.crt --tlsCertificateKeyFile /tmp/tls.pem --quiet --eval \"const trace='$TRACE_ID'; const c=db.getSiblingDB('app').smoke_test; const w=c.insertOne({trace_id:trace,time:new Date().toISOString(),action:'smoke.test'}); const r=c.findOne({trace_id:trace}); c.deleteOne({trace_id:trace}); print((w.insertedId && r)?'OK':'FAIL');\"" 2>/dev/null || true)"
+    MONGO_SMOKE_RESULT="$(echo "$MONGO_SMOKE_RESULT" | tr -d '[:space:]')"
 
-    # Write a test record
-    TRACE_ID="smoke-test-$(date +%s)"
-    WRITE_RESULT="$(mongosh --quiet 'mongodb://127.0.0.1:27017/?directConnection=true' --eval "
-      const r = db.getSiblingDB('test_db').smoke_test.insertOne({
-        trace_id: '$TRACE_ID', time: new Date().toISOString(), action: 'smoke.test'
-      });
-      print(r.insertedId ? 'OK' : 'FAIL');
-    " 2>/dev/null || echo "FAIL")"
-
-    if [[ "$WRITE_RESULT" == *"OK"* ]]; then
-      pass "MongoDB write succeeded (trace: $TRACE_ID)"
-
-      # Read back
-      READ_RESULT="$(mongosh --quiet 'mongodb://127.0.0.1:27017/?directConnection=true' --eval "
-        const doc = db.getSiblingDB('test_db').smoke_test.findOne({trace_id: '$TRACE_ID'});
-        print(doc ? 'FOUND' : 'NOT_FOUND');
-      " 2>/dev/null || echo "NOT_FOUND")"
-
-      if [[ "$READ_RESULT" == *"FOUND"* ]]; then
-        pass "MongoDB read-back verified"
-      else
-        fail "MongoDB read-back failed" "Document not found after write"
-      fi
-
-      # Cleanup
-      mongosh --quiet 'mongodb://127.0.0.1:27017/?directConnection=true' --eval "
-        db.getSiblingDB('test_db').smoke_test.deleteOne({trace_id: '$TRACE_ID'});
-      " >/dev/null 2>&1
+    if [[ "$MONGO_SMOKE_RESULT" == "OK" ]]; then
+      pass "MongoDB write/read smoke succeeded (trace: $TRACE_ID)"
     else
-      fail "MongoDB write failed" "Check MongoDB auth and connectivity"
+      fail "MongoDB smoke write/read failed" "Check mongodb pod logs and psmdb-secrets database admin privileges"
     fi
   fi
 
-  # SigNoz telemetry send
+  # SigNoz smoke with temporary local port-forward fallback.
+  SIG_NOZ_PF_PID=""
+  if ! curl -sf http://127.0.0.1:3301/api/v1/health >/dev/null 2>&1; then
+    if kubectl -n signoz get svc signoz >/dev/null 2>&1; then
+      pf_log="$(mktemp -t signoz-pf.XXXXXX.log)"
+      kubectl -n signoz port-forward svc/signoz 3301:8080 >"$pf_log" 2>&1 &
+      SIG_NOZ_PF_PID="$!"
+
+      for _ in {1..20}; do
+        if curl -sf http://127.0.0.1:3301/api/v1/health >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+    fi
+  fi
+
   if curl -sf http://127.0.0.1:3301/api/v1/health >/dev/null 2>&1; then
     pass "SigNoz reachable on localhost:3301"
 
     TELEM_RESULT="$(curl -sf -o /dev/null -w '%{http_code}' -X POST \
       -H 'Content-Type: application/json' \
-      -d '{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"smoke-test"}}]},"scopeLogs":[{"logRecords":[{"timeUnixNano":"'"$(date +%s)"'000000000","body":{"stringValue":"smoke-test"}}]}]}]}' \
+      -d '{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"smoke-test"}}]},"scopeLogs":[{"logRecords":[{"timeUnixNano":"'"$(date +%s)'"'000000000","body":{"stringValue":"smoke-test"}}]}]}]}' \
       http://127.0.0.1:3301/v1/logs 2>/dev/null || echo "000")"
 
     if [[ "$TELEM_RESULT" =~ ^2 ]]; then
@@ -360,7 +360,11 @@ if [[ "$SMOKE_TEST" == "true" ]]; then
       fail "SigNoz telemetry rejected (HTTP $TELEM_RESULT)" "Check SigNoz frontend/collector"
     fi
   else
-    fail "SigNoz not reachable on localhost:3301" "Run: kubectl -n signoz port-forward svc/signoz 3301:8080"
+    fail "SigNoz not reachable on localhost:3301" "Verify svc/signoz is ready and port-forward can be established"
+  fi
+
+  if [[ -n "$SIG_NOZ_PF_PID" ]]; then
+    kill "$SIG_NOZ_PF_PID" >/dev/null 2>&1 || true
   fi
 fi
 

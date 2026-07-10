@@ -13,7 +13,7 @@ locals {
   role_actions = var.use_pod_identity ? ["sts:AssumeRole", "sts:TagSession"] : ["sts:AssumeRoleWithWebIdentity"]
 }
 
-resource "kubernetes_namespace" "mongodb" {
+resource "kubernetes_namespace_v1" "mongodb" {
   metadata {
     name = local.namespace
     labels = {
@@ -138,10 +138,10 @@ resource "aws_iam_role_policy" "mongodb_pbm" {
   policy = data.aws_iam_policy_document.mongodb_pbm.json
 }
 
-resource "kubernetes_service_account" "mongodb_workload" {
+resource "kubernetes_service_account_v1" "mongodb_workload" {
   metadata {
     name      = local.workload_sa_name
-    namespace = kubernetes_namespace.mongodb.metadata[0].name
+    namespace = kubernetes_namespace_v1.mongodb.metadata[0].name
     annotations = var.use_pod_identity ? {} : {
       "eks.amazonaws.com/role-arn" = aws_iam_role.mongodb_pbm.arn
     }
@@ -153,6 +153,6 @@ resource "aws_eks_pod_identity_association" "mongodb_workload" {
 
   cluster_name    = var.cluster_name
   namespace       = local.namespace
-  service_account = kubernetes_service_account.mongodb_workload.metadata[0].name
+  service_account = kubernetes_service_account_v1.mongodb_workload.metadata[0].name
   role_arn        = aws_iam_role.mongodb_pbm.arn
 }

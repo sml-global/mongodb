@@ -18,6 +18,7 @@ ACCOUNT_NAME="terraform-automation"
 ROLE="signoz-admin"
 KEY_NAME="terraform-automation-key-$(date +%s)"
 PORT="${SIGNOZ_BOOTSTRAP_PORT:-13301}"
+APP_READY_TIMEOUT_SECONDS="${SIGNOZ_APP_READY_TIMEOUT_SECONDS:-600}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY_SCRIPT="$ROOT_DIR/scripts/bootstrap_signoz_service_account.py"
@@ -64,6 +65,24 @@ if ! kubectl -n "$NAMESPACE" get secret signoz-root-user >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Waiting for SigNoz application pod signoz-0 readiness (timeout: ${APP_READY_TIMEOUT_SECONDS}s) ..."
+deadline=$((SECONDS + APP_READY_TIMEOUT_SECONDS))
+while true; do
+  if kubectl -n "$NAMESPACE" get pod signoz-0 >/dev/null 2>&1; then
+    ready="$(kubectl -n "$NAMESPACE" get pod signoz-0 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || true)"
+    if [[ "$ready" == "true" ]]; then
+      break
+    fi
+  fi
+
+  if (( SECONDS >= deadline )); then
+    echo "Error: signoz-0 did not become Ready within ${APP_READY_TIMEOUT_SECONDS}s." >&2
+    echo "Run: kubectl -n ${NAMESPACE} get pods && kubectl -n ${NAMESPACE} describe pod signoz-0" >&2
+    exit 1
+  fi
+  sleep 5
+done
+
 if ! python3 -c "import playwright" >/dev/null 2>&1; then
   echo "Error: the 'playwright' Python package is not installed." >&2
   echo "Install it once with:" >&2
@@ -84,7 +103,7 @@ if ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${PORT}/api/v1/health";
   PF_PID=$!
   STARTED_PORT_FORWARD="true"
 
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 60); do
     if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${PORT}/api/v1/health"; then
       break
     fi
@@ -100,7 +119,8 @@ cleanup() {
 trap cleanup EXIT
 
 if ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${PORT}/api/v1/health"; then
-  echo "Error: SigNoz is not reachable at http://127.0.0.1:${PORT} after waiting 30s." >&2
+  echo "Error: SigNoz is not reachable at http://127.0.0.1:${PORT} after waiting 60s." >&2
+  echo "Hint: check /tmp/signoz-bootstrap-pf.log and: kubectl -n ${NAMESPACE} get pods" >&2
   exit 1
 fi
 

@@ -7,6 +7,7 @@ Step-by-step provisioning guide, safety gates, runbook commands, and troubleshoo
 **Pre-requisite:** Complete [Environment Setup](environment-setup.md) first.
 
 **Related docs:**
+- [Glossary](../references/glossary.md) — jargon/acronym lookup
 - [Component Catalog](../references/component-catalog.md) — what each component does
 - [Verification Commands](../references/verification-commands.md) — per-component health checks
 - [Recovery Procedures](../references/recovery-procedures.md) — when things go wrong
@@ -26,13 +27,12 @@ nano platform-prerequisites/terraform/mongodb/terraform.tfvars
 nano platform-prerequisites/terraform/postgresql/terraform.tfvars
 
 # Provision everything
-bash scripts/provision.sh all
-scripts/bootstrap-dev-secrets.sh
-scripts/create-audit-writer-secret.sh
-scripts/validate-dev-render.sh
+bash scripts/provision.sh all --auto-approve
+bash scripts/provision.sh signoz --auto-approve
+bash scripts/provision.sh signoz-observability --auto-approve
 
 # Verify
-scripts/verify-platform-health.sh
+scripts/verify-platform-health.sh --smoke-test
 ```
 
 This shortcut does not replace plan review. Stop before apply if the generated plan does not match the intended change.
@@ -47,6 +47,12 @@ This shortcut does not replace plan review. Stop before apply if the generated p
 | MongoDB only | MongoDB updates without touching PostgreSQL | `bash scripts/provision.sh mongodb` |
 | PostgreSQL only | PostgreSQL updates without touching MongoDB | `bash scripts/provision.sh pg` |
 | SigNoz (telemetry) | Install or update the telemetry stack | `bash scripts/provision.sh signoz` |
+| SigNoz observability | Apply dashboards and alert rules as code after SigNoz is healthy | `bash scripts/provision.sh signoz-observability --auto-approve` |
+
+Why `signoz` and `signoz-observability` are separate:
+1. `signoz` manages platform lifecycle (pods, storage, startup readiness).
+2. `signoz-observability` manages API-level objects (dashboards/alerts) that require a ready endpoint and auth.
+3. This split reduces blast radius and keeps failures easier to isolate.
 
 ## Standard Operator Procedure
 
@@ -91,6 +97,14 @@ Required minimum values:
 Expected: no required value is empty or left as a placeholder.
 
 ### Step 3: Run Provisioning
+
+Preferred operator entrypoint (runs platform prerequisites + required k8s components):
+
+```bash
+bash scripts/provision.sh all
+```
+
+Alternative Terraform-only entrypoint (use only when you intentionally do not want the k8s apply step):
 
 ```bash
 bash scripts/provision-platform-prereq.sh all
@@ -222,8 +236,10 @@ A convenience copy is also appended to the gitignored
 After logging in with those credentials:
 1. **Settings** -> **Organization** -> invite additional admins (at least one
    backup admin) and least-privilege users:
-   - Boomi Admin: **Editor**
-   - Enterprise Architect: **Viewer**
+  - `omsadmin@sml.com`: **Admin** (day-to-day operations owner)
+  - `infraadmin@sml.com`: **Admin** (infrastructure escalation owner)
+  - Boomi Admin account(s): **Editor**
+  - Enterprise Architect account(s): **Viewer**
 2. Record admin ownership in your team runbook.
 3. Confirm ingress controls for production (SSO/OIDC + restricted source
    networks) before broad access.
@@ -408,7 +424,7 @@ Do not apply infrastructure until these gates are satisfied.
 | `scripts/open-signoz-ui.sh` | SigNoz dashboard access (dev) | When viewing telemetry |
 | `scripts/open-signoz-ui.sh --mode ingress` | SigNoz dashboard URL (prod) | Production access |
 | `scripts/create-signoz-root-user-secret.sh` | Bootstrap SigNoz admin account (no manual signup) | Once per environment, before/with `provision.sh signoz` |
-| `bash scripts/provision.sh signoz-observability --auto-approve` | Apply dashboards + alert rules as code | After SigNoz is up and the one-time API key Secret exists |
+| `bash scripts/provision.sh signoz-observability --auto-approve` | Apply dashboards + alert rules as code | After SigNoz is up (API key bootstrap is automated if missing) |
 | `bash scripts/destroy.sh <mongodb\|pg\|signoz\|all>` | Scoped teardown | Post-test cleanup, controlled rebuild — see [Recovery Procedures § Component-by-component teardown](../references/recovery-procedures.md#component-by-component-teardown) |
 
 ---

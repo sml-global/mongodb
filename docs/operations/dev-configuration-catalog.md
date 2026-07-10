@@ -5,6 +5,7 @@ This catalog is the source of truth for embedded configuration in this repositor
 
 Use this file to answer: "Where is this value defined?".
 Use [platform-prerequisites/terraform/README.md](../../platform-prerequisites/terraform/README.md) to answer: "What should I run next?".
+Use [Glossary](../references/glossary.md) to answer: "What does this term mean?".
 
 **Maintenance cadence:**
 - Update this catalog in the same PR/commit as any tracked default, hardcoded value, or script constant change.
@@ -54,6 +55,17 @@ All three state keys live in the same S3 bucket (`sml-oms-dev-tfstate`, see
 do not reuse one root's state key for another.
 
 Use this map when validating whether a setting is in the correct root.
+
+```mermaid
+flowchart TD
+  A[provision.sh all] --> B[mongodb root]
+  A --> C[postgresql root]
+  B --> D[oms/dev/mongo.tfstate]
+  C --> E[oms/dev/pg.tfstate]
+  F[provision.sh signoz] --> G[gitops plus kustomize only]
+  H[provision.sh signoz-observability] --> I[signoz-observability root]
+  I --> J[oms/dev/signoz-observability.tfstate]
+```
 
 ## Configuration Policy
 - Tracked workload manifests are static for dev. No runtime manifest mutation is used.

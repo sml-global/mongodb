@@ -2,6 +2,8 @@
 
 Every platform component deployed or managed by this repository. For each component: what it is, why we use it, how it helps, who owns it, and what depends on it.
 
+Not sure what a term in this doc means (CRD, HelmRelease, Pod Identity, ...)? See the [Glossary](glossary.md).
+
 **When to consult this document:**
 - Understanding what a component does before provisioning or troubleshooting
 - Planning upgrades (check version inventory and upgrade notes)

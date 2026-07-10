@@ -16,6 +16,7 @@ Boomi app telemetry (audit writes).
 | Which default state key is used? | `oms/dev/signoz-observability.tfstate`. |
 | Where do dashboard JSON templates come from? | `dashboards/signoz-import-pack/` (vendored SigNoz dashboard templates, loaded via `jsondecode(file(...))`). |
 | Is the Service Account/API key bootstrap manual? | No -- fully automated via a headless-browser (Playwright) script, see below. |
+| New to a term here (dashboard, alert, taint)? | [Glossary](../../../docs/references/glossary.md#signoz--observability-specific). |
 
 ## Prerequisites (one-time, fully automated)
 

@@ -138,19 +138,26 @@ retry_on_known_taint_bug() {
   apply_output="$(run_apply tfplan 2>&1)"
   apply_status=$?
   set -e
-  echo "$apply_output"
 
   if [[ "$apply_status" -eq 0 ]]; then
+    echo "$apply_output"
     return 0
   fi
 
   if ! echo "$apply_output" | grep -q "Provider returned invalid result object after apply"; then
+    echo "$apply_output"
     echo "Error: terraform apply failed for a reason other than the known provider taint bug." >&2
     return "$apply_status"
   fi
 
   echo ""
   echo "Detected the known SigNoz provider computed-field bug (preferred_channels)."
+  echo "Initial apply returned a provider error, but this is auto-healed below."
+  if [[ "${SIGNOZ_VERBOSE:-false}" == "true" ]]; then
+    echo ""
+    echo "[SIGNOZ_VERBOSE=true] Raw provider output from the initial apply:"
+    echo "$apply_output"
+  fi
   echo "Patching Terraform state directly (clearing taint, setting preferred_channels=[]) instead of untaint+replace ..."
 
   state_file="$(mktemp)"

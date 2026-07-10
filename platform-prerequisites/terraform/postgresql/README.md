@@ -13,6 +13,7 @@ Use it when you need Aurora PostgreSQL changes without touching MongoDB prerequi
 | Which script uses this root? | `bash scripts/provision-platform-prereq.sh pg`. |
 | Which default state key is used? | `oms/dev/pg.tfstate`. |
 | Where is the canonical runbook? | `platform-prerequisites/terraform/README.md`. |
+| New to a term here (root, state key, tfvars)? | [Glossary](../../../docs/references/glossary.md#terraform-basics). |
 
 ## Standard Use
 

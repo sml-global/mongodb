@@ -1,5 +1,5 @@
 output "mongodb_namespace" {
-  value = kubernetes_namespace.mongodb.metadata[0].name
+  value = kubernetes_namespace_v1.mongodb.metadata[0].name
 }
 
 output "pbm_bucket_name" {
@@ -11,5 +11,5 @@ output "operator_iam_role_arn" {
 }
 
 output "mongodb_workload_service_account" {
-  value = kubernetes_service_account.mongodb_workload.metadata[0].name
+  value = kubernetes_service_account_v1.mongodb_workload.metadata[0].name
 }

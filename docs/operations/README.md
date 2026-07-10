@@ -20,6 +20,7 @@ It intentionally does not duplicate runbook steps.
 - Boomi integration: [docs/guides/boomi-integration-guide.md](../guides/boomi-integration-guide.md)
 - Enterprise architecture: [docs/guides/enterprise-architecture.md](../guides/enterprise-architecture.md)
 - Component catalog: [docs/references/component-catalog.md](../references/component-catalog.md)
+- Glossary: [docs/references/glossary.md](../references/glossary.md)
 - Verification commands: [docs/references/verification-commands.md](../references/verification-commands.md)
 - Recovery procedures: [docs/references/recovery-procedures.md](../references/recovery-procedures.md)
 - Configuration inventory: [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md)
@@ -38,6 +39,7 @@ It intentionally does not duplicate runbook steps.
 | Review design/security/compliance | [docs/guides/enterprise-architecture.md](../guides/enterprise-architecture.md) |
 | Check component health | [docs/references/verification-commands.md](../references/verification-commands.md) |
 | Recover from failures | [docs/references/recovery-procedures.md](../references/recovery-procedures.md) |
+| Look up a jargon/acronym | [docs/references/glossary.md](../references/glossary.md) |
 | Find exact defaults | [docs/operations/dev-configuration-catalog.md](dev-configuration-catalog.md) |
 | Historical records (not current) | [docs/history/](../history/) |
 

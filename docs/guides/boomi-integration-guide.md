@@ -5,6 +5,7 @@ How to use the audit log library and telemetry from Boomi processes.
 **Who this is for:** Boomi Admins/Developers who need to write audit logs and send telemetry.
 
 **Related docs:**
+- [Glossary](../references/glossary.md) — jargon/acronym lookup (OTLP, trace ID, audit trail, and more)
 - [Component Catalog § MongoDB](../references/component-catalog.md#mongodb-percona-server-for-mongodb) — what MongoDB does in OMS
 - [Component Catalog § SigNoz](../references/component-catalog.md#signoz) — what SigNoz does in OMS
 - [Verification Commands § End-to-End](../references/verification-commands.md#end-to-end-smoke-test) — validate the full path
@@ -13,6 +14,11 @@ How to use the audit log library and telemetry from Boomi processes.
 ## Quick Start: First Audit Log And Telemetry Flow
 
 Use this path when you want a fast confidence check before deep customization.
+
+Why this path is the default:
+1. It uses the existing Kubernetes Secret workflow already provisioned by operators.
+2. It avoids extra cost and moving parts from AWS Secrets Manager in dev.
+3. It validates both audit-write and telemetry paths together in one run.
 
 1. Confirm your role access.
   - Write/integration testing: Boomi Admin (Editor)
@@ -83,6 +89,11 @@ flowchart TD
 **Use Kubernetes Secrets** — they are free, already provisioned in the cluster, and the library supports them natively.
 
 **Do NOT use AWS Secrets Manager** unless you have a specific requirement — it adds cost and complexity. The AWS path exists in the library for environments where kubectl access is not available.
+
+Use AWS Secrets Manager path only when at least one is true:
+1. The Boomi runtime cannot access kubeconfig/kubectl.
+2. Organization policy requires centralized secret governance outside the cluster.
+3. You need cross-cluster secret reuse managed by AWS controls.
 
 | Secret Source | Cost | When to Use |
 |---|---|---|
@@ -480,7 +491,7 @@ first-time signup yourself.
 > environment and the automated bootstrap hasn't been run yet, SigNoz falls
 > back to a **self-service signup** flow -- the first user to access the
 > dashboard becomes the admin. See
-> [Operator Runbook § Step 7A](operator-runbook.md#step-7a-bootstrap-the-signoz-admin-account-automated-no-manual-signup)
+> [Operator Runbook § Step 7A](operator-runbook.md#step-7a-signoz-admin-account-bootstrap-automated-no-manual-signup)
 > for the recommended automated path, or use the manual **Sign Up** steps
 > further down this section if you must do it by hand.
 
@@ -519,21 +530,26 @@ You only need SMTP if you want **email** alert notifications from SigNoz.
 
 ### Recommended Account Model (Minimum)
 
-Use at least two user accounts per environment:
+Use at least three user accounts per environment:
 
-1. **Setup Admin account** (platform owner)
+1. **Platform Admin account** (for example `omsadmin@sml.com`)
   - Persona: Infra Architect/Admin
   - Role: **Admin**
-  - Purpose: first signup, workspace setup, user invitations, role management
+  - Purpose: workspace setup, user invitations, role management
 
-2. **Report Viewer account** (general telemetry consumer)
+2. **Infra Backup Admin account** (for example `infraadmin@sml.com`)
+  - Persona: Infra Architect/Admin
+  - Role: **Admin**
+  - Purpose: escalation owner and continuity if primary admin is unavailable
+
+3. **Report Viewer account** (general telemetry consumer)
   - Persona: Enterprise Architect, stakeholder, compliance reviewer
   - Role: **Viewer**
   - Purpose: open dashboards/reports, inspect traces/logs, no configuration changes
 
-For integration operations, add a third account pattern:
+For integration operations, add this account pattern:
 
-3. **Boomi Admin account**
+4. **Boomi Admin account**
   - Persona: Boomi Admin
   - Role: **Editor**
   - Purpose: build and maintain operational dashboards/alerts for integration flows

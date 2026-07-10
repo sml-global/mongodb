@@ -1,11 +1,24 @@
 # Verification Commands Reference
 
-Per-component health checks for validating deployments. Use these individually or run the unified script:
+Per-component health checks for validating deployments. New to a term used
+below (CRD, HelmRelease, PVC, ...)? See the [Glossary](glossary.md). Use
+these individually or run the unified script:
 
 ```bash
 scripts/verify-platform-health.sh          # Full platform check
 scripts/verify-platform-health.sh --preflight  # Environment-only preflight
 ```
+
+Why preflight comes first:
+- It prevents running destructive or expensive commands against the wrong AWS account/cluster.
+- It confirms toolchain and identity before deeper checks.
+- It reduces false incident noise caused by local environment drift.
+
+Stop conditions (do not continue until fixed):
+1. AWS account/region mismatch.
+2. Kubernetes context mismatch or unreachable cluster.
+3. Missing required CLI tools.
+4. Repository root not detected.
 
 **Recommended cadence:**
 
@@ -25,6 +38,7 @@ scripts/verify-platform-health.sh
 ```
 
 **Related docs:**
+- [Glossary](glossary.md) — jargon/acronym lookup
 - [Component Catalog](component-catalog.md) — what each component does
 - [Operator Runbook](../guides/operator-runbook.md) — when to run these
 - [Recovery Procedures](recovery-procedures.md) — what to do when checks fail
