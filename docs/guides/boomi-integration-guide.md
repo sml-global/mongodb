@@ -34,8 +34,21 @@ scripts/run-audit-telemetry-test.sh
 
 4. Validate outputs:
   - Test reports successful write/read-back from MongoDB
-  - In SigNoz Logs, filter `service.name = oms-audit-writer`
+  - In SigNoz Logs, filter `service.name = oms-audit-test-pod`
 5. Then continue with this guide for schema, API usage, and production integration patterns.
+
+### MongoDB Account Mapping (Important)
+
+Use the right account for the right task. Using the wrong one usually looks like a successful connection but fails with `Unauthorized` on `oms_audit` queries.
+
+| Use Case | Account Source | Intended Privilege | Notes |
+|---|---|---|---|
+| Boomi audit write URI secret (`scripts/create-audit-writer-secret.sh`) | `MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD` in `psmdb-secrets` | Application data read/write | This is the account used to build `oms-audit-writer` secret. |
+| In-cluster smoke writer (`scripts/run-audit-telemetry-test.sh`) | `MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD` in `psmdb-secrets` | Application data read/write | Writes and reads `oms_audit.auditlogs` for verification. |
+| Human read-only querying (Compass/mongosh) | `audit_reader` created by `scripts/create-audit-reader.sh` | Read-only on `oms_audit` | Recommended for dashboards, audit review, and analyst access. |
+| Cluster administration | `MONGODB_CLUSTER_ADMIN_USER` / `MONGODB_CLUSTER_ADMIN_PASSWORD` | Cluster management operations | Not the recommended account for app-level audit log queries. |
+
+If Compass shell shows `authenticatedUsers: [{ user: 'clusterAdmin', db: 'admin' }]` and query fails on `oms_audit`, reconnect with `audit_reader` (or database-admin for operator-only debugging).
 
 ---
 
@@ -108,6 +121,8 @@ scripts/create-audit-writer-secret.sh
 ```
 
 This creates `oms-audit-writer` in the `mongodb` namespace with a `mongoUri` key containing the full connection string.
+
+The script uses database-admin credentials from `psmdb-secrets` (`MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD`), not `clusterAdmin`.
 
 ## Audit Log Library
 

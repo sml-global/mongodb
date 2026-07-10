@@ -24,7 +24,7 @@ Usage:
   run-audit-telemetry-test.sh [--namespace <ns>] [--db <name>] [--keep] [--timeout <seconds>]
 
 Deploys a test Pod in the cluster that:
-  1. Writes Boomi-style sample audit log records to MongoDB (cluster-internal)
+  1. Writes sample OMS + Boomi audit log records to MongoDB (cluster-internal)
   2. Sends matching OTLP telemetry to SigNoz (cluster-internal)
   3. Verifies the records exist in MongoDB (read-back)
   4. Prints results and deletes the Pod
@@ -131,14 +131,44 @@ spec:
       # Build client certificate PEM from mounted internal TLS secret.
       cat /etc/mongodb-ssl-internal/tls.key /etc/mongodb-ssl-internal/tls.crt > /tmp/tls-internal.pem
 
-      # Step 1: Write Boomi-style audit records to MongoDB
-      echo "[1/3] Writing Boomi-style audit records to MongoDB..."
+      # Step 1: Write OMS sample + Boomi audit records to MongoDB
+      echo "[1/3] Writing OMS sample + Boomi audit records to MongoDB..."
       mongosh --quiet \
         --tls --tlsAllowInvalidCertificates \
         --tlsCAFile /etc/mongodb-ssl-internal/ca.crt \
         --tlsCertificateKeyFile /tmp/tls-internal.pem \
         "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_HOST}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
+          const omsSampleRecord = {
+            trace_id: "${TRACE_ID}-o",
+            ip: "192.168.1.122",
+            time: "2024-01-15T10:30:00Z",
+            action: "orders.order.confirm",
+            error_code: null,
+            resource_type: "orders.order",
+            resource_id: "ORD-2024-001",
+            user_id: "user1",
+            message: null,
+            tpl_message: {
+              key: "orders.order.status.changed",
+              params: {
+                order_no: "ORD-2024-001",
+                from: "PENDING",
+                to: "PROCESSING"
+              }
+            },
+            resource_changes: {
+              status: ["pending", "confirmed"]
+            },
+            meta: {
+              method: "POST",
+              path: "/api/v1/orders/ORD-2024-001/confirm",
+              status: 200,
+              ua: "Mozilla/5.0",
+              pod: "${POD_NAME}"
+            }
+          };
+
           const normalRecord = {
             trace_id: "${TRACE_ID}-n",
             ip: "192.168.1.78",
@@ -223,7 +253,7 @@ spec:
             }
           };
 
-          const result = db.getCollection("${COLLECTION}").insertMany([normalRecord, errorRecord]);
+          const result = db.getCollection("${COLLECTION}").insertMany([omsSampleRecord, normalRecord, errorRecord]);
           print("Inserted: " + Object.keys(result.insertedIds).length + " docs");
         '
       echo "  MongoDB write: OK"
@@ -266,7 +296,7 @@ spec:
                   {"key": "trace_id", "value": {"stringValue": "${TRACE_ID}"}},
                   {"key": "action", "value": {"stringValue": "boomi.process.track"}},
                   {"key": "resource_type", "value": {"stringValue": "boomi.process"}},
-                  {"key": "records.inserted", "value": {"intValue": "2"}},
+                  {"key": "records.inserted", "value": {"intValue": "3"}},
                   {"key": "pod_name", "value": {"stringValue": "${POD_NAME}"}}
                 ]
               }]
@@ -291,12 +321,12 @@ spec:
         --tlsCertificateKeyFile /tmp/tls-internal.pem \
         "mongodb://${ADMIN_USER}:${ADMIN_PASS}@${MONGO_HOST}:27017/${DB_NAME}?authSource=admin&replicaSet=rs0&tls=true&tlsAllowInvalidCertificates=true" \
         --eval '
-          const count = db.getCollection("${COLLECTION}").countDocuments({trace_id: {\$in: ["${TRACE_ID}-n", "${TRACE_ID}-e"]}});
-          if (count === 2) { print("FOUND"); } else { print("NOT_FOUND:" + count); }
+          const count = db.getCollection("${COLLECTION}").countDocuments({trace_id: {\$in: ["${TRACE_ID}-o", "${TRACE_ID}-n", "${TRACE_ID}-e"]}});
+          if (count === 3) { print("FOUND"); } else { print("NOT_FOUND:" + count); }
         ')
 
       if [[ "\$FOUND" == "FOUND" ]]; then
-        echo "  Read-back: OK (both records verified in MongoDB)"
+        echo "  Read-back: OK (all three records verified in MongoDB)"
       else
         echo "  Read-back: FAILED (records not found: \$FOUND)" >&2
         exit 1
