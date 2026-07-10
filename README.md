@@ -134,7 +134,8 @@ Use these exact entry paths if you are new to this repository.
 1. Read [docs/guides/boomi-integration-guide.md](docs/guides/boomi-integration-guide.md)
 2. Ask Operator to ensure `scripts/create-audit-writer-secret.sh` and SigNoz provisioning are complete
 3. Run `scripts/run-audit-telemetry-test.sh`
-4. Confirm logs with `service.name = oms-audit-writer` in SigNoz
+4. Confirm test logs with `service.name = oms-audit-test-pod` in SigNoz
+5. If you need to inspect records in Compass, follow [MongoDB Compass (Dev Access)](#mongodb-compass-dev-access)
 
 ### Enterprise Architect (risk, compliance, readiness)
 
@@ -170,6 +171,43 @@ This section explains why each script exists, not only the command name.
 | [`scripts/create-signoz-root-user-secret.sh`](scripts/create-signoz-root-user-secret.sh) | Bootstraps the SigNoz admin account automatically (no manual UI signup) via SigNoz's root-user feature. | Once per environment, before/with `provision.sh signoz`. |
 | [`scripts/provision.sh`](scripts/provision.sh) `signoz-observability` | Applies SigNoz dashboards + alert rules as code (K8s, MongoDB, PostgreSQL, OTel Collector, Boomi telemetry) via Terraform. If API key is missing, bootstrap is automated. Idempotent — safe to re-run. | After SigNoz app is up — see [SigNoz Dashboard Import Pack](docs/references/signoz-dashboard-import-pack.md). |
 | [`scripts/destroy.sh`](scripts/destroy.sh) | Scoped teardown entrypoint (`mongodb`, `pg`, `signoz`, `signoz-observability`, `all`). | Post-test cleanup and rebuild prep. |
+
+## MongoDB Compass (Dev Access)
+
+Use this flow if Compass connects but shows `Unauthorized` on `oms_audit`.
+
+Why this happens:
+- Cluster connectivity is fine, but the connected Mongo account does not have app-data permissions on `oms_audit`.
+- `clusterAdmin` is for cluster operations; use `audit_reader` for read-only audit queries.
+
+1. Create (or rotate) the read-only user:
+
+```bash
+scripts/create-audit-reader.sh --db oms_audit --username audit_reader
+```
+
+2. Start local port-forward:
+
+```bash
+kubectl -n mongodb port-forward svc/psmdb-rs0 27018:27017
+```
+
+3. Create a new Compass connection with:
+- Host: `127.0.0.1`
+- Port: `27018`
+- Username: `audit_reader`
+- Password: the one printed by `create-audit-reader.sh`
+- Authentication Database: `oms_audit`
+- Direct Connection: `true`
+
+4. In Compass shell, verify authorization:
+
+```javascript
+db.runCommand({ connectionStatus: 1 }).authInfo
+db.getSiblingDB("oms_audit").auditlogs.countDocuments({})
+```
+
+If `authenticatedUsers` shows `clusterAdmin@admin`, you are on the wrong saved profile for audit-log viewing.
 
 ## SigNoz (Application Telemetry)
 
