@@ -5,7 +5,7 @@ set -euo pipefail
 # audit log writer (Boomi library). This is the recommended secret source
 # for the BoomiAuditLogLibrary — free, no AWS Secrets Manager needed.
 #
-# The URI uses the clusterAdmin credentials from psmdb-secrets and the
+# The URI uses the database-admin credentials from psmdb-secrets and the
 # internal MongoDB service endpoint.
 #
 # Usage:
@@ -49,15 +49,15 @@ if kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" >/dev/null 2>&1; then
   exit 0
 fi
 
-# Read clusterAdmin credentials from existing psmdb-secrets
-echo "Reading clusterAdmin credentials from psmdb-secrets..."
+# Read database-admin credentials from existing psmdb-secrets
+echo "Reading database-admin credentials from psmdb-secrets..."
 ADMIN_USER="$(kubectl -n "$NAMESPACE" get secret psmdb-secrets \
-  -o jsonpath='{.data.MONGODB_CLUSTER_ADMIN_USER}' | base64 -d)"
+  -o jsonpath='{.data.MONGODB_DATABASE_ADMIN_USER}' | base64 -d)"
 ADMIN_PASS="$(kubectl -n "$NAMESPACE" get secret psmdb-secrets \
-  -o jsonpath='{.data.MONGODB_CLUSTER_ADMIN_PASSWORD}' | base64 -d)"
+  -o jsonpath='{.data.MONGODB_DATABASE_ADMIN_PASSWORD}' | base64 -d)"
 
 if [[ -z "$ADMIN_USER" || -z "$ADMIN_PASS" ]]; then
-  echo "Error: cannot read clusterAdmin credentials from psmdb-secrets" >&2
+  echo "Error: cannot read database-admin credentials from psmdb-secrets" >&2
   exit 1
 fi
 
