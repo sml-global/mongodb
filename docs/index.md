@@ -13,6 +13,8 @@
 
 | Topic | Document | Description |
 |---|---|---|
+| Unfamiliar term or acronym | [Glossary & Concept Reference](references/glossary.md) | Plain-language lookup for every jargon term used in these docs, organized by category, with diagrams for the trickiest concepts |
+| Full reprovision sequence (new cluster/day-1) | [Operator Runbook](guides/operator-runbook.md#standard-operator-procedure) | Exact order: all -> signoz -> signoz-observability -> smoke verification |
 | First-time workstation setup | [Environment Setup](guides/environment-setup.md) | Tools, AWS SSO, Kubernetes access, preflight checks |
 | Provisioning commands and troubleshooting | [Operator Runbook](guides/operator-runbook.md) | Step-by-step, safety gates, runbook commands, error resolution |
 | SigNoz first-login actions | [Operator Runbook § SigNoz First-Login Checklist](guides/operator-runbook.md#step-7a1-signoz-first-login-checklist-do-this-in-order) | What to click (and skip) in the SigNoz dashboard after signup |
@@ -26,6 +28,25 @@
 | Rollback, recovery, credential rotation | [Recovery Procedures](references/recovery-procedures.md) | What to do when things go wrong |
 | Embedded defaults and constants | [Configuration Catalog](operations/dev-configuration-catalog.md) | Source of truth for hardcoded values |
 | Infrastructure/MongoDB/PostgreSQL monitoring | [Architect Reference § Infrastructure And Database Monitoring](guides/architect-reference.md#infrastructure-and-database-monitoring) | What SigNoz monitors today across K8s, MongoDB, and PostgreSQL/Aurora (CloudWatch import), with coverage and verification notes |
+
+## Why Provisioning Is Split
+
+The standard day-1 flow intentionally separates:
+1. `all` for core data services (MongoDB + PostgreSQL)
+2. `signoz` for telemetry platform deployment
+3. `signoz-observability` for dashboards and alerts as code
+
+This separation improves failure isolation and ensures dependency correctness
+(observability IaC requires a live SigNoz API and auth token).
+
+```mermaid
+flowchart LR
+  A[provision.sh all] --> B[Core data services ready]
+  B --> C[provision.sh signoz]
+  C --> D[SigNoz platform ready]
+  D --> E[provision.sh signoz-observability]
+  E --> F[verify-platform-health.sh --smoke-test]
+```
 
 ## Journey Map (Day-1 vs Day-2)
 
@@ -136,13 +157,14 @@ See [Verification Commands](references/verification-commands.md) for per-step he
 
 ## Terminology Primer
 
-| Term | Meaning in this repo |
-|---|---|
-| **CR / CRD** | Custom resource and its definition in Kubernetes (for example Percona and Flux resources) |
-| **HelmRelease** | Flux object that continuously installs/updates a Helm chart |
-| **PVC** | PersistentVolumeClaim, storage requested by stateful workloads |
-| **OTLP** | OpenTelemetry Protocol used to send logs, traces, and metrics to SigNoz |
-| **PSMDB** | Percona Server for MongoDB |
+This section used to hold a short table of terms. That table is now the
+[Glossary & Concept Reference](references/glossary.md) — a single,
+categorized, growing appendix instead of a short list duplicated (and going
+stale) in multiple places. If you're brand new to Kubernetes/AWS/Terraform,
+start with
+[Environment Setup § Core Concepts](guides/environment-setup.md#core-concepts-read-before-you-run-any-command)
+for the foundational ideas with diagrams, then use the Glossary for
+everything else.
 
 ## Document Maintenance Rules
 

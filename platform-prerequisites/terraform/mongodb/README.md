@@ -13,6 +13,7 @@ Use it when you need MongoDB prerequisite changes without touching PostgreSQL re
 | Which script uses this root? | `bash scripts/provision-platform-prereq.sh mongodb`. |
 | Which default state key is used? | `oms/dev/mongo.tfstate`. |
 | Where is the canonical runbook? | `platform-prerequisites/terraform/README.md`. |
+| New to a term here (root, state key, tfvars)? | [Glossary](../../../docs/references/glossary.md#terraform-basics). |
 
 ## Standard Use
 

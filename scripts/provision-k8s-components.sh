@@ -27,6 +27,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCOPE="${1:-}"
 MONGODB_CRD_NAME="perconaservermongodbs.psmdb.percona.com"
 WAIT_TIMEOUT_SECONDS="${MONGODB_OPERATOR_READY_TIMEOUT_SECONDS:-180}"
+SIGNOZ_READY_TIMEOUT_SECONDS="${SIGNOZ_READY_TIMEOUT_SECONDS:-600}"
 BOOTSTRAP_PLATFORM_CONTROLLERS="false"
 CLUSTER_NAME="${EKS_CLUSTER_NAME:-EKS-boomi-runtime-cluster}"
 EBS_CSI_ROLE_NAME="${EBS_CSI_ROLE_NAME:-AmazonEKS_EBS_CSI_DriverRole}"
@@ -501,6 +502,25 @@ apply_signoz() {
     echo "Restarting signoz StatefulSet so it picks up the newly created signoz-root-user Secret ..."
     kubectl -n signoz rollout restart statefulset/signoz
   fi
+
+  echo "Waiting for SigNoz application pod signoz-0 to become Ready (timeout: ${SIGNOZ_READY_TIMEOUT_SECONDS}s) ..."
+  local deadline=$((SECONDS + SIGNOZ_READY_TIMEOUT_SECONDS))
+  while true; do
+    if kubectl -n signoz get pod signoz-0 >/dev/null 2>&1; then
+      local ready
+      ready="$(kubectl -n signoz get pod signoz-0 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || true)"
+      if [[ "$ready" == "true" ]]; then
+        break
+      fi
+    fi
+
+    if (( SECONDS >= deadline )); then
+      echo "ERROR: SigNoz application pod signoz-0 did not become Ready within ${SIGNOZ_READY_TIMEOUT_SECONDS}s." >&2
+      echo "Hint: run 'kubectl -n signoz get pods' and 'kubectl -n signoz describe pod signoz-0' for details." >&2
+      exit 1
+    fi
+    sleep 5
+  done
 }
 
 wait_for_mongodb_crd() {

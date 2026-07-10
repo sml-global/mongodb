@@ -136,10 +136,60 @@ run_apply() {
   fi
 }
 
+resolve_tfvar_string() {
+  local key="$1"
+  local tfvars_file="$TF_DIR/terraform.tfvars"
+
+  if [[ ! -f "$tfvars_file" ]]; then
+    return 1
+  fi
+
+  awk -F'=' -v search_key="$key" '
+    $1 ~ "^[[:space:]]*"search_key"[[:space:]]*$" {
+      value = $2
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^"|"$/, "", value)
+      print value
+      exit
+    }
+  ' "$tfvars_file"
+}
+
+auto_import_pbm_bucket_if_needed() {
+  local resource_addr="module.mongodb_prerequisites.aws_s3_bucket.pbm"
+  local bucket_name=""
+
+  if [[ "$SCOPE" != "mongodb" && "$SCOPE" != "mongo" ]]; then
+    return 0
+  fi
+
+  if terraform -chdir="$TF_DIR" state show "$resource_addr" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  bucket_name="$(resolve_tfvar_string pbm_bucket_name || true)"
+  if [[ -z "$bucket_name" ]]; then
+    echo "Warning: unable to resolve pbm_bucket_name from $TF_DIR/terraform.tfvars; skipping auto-import drift recovery." >&2
+    return 0
+  fi
+
+  if ! command -v aws >/dev/null 2>&1; then
+    echo "Warning: aws CLI not found; cannot auto-import existing PBM bucket '$bucket_name'." >&2
+    return 0
+  fi
+
+  if aws s3api head-bucket --bucket "$bucket_name" >/dev/null 2>&1; then
+    echo "Detected existing PBM bucket '$bucket_name' not tracked in Terraform state. Importing for recovery..."
+    terraform -chdir="$TF_DIR" import "$resource_addr" "$bucket_name"
+  fi
+}
+
 ensure_tfvars
 init_backend
 terraform -chdir="$TF_DIR" fmt -recursive
 terraform -chdir="$TF_DIR" validate
+
+auto_import_pbm_bucket_if_needed
 
 terraform -chdir="$TF_DIR" plan -out=tfplan
 run_apply tfplan

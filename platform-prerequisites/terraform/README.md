@@ -29,6 +29,7 @@ This file previously contained the full operator runbook (1300+ lines). That con
 | Operator runbook | [docs/guides/operator-runbook.md](../../docs/guides/operator-runbook.md) |
 | Architecture and state model | [docs/guides/architect-reference.md](../../docs/guides/architect-reference.md) |
 | Component catalog | [docs/references/component-catalog.md](../../docs/references/component-catalog.md) |
+| Jargon/acronym lookup | [docs/references/glossary.md](../../docs/references/glossary.md) |
 | Verification commands | [docs/references/verification-commands.md](../../docs/references/verification-commands.md) |
 | Recovery procedures | [docs/references/recovery-procedures.md](../../docs/references/recovery-procedures.md) |
 | Configuration defaults | [docs/operations/dev-configuration-catalog.md](../../docs/operations/dev-configuration-catalog.md) |
@@ -47,6 +48,22 @@ This stack does not provision:
 - Kyverno policies under `policies/` (applied separately)
 - SigNoz telemetry under `gitops/signoz/` (no Terraform prerequisites)
 
+## Full Baseline Sequence (Operator View)
+
+Use this when you want a complete dev environment, not Terraform-only scope work:
+
+```bash
+bash scripts/provision.sh all --auto-approve
+bash scripts/provision.sh signoz --auto-approve
+bash scripts/provision.sh signoz-observability --auto-approve
+bash scripts/verify-platform-health.sh --smoke-test
+```
+
+Why this is split:
+1. `all` provisions core data services.
+2. `signoz` deploys telemetry platform runtime.
+3. `signoz-observability` configures API-level dashboards/alerts and requires ready SigNoz endpoint/auth.
+
 ## Key Terms
 
 | Term | Meaning |
@@ -58,6 +75,9 @@ This stack does not provision:
 | Escrow file | Local-only secret backup on your workstation |
 
 ## Quick Start
+
+This quick start is MongoDB-scope-focused (Terraform/operator prerequisites only).
+For the full day-1 environment sequence, use "Full Baseline Sequence" above.
 
 ```bash
 # 1. Setup environment (once)

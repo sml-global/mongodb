@@ -5,6 +5,7 @@ Design decisions, security posture, compliance rationale, integration boundaries
 **Who this is for:** Enterprise Architects who need full system understanding, risk awareness, and strategic context.
 
 **Related docs:**
+- [Glossary](../references/glossary.md) — jargon/acronym lookup
 - [Component Catalog](../references/component-catalog.md) — all components with dependencies
 - [Architect Reference](architect-reference.md) — infrastructure architecture and state model
 - [Boomi Integration Guide](boomi-integration-guide.md) — application integration contract
@@ -14,7 +15,7 @@ Design decisions, security posture, compliance rationale, integration boundaries
 
 - The OMS data layer intentionally separates concerns: MongoDB for immutable audit trail, PostgreSQL for transactional records, SigNoz for observability.
 - Current environment is dev-leaning but production-aligned in structure; key remaining gaps are secrets lifecycle, network hardening, and automated operations.
-- SigNoz admin bootstrap is automated (root-user env vars, no manual signup race); dashboards and alert rules for every monitored signal are also managed as code via Terraform. The Service Account/API key SigNoz's own design requires is also fully automated, via a headless-browser (Playwright) script invoked automatically on first run -- no manual UI interaction anywhere in the flow. See [Operator Runbook § Step 7A/7B](operator-runbook.md#step-7a-bootstrap-the-signoz-admin-account-automated-no-manual-signup).
+- SigNoz admin bootstrap is automated (root-user env vars, no manual signup race); dashboards and alert rules for every monitored signal are also managed as code via Terraform. The Service Account/API key SigNoz's own design requires is also fully automated, via a headless-browser (Playwright) script invoked automatically on first run -- no manual UI interaction anywhere in the flow. See [Operator Runbook § Step 7A/7B](operator-runbook.md#step-7a-signoz-admin-account-bootstrap-automated-no-manual-signup).
 - The target operating model is clear day-1 provisioning plus recurring day-2 verification and controlled change management.
 
 If you only need reporting and governance context, start with:

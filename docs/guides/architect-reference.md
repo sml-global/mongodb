@@ -5,11 +5,12 @@ Architecture, state model, dependency graph, repository structure, and day-2 mai
 **Who this is for:** Infra Architects/Admins who design, maintain, and evolve the platform.
 
 **Related docs:**
+- [Glossary](../references/glossary.md) — jargon/acronym lookup
 - [Component Catalog](../references/component-catalog.md) — detailed component descriptions
 - [Verification Commands](../references/verification-commands.md) — per-component health checks
 - [Enterprise Architecture](enterprise-architecture.md) — design decisions, security, compliance
 - [Operator Runbook](operator-runbook.md) — step-by-step provisioning
-- [Operator Runbook § Step 7A (SigNoz First-Admin Bootstrap)](operator-runbook.md#step-7a-complete-signoz-first-admin-bootstrap) — ownership and role bootstrap
+- [Operator Runbook § Step 7A (SigNoz First-Admin Bootstrap)](operator-runbook.md#step-7a-signoz-admin-account-bootstrap-automated-no-manual-signup) — ownership and role bootstrap
 - [Boomi Integration Guide § Accessing SigNoz Dashboard](boomi-integration-guide.md#accessing-signoz-dashboard) — account model and first-login flow
 - [Configuration Catalog](../operations/dev-configuration-catalog.md) — embedded defaults
 
