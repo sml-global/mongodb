@@ -5,6 +5,7 @@ Design decisions, security posture, compliance rationale, integration boundaries
 **Who this is for:** Enterprise Architects who need full system understanding, risk awareness, and strategic context.
 
 **Related docs:**
+- [Audit Log Contract](../references/audit-log-contract.md) — canonical audit document semantics and producer rules
 - [Glossary](../references/glossary.md) — jargon/acronym lookup
 - [Component Catalog](../references/component-catalog.md) — all components with dependencies
 - [Architect Reference](architect-reference.md) — infrastructure architecture and state model
@@ -31,9 +32,9 @@ If you only need reporting and governance context, start with:
 
 | Requirement | How MongoDB Satisfies It |
 |---|---|
-| Immutable append-only records | Capped collections + write-only application access pattern |
-| Flexible schema | Document model accepts evolving audit event shapes without migrations |
-| Nested data | `resource_changes`, `tpl_message`, `meta` are natural document structures |
+| Append-only audit records | Insert-only application behavior, restricted update/delete privileges, and governed administrative access |
+| Controlled schema evolution | Fixed producer fields with module-owned data limited to `tpl_message.params` |
+| Controlled module extension | `tpl_message.params` carries module-owned data within the fixed audit contract |
 | High write throughput | Replica set handles concurrent audit writes from multiple Boomi processes |
 | Compliance queryability | Rich query language for filtering by time, action, resource, user |
 | Encryption at rest | Percona's built-in encryption with customer-managed key |
@@ -288,12 +289,31 @@ flowchart LR
 
 ## Compliance And Governance
 
+The record-level shape and producer rules are defined in the
+[Audit Log Contract](../references/audit-log-contract.md). This section owns the
+operational guarantees that contract depends on.
+
 ### Audit Trail Requirements
 
 - Audit records are append-only (application has write-only access)
 - Records are encrypted at rest (MongoDB encryption + EBS encryption)
 - Records include: who, what, when, where (user, action, time, IP)
 - Retention: configurable per regulatory requirement (no automatic deletion in current posture)
+
+### Audit Enforcement Gaps (Target State)
+
+These are required for a defensible audit trail and are **not yet enforced**;
+the contract's Conformance Status table points here.
+
+| Gap | Current state | Target |
+|---|---|---|
+| **Insert-only writer role** | The audit-writer secret uses a database-admin identity that can update/delete (`scripts/create-audit-writer-secret.sh`). "Immutable" is convention, not enforced. | A custom MongoDB role granting only `insert` on `oms_audit.auditlogs`; `update`/`remove`/`dropCollection`/index admin denied. Read-back for tests uses a separate identity. |
+| **Tamper evidence** | RBAC only; a privileged admin could alter history undetectably. | Periodic signed digest / hash-chain sealing so admin-side mutation is detectable independent of RBAC. |
+| **Trusted recorded-at** | `time` is caller-supplied; even the ObjectId timestamp is client-generated, so backdating is undetectable. | Treat `_id` generation time as de-facto recorded-at for drift forensics; enforce NTP/chrony on producers and alert on clock skew beyond tolerance. |
+| **Payload lifecycle** | `std.payload_uri` objects have no coupled lifecycle. | Offloaded-object storage lifetime ≥ audit retention; store `std.payload_sha256` for integrity/404 detection; delete the object in coordination with its audit row so no orphaned payload outlives its index. |
+| **Right-to-be-forgotten** | No defined mechanism against immutable records. | Pseudonymize identities in-record; hold the token→identity mapping in a separate erasable identity store; RTBF severs the mapping. Crypto-shredding (per-tenant KMS key) only for payloads that must be retained in full. |
+| **Break-glass payload access** | Ad-hoc; SRE may lack access mid-incident. | An audited retrieval service resolving `std.payload_uri` behind JIT access, MFA, incident/ticket reason, RBAC by data class, masked-by-default preview, and immutable access logging — not direct bucket/KMS grants. |
+| **Retention & legal hold** | No automatic deletion; no archive tier. | Policy by data class/jurisdiction/tenant; archive to encrypted WORM/Object-Lock cold storage with verified count/checksum/restore; legal hold blocks deletion; controlled purge only after verified archive, with recorded approval. Do **not** use a TTL index (the string `time` field is TTL-incompatible and TTL deletion can breach legal hold). |
 
 ### Change Management Rules
 

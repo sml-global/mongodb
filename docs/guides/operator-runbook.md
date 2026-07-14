@@ -512,6 +512,222 @@ Do not apply infrastructure until these gates are satisfied.
 
 ---
 
+## Boomi Audit Writer: Credentials, Secrets, And Accounts
+
+> **Audience:** Infra Operator/Admin. Boomi developers and process owners
+> never handle any of this — the Groovy audit library resolves its MongoDB
+> connection internally, and the
+> [Boomi Integration Guide](boomi-integration-guide.md) deliberately
+> contains no credential material. This section is the one place that
+> documents how that connection is provisioned and troubleshot.
+
+### MongoDB Account Mapping
+
+Use the right account for the right task. Using the wrong one usually looks like a successful connection but fails with `Unauthorized` on `oms_audit` queries.
+
+| Use Case | Account Source | Intended Privilege | Notes |
+|---|---|---|---|
+| Boomi audit write URI secret (`scripts/create-audit-writer-secret.sh`) | `MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD` in `psmdb-secrets` | Application data read/write | This is the account used to build `oms-audit-writer` secret. |
+| In-cluster smoke writer (`scripts/run-audit-telemetry-test.sh`) | `MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD` in `psmdb-secrets` | Application data read/write | Writes and reads `oms_audit.auditlogs` for verification. |
+| Human read-only querying (Compass/mongosh) | `audit_reader` created by `scripts/create-audit-reader.sh` | Read-only on `oms_audit` | Recommended for dashboards, audit review, and analyst access. |
+| Cluster administration | `MONGODB_CLUSTER_ADMIN_USER` / `MONGODB_CLUSTER_ADMIN_PASSWORD` | Cluster management operations | Not the recommended account for app-level audit log queries. |
+
+If Compass shell shows `authenticatedUsers: [{ user: 'clusterAdmin', db: 'admin' }]` and query fails on `oms_audit`, reconnect with `audit_reader` (or database-admin for operator-only debugging).
+
+### Secret Strategy: Kubernetes Secrets (Recommended)
+
+**Use Kubernetes Secrets** — they are free, already provisioned in the cluster, and the library supports them natively.
+
+**Do NOT use AWS Secrets Manager** unless you have a specific requirement — it adds cost and complexity. The AWS path exists in the library for environments where kubectl access is not available.
+
+Use AWS Secrets Manager path only when at least one is true:
+1. The Boomi runtime cannot access kubeconfig/kubectl.
+2. Organization policy requires centralized secret governance outside the cluster.
+3. You need cross-cluster secret reuse managed by AWS controls.
+
+| Secret Source | Cost | When to Use |
+|---|---|---|
+| K8s Secret (recommended) | Free | Default for all environments where kubectl is available |
+| AWS Secrets Manager | ~$0.40/secret/month + $0.05/10K API calls | Only if Boomi runtime cannot access kubectl |
+| Explicit URI (hardcoded) | Free | Local testing only — never in production |
+
+**Create the K8s Secret** (one-time):
+
+```bash
+scripts/create-audit-writer-secret.sh
+```
+
+This creates `oms-audit-writer` in the `mongodb` namespace with a `mongoUri` key containing the full connection string.
+
+The script uses database-admin credentials from `psmdb-secrets` (`MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD`), not `clusterAdmin`.
+
+### Secret Formats
+
+**Kubernetes Secret (recommended — free, already provisioned).** The library
+reads base64-encoded values from Kubernetes Secrets via `kubectl`. Expected
+structure:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: oms-audit-writer
+  namespace: mongodb
+type: Opaque
+data:
+  mongoUri: <base64-encoded MongoDB URI>
+```
+
+`writeAuditLog` reads this secret automatically — no code needed. Override
+only for advanced/test scenarios via environment variables:
+
+```bash
+export BOOMI_AUDIT_K8S_SECRET_NAME=oms-audit-writer
+export BOOMI_AUDIT_K8S_NAMESPACE=mongodb
+export BOOMI_AUDIT_K8S_SECRET_KEY=mongoUri
+```
+
+**AWS Secrets Manager (optional — NOT provisioned by default).** This path
+is NOT provisioned by the current Terraform stack. Use it only if the Boomi
+runtime cannot access `kubectl`; you would need to manually create the
+secret in AWS Secrets Manager. The library accepts two formats:
+
+Format 1 — plain URI string (the secret value is the MongoDB URI directly):
+```
+mongodb://user:password@host:27017/dbname?authSource=admin
+```
+
+Format 2 — JSON object with one of these keys (checked in order —
+`mongoUri`, `mongodbUri`, `uri`, `MONGO_URI`):
+```json
+{
+  "mongoUri": "mongodb://user:password@host:27017/dbname"
+}
+```
+
+### Diagnostic Library Methods (Operator Use Only)
+
+`BoomiAuditLogLibrary` exposes a few methods only an operator diagnosing
+connection resolution should ever call — a Boomi process calling
+`writeAuditLog` never needs them:
+
+| Method | Purpose |
+|---|---|
+| `resolveMongoUri()` | Returns the URI `writeAuditLog` would use, resolved in order: `BOOMI_AUDIT_MONGO_URI` env var → `BOOMI_AUDIT_AWS_SECRET_ID` env var (AWS Secrets Manager) → K8s Secret `oms-audit-writer` in ns `mongodb` (overridable via `BOOMI_AUDIT_K8S_*`) → local dev fallback with a warning. |
+| `redactUri(uri)` | Masks the username/password segment (`***:***`). **Never log a raw mongoUri** — always wrap with this. |
+| `readKubernetesSecretValue(ns, name, key)` | Reads one base64-decoded value from a K8s Secret via kubectl. Throws if missing. |
+| `readAwsSecretString(secretId, region)` | Reads a secret string (or decoded binary) from AWS Secrets Manager. |
+
+Example (prints the resolved connection target, credentials masked):
+
+```groovy
+import boomi.BoomiAuditLogLibrary
+println BoomiAuditLogLibrary.redactUri(BoomiAuditLogLibrary.resolveMongoUri())
+```
+
+### Testing Secret Resolution Paths
+
+The local test harness accepts explicit secret-source flags for verifying
+each resolution path:
+
+```bash
+# Via Kubernetes Secret
+scripts/write-auditlog-and-telemetry.sh \
+  --mongo-uri-k8s-secret oms-audit-writer \
+  --mongo-uri-k8s-namespace mongodb \
+  --mongo-uri-k8s-key mongoUri
+
+# Via AWS Secrets Manager
+scripts/write-auditlog-and-telemetry.sh \
+  --mongo-uri-secret-id /oms/dev/mongodb/audit-writer \
+  --aws-region ap-east-1
+```
+
+### Secret-Resolution Errors
+
+| Error | Cause | Resolution |
+|---|---|---|
+| `Failed to read Kubernetes secret` | kubectl not available, wrong namespace, or missing RBAC | Verify kubectl access and secret exists, or set `BOOMI_AUDIT_MONGO_URI` directly |
+| `Secret JSON does not contain a non-empty mongoUri/mongodbUri/uri/MONGO_URI key` | AWS secret payload format mismatch, or the key exists but is blank | Use one of: `mongoUri`, `mongodbUri`, `uri`, `MONGO_URI`, with a non-empty value |
+| `Unable to resolve MongoDB connection: ...` | No MongoDB URI could be resolved from any source | Ensure the Kubernetes secret exists, or set `BOOMI_AUDIT_MONGO_URI` / `BOOMI_AUDIT_AWS_SECRET_ID` |
+| `RuntimeException: Secret payload is empty` | Secret exists but has no value | Recreate the secret with valid content |
+| `WARNING: ... falling back to local dev default` (stderr, not an exception) | No `BOOMI_AUDIT_MONGO_URI`/`BOOMI_AUDIT_AWS_SECRET_ID` env var and the Kubernetes secret could not be read | Ensure the Kubernetes secret exists in the target cluster, or set `BOOMI_AUDIT_MONGO_URI` explicitly in production |
+
+### Read-Only Audit Querying (Operators / Analysts)
+
+> Direct MongoDB access is an **operator/analyst** task, not a Boomi
+> developer one. It needs `kubectl` access, an operator-created read-only
+> account, and a MongoDB client on the workstation. Boomi Admins verify
+> their audit writes through SigNoz and the automated smoke test's
+> read-back instead — see
+> [Boomi Integration Guide § Viewing Your Audit Records](boomi-integration-guide.md#viewing-your-audit-records).
+
+**Step 1 — install a MongoDB client** (one-time, on the workstation doing
+the querying). Two options:
+
+| Client | Type | Get it | Best for |
+|---|---|---|---|
+| **MongoDB Compass** | Desktop GUI | <https://www.mongodb.com/products/compass> | Point-and-click browsing, filters, and exports — recommended for analysts and compliance reviewers |
+| **`mongosh`** | Command-line shell | `brew install mongosh` (macOS) or the [MongoDB docs](https://www.mongodb.com/docs/mongodb-shell/install/) | Scripted/repeatable queries, terminal workflows |
+
+**Step 2 — create a dedicated read-only user** (run once). A read-only user
+means a query can never accidentally modify the immutable audit store:
+
+```bash
+scripts/create-audit-reader.sh --db oms_audit --username audit_reader
+# or with a chosen password:
+scripts/create-audit-reader.sh --db oms_audit --username audit_reader --password 'MySecurePass123!'
+```
+
+This outputs the connection string and password — store both securely and
+hand the read-only credential to the analyst who needs it.
+
+**Step 3 — connect** (dev; production uses cluster-internal DNS instead of a
+port-forward):
+
+```bash
+# Terminal 1: expose MongoDB locally
+kubectl -n mongodb port-forward svc/psmdb-rs0 27017:27017
+```
+
+- **Compass:** paste the connection string into the "New Connection" box:
+  `mongodb://audit_reader:<password>@127.0.0.1:27017/oms_audit?authSource=oms_audit&directConnection=true`
+- **mongosh:**
+  ```bash
+  mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/oms_audit?authSource=oms_audit&directConnection=true'
+  ```
+
+**Step 4 — common queries** (database `oms_audit`, collection `auditlogs`):
+
+```javascript
+// Recent audit events
+db.auditlogs.find().sort({ time: -1 }).limit(10)
+
+// Events for a specific resource
+db.auditlogs.find({ resource_id: 'ORD-2024-001' }).sort({ time: -1 })
+
+// Events by action in a date range (time is a native BSON Date -> use new Date())
+db.auditlogs.find({
+  action: 'orders.order.confirm',
+  time: { $gte: new Date('2026-07-01T00:00:00Z'), $lte: new Date('2026-07-06T23:59:59Z') }
+}).sort({ time: -1 })
+
+// Everything sharing one trace_id (cross-reference with SigNoz)
+db.auditlogs.find({ trace_id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' }).sort({ time: 1 })
+
+// Count events by action
+db.auditlogs.aggregate([
+  { $group: { _id: '$action', count: { $sum: 1 } } },
+  { $sort: { count: -1 } }
+])
+```
+
+Query the full `{resource_type}.{verb}` action string, and use `new Date(...)`
+bounds — because `time` is stored as a native BSON Date, a plain string
+comparison would silently match nothing.
+
+---
+
 ## Remote State
 
 Remote S3 state is always enabled. No local-state mode exists.

@@ -136,7 +136,8 @@ flowchart LR
 | Term | Meaning | Why it matters here |
 |---|---|---|
 | **Audit log / audit trail** | An immutable record of a business event (who did what, when, to what resource) written to MongoDB for compliance and traceability. | The core purpose of the MongoDB database in this repo. |
-| **Trace ID** | A unique identifier correlating one logical operation across its audit-log write and its telemetry send, so both can be found and matched later. | Used throughout the smoke tests and the Boomi library's examples. |
+| **Audit Log Contract** | The canonical fixed document shape, field semantics, naming rules, and module extension policy for every audit producer. | Prevents Boomi and other modules from inventing incompatible audit records. See [Audit Log Contract](audit-log-contract.md). |
+| **Trace ID** | A correlation identifier shared by the audit records and telemetry for one logical operation. Multiple records may use the same value. | Used to reconstruct a cross-system timeline; it is not a unique record ID. |
 | **Groovy library** | `BoomiAuditLogLibrary.groovy` — the production code Boomi processes call to write audit logs and resolve secrets. Distinct from the test-harness script with a similar name. | See [Boomi Integration Guide § Audit Log Library](../guides/boomi-integration-guide.md#audit-log-library). |
 
 ## Related Docs

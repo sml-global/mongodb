@@ -33,6 +33,7 @@ Full documentation hub: [docs/index.md](docs/index.md)
 | Quick Link | Purpose |
 |---|---|
 | [docs/index.md](docs/index.md) | Central navigation and system overview |
+| [docs/references/audit-log-contract.md](docs/references/audit-log-contract.md) | Canonical audit fields, naming rules, and module extension contract |
 | [docs/references/glossary.md](docs/references/glossary.md) | Plain-language lookup for jargon/acronyms used across these docs |
 | [docs/references/verification-commands.md](docs/references/verification-commands.md) | Per-component health checks |
 | [docs/references/recovery-procedures.md](docs/references/recovery-procedures.md) | Rollback and disaster recovery |
@@ -392,6 +393,7 @@ All documentation lives under `docs/` with persona-based guides.
 | [docs/guides/architect-reference.md](docs/guides/architect-reference.md) | Architecture, state model, day-2 maintenance |
 | [docs/guides/boomi-integration-guide.md](docs/guides/boomi-integration-guide.md) | Audit log library API, SigNoz, Boomi usage |
 | [docs/guides/enterprise-architecture.md](docs/guides/enterprise-architecture.md) | Design rationale, security, compliance, roadmap |
+| [docs/references/audit-log-contract.md](docs/references/audit-log-contract.md) | Canonical audit document structure, semantics, naming, and module-owned params |
 | [docs/references/component-catalog.md](docs/references/component-catalog.md) | Every component: what/why/how/depends-on |
 | [docs/references/glossary.md](docs/references/glossary.md) | Jargon/acronym lookup, organized by category, with diagrams |
 | [docs/references/verification-commands.md](docs/references/verification-commands.md) | Per-component health checks |

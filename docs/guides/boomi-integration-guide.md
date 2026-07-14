@@ -2,9 +2,29 @@
 
 How to use the audit log library and telemetry from Boomi processes.
 
-**Who this is for:** Boomi Admins/Developers who need to write audit logs and send telemetry.
+**Who this is for:** Boomi Admins — the people with in-depth knowledge of the audit log and telemetry libraries who build the harder integrations, troubleshoot, and **train process owners**. If you are a Boomi process owner, start with the [Boomi Audit Log Guide (Process Owner Edition)](boomi-audit-log-owner-guide.md) — it explains the what and why in plain language, plus the handful of calls you use day-to-day; come back to this guide's [Public API](#public-api) and [tracing recipe](#process-tracing-in-signoz) when you need exact parameters.
+
+### Which Document Do I Need? (By Role)
+
+Each role has its own reading path, on a need-to-know basis — no role should
+need material outside its own list:
+
+| Role | Daily job | Knowledge depth | Read | You do NOT need |
+|---|---|---|---|---|
+| **Boomi Process Owner** | Build/configure processes: decide what business events to record, call `writeAuditLog` and the span (stopwatch) calls with the right business values | *Use-case level* — which call, when, passing what, and why | [Process Owner Edition](boomi-audit-log-owner-guide.md) first; then this guide's [Public API](#public-api) + [tracing recipe](#process-tracing-in-signoz) for exact parameters | Library internals, reliability tuning, credentials, secrets, account administration |
+| **Boomi Admin** | Everything the owner does, **plus**: train owners, review their processes, triage errors, monitor via SigNoz dashboards, run test workflows | *In-depth* — full API semantics, contract rules, failure behavior, testing | **This whole guide** + [Audit Log Contract](../references/audit-log-contract.md) | Credentials, secrets, MongoDB accounts, SigNoz account administration — operator-owned; library source internals — maintainer-owned |
+| **Library Maintainer** (dev/architect of the Groovy code) | Change, build, test, and ship the two `*.groovy` library files | *Internals* — split rationale, signatures, build/test/deploy | [Boomi Groovy Library Architecture](../references/boomi-groovy-library-architecture.md) + this guide for the caller's view | Boomi business-process design, secrets/accounts |
+| **Infra Operator / Admin** | Provision the platform, secrets, and accounts | Platform internals | [Operator Runbook](operator-runbook.md), esp. [§ Boomi Audit Writer: Credentials, Secrets, And Accounts](operator-runbook.md#boomi-audit-writer-credentials-secrets-and-accounts) | Boomi process design or library call patterns |
+| **Enterprise Architect** | Review design, security, compliance | Design level | [Enterprise Architecture](enterprise-architecture.md) + [Audit Log Contract](../references/audit-log-contract.md); [Library Architecture](../references/boomi-groovy-library-architecture.md) for code-level design | Operational runbooks, secret formats, API call recipes |
+
+A typical flow: the process owner decides *what* to record and implements the
+calls at use-case level; the Boomi Admin trains and reviews them with this
+guide's full depth and validates field rules against the contract; the infra
+operator provisions the secret once; and the EA reviews the contract and
+architecture — nobody needs another role's material.
 
 **Related docs:**
+- [Audit Log Contract](../references/audit-log-contract.md) — canonical document shape, field meanings, naming, and module extension rules
 - [Glossary](../references/glossary.md) — jargon/acronym lookup (OTLP, trace ID, audit trail, and more)
 - [Component Catalog § MongoDB](../references/component-catalog.md#mongodb-percona-server-for-mongodb) — what MongoDB does in OMS
 - [Component Catalog § SigNoz](../references/component-catalog.md#signoz) — what SigNoz does in OMS
@@ -37,18 +57,11 @@ scripts/run-audit-telemetry-test.sh
   - In SigNoz Logs, filter `service.name = oms-audit-test-pod`
 5. Then continue with this guide for schema, API usage, and production integration patterns.
 
-### MongoDB Account Mapping (Important)
-
-Use the right account for the right task. Using the wrong one usually looks like a successful connection but fails with `Unauthorized` on `oms_audit` queries.
-
-| Use Case | Account Source | Intended Privilege | Notes |
-|---|---|---|---|
-| Boomi audit write URI secret (`scripts/create-audit-writer-secret.sh`) | `MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD` in `psmdb-secrets` | Application data read/write | This is the account used to build `oms-audit-writer` secret. |
-| In-cluster smoke writer (`scripts/run-audit-telemetry-test.sh`) | `MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD` in `psmdb-secrets` | Application data read/write | Writes and reads `oms_audit.auditlogs` for verification. |
-| Human read-only querying (Compass/mongosh) | `audit_reader` created by `scripts/create-audit-reader.sh` | Read-only on `oms_audit` | Recommended for dashboards, audit review, and analyst access. |
-| Cluster administration | `MONGODB_CLUSTER_ADMIN_USER` / `MONGODB_CLUSTER_ADMIN_PASSWORD` | Cluster management operations | Not the recommended account for app-level audit log queries. |
-
-If Compass shell shows `authenticatedUsers: [{ user: 'clusterAdmin', db: 'admin' }]` and query fails on `oms_audit`, reconnect with `audit_reader` (or database-admin for operator-only debugging).
+> **You never handle database credentials.** The library resolves the MongoDB
+> connection internally from a secret an operator provisioned once. If a
+> query or test fails with `Unauthorized`, hand it to your infra operator —
+> their reference is
+> [Operator Runbook § Boomi Audit Writer: Credentials, Secrets, And Accounts](operator-runbook.md#boomi-audit-writer-credentials-secrets-and-accounts).
 
 ---
 
@@ -69,298 +82,394 @@ flowchart LR
 | **MongoDB** | Writes immutable audit log records | MongoDB URI (from K8s Secret — see below) |
 | **SigNoz** | Sends OTLP log/trace telemetry for observability | OTLP endpoint (HTTP, cluster-internal or via ingress) |
 
-### Execution Model
+The library resolves both connections internally — you never configure a
+MongoDB URI, an OTLP endpoint, or a Kubernetes Secret yourself. It is split
+into two small components (one only ever talks to MongoDB, the other only
+ever talks to SigNoz); the deployment/network detail behind that (where the
+code runs, how it reads the connection secret, port-forwards vs. cluster
+DNS) is infra/architecture-level material, not a Boomi Admin's daily
+concern — see
+[Boomi Groovy Library Architecture § Execution Topology](../references/boomi-groovy-library-architecture.md#execution-topology)
+if you need it, or
+[Boomi Audit Log Guide (Process Owner Edition)](boomi-audit-log-owner-guide.md)
+for a plain-language walkthrough of the same idea.
 
-The Groovy library runs **inside the Boomi runtime** (or locally for testing), NOT as a Kubernetes pod:
-
-```mermaid
-flowchart TD
-  subgraph boomi_runtime[Boomi Runtime / Local Workstation]
-    LIB[BoomiAuditLogLibrary.groovy]
-  end
-
-  subgraph k8s_cluster[EKS Cluster]
-    SECRET[K8s Secret: oms-audit-writer]
-    MONGO[(MongoDB RS)]
-    SIGNOZ[SigNoz OTLP endpoint]
-  end
-
-  LIB -->|kubectl read secret| SECRET
-  LIB -->|MongoDB driver direct| MONGO
-  LIB -->|HTTP POST /v1/logs| SIGNOZ
-```
-
-**Key points:**
-- The library uses `kubectl` to read the MongoDB URI from a Kubernetes Secret — this requires `kubectl` in PATH and valid kubeconfig
-- MongoDB write happens directly via the Java MongoDB driver (not through a K8s service proxy)
-- Telemetry is sent via HTTP POST to the SigNoz OTLP endpoint
-- In dev, both MongoDB and SigNoz are accessed via local port-forwards
-- In production, use cluster-internal service DNS (Boomi runtime must have network access to the cluster)
-
-### Secret Strategy: Kubernetes Secrets (Recommended)
-
-**Use Kubernetes Secrets** — they are free, already provisioned in the cluster, and the library supports them natively.
-
-**Do NOT use AWS Secrets Manager** unless you have a specific requirement — it adds cost and complexity. The AWS path exists in the library for environments where kubectl access is not available.
-
-Use AWS Secrets Manager path only when at least one is true:
-1. The Boomi runtime cannot access kubeconfig/kubectl.
-2. Organization policy requires centralized secret governance outside the cluster.
-3. You need cross-cluster secret reuse managed by AWS controls.
-
-| Secret Source | Cost | When to Use |
-|---|---|---|
-| K8s Secret (recommended) | Free | Default for all environments where kubectl is available |
-| AWS Secrets Manager | ~$0.40/secret/month + $0.05/10K API calls | Only if Boomi runtime cannot access kubectl |
-| Explicit URI (hardcoded) | Free | Local testing only — never in production |
-
-**Create the K8s Secret** (one-time, run by operator):
-
-```bash
-scripts/create-audit-writer-secret.sh
-```
-
-This creates `oms-audit-writer` in the `mongodb` namespace with a `mongoUri` key containing the full connection string.
-
-The script uses database-admin credentials from `psmdb-secrets` (`MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD`), not `clusterAdmin`.
+How the MongoDB secret is provisioned, which MongoDB accounts exist, and the
+alternative AWS Secrets Manager path are operator concerns — see
+[Operator Runbook § Boomi Audit Writer: Credentials, Secrets, And Accounts](operator-runbook.md#boomi-audit-writer-credentials-secrets-and-accounts).
 
 ## Audit Log Library
 
 ### Location
 
 ```
-scripts/groovy/boomi/BoomiAuditLogLibrary.groovy
+scripts/groovy/boomi/BoomiAuditLogLibrary.groovy   # writes audit records to MongoDB
+scripts/groovy/boomi/BoomiOtelLibrary.groovy       # trace-ID correlation + SigNoz failure telemetry
 ```
 
-This is the production library. The file at `scripts/write-auditlog-and-telemetry.groovy` is only a test harness.
+These are the production libraries; deploy both together (the first depends on the second). The file
+at `scripts/write-auditlog-and-telemetry.groovy` is only a test harness. See
+[Boomi Groovy Library Architecture](../references/boomi-groovy-library-architecture.md) for why there
+are two files instead of one, and what each one owns.
 
 ### Public API
 
-#### `BoomiAuditLogLibrary.resolveMongoUri(Map options)`
+#### `BoomiAuditLogLibrary.writeAuditLog(Map event)`
 
-Resolves MongoDB connection URI from multiple sources in priority order.
+**This is the only method a Boomi process needs to call.** Pass a Map with the
+business fields the [Audit Log Contract](../references/audit-log-contract.md)
+requires — nothing else. The library resolves the MongoDB connection, the
+fixed database, and the fixed collection internally; resolves `trace_id` from
+an active OpenTelemetry span when one exists (otherwise a fresh UUID),
+defaults `meta` when you omit it entirely, and generates `time` (a native BSON
+Date) when you omit it; retries transient connection errors internally; and
+emits critical SigNoz telemetry (via the OpenTelemetry Logs SDK, with the
+exception recorded on the active span if any) before throwing on any failure.
 
-**Parameters** (all optional — pass as named map):
+**Fields** (see the contract for full definitions):
 
-| Parameter | Type | Description |
+| Key | Required | Description |
 |---|---|---|
-| `mongoUri` | String | Explicit MongoDB URI (highest priority) |
-| `k8sSecretName` | String | Kubernetes Secret name containing the URI |
-| `k8sNamespace` | String | Kubernetes namespace (default: `mongodb`) |
-| `k8sSecretKey` | String | Key within the Secret (default: `mongoUri`) |
-| `awsSecretId` | String | AWS Secrets Manager secret ID |
-| `awsRegion` | String | AWS region (default: env `AWS_REGION` or `ap-east-1`) |
+| `action` | Yes | `{resource_type}.{verb}`, e.g. `boomi.document.load`. |
+| `resource_type` | Yes | Namespaced noun, e.g. `boomi.document`. |
+| `meta` | Yes\* | `[method: ..., path: ..., status: ...]` — required in the persisted document, but you may omit it entirely: the library then defaults it to `[method: 'BOOMI', path: action, status: (error_code ? 500 : 200)]`. See [`meta` For Non-HTTP Producers](../references/audit-log-contract.md#meta-for-non-http-producers-boomiedi). |
+| `error_code` | No | `null` on success, a stable code on failure. Defaults to `null`. |
+| `resource_id` | No | Identifier of the resource — the external system's own ID is preferred for an EDI/Boomi entity (for example a stable load/interchange identifier; see the caveat under the example below), or a UUID for an internally-generated entity. Defaults to `null`. |
+| `user_id` | No | Namespaced actor id. Recommended `sys:boomi-service` for an automated Boomi process (there's no human actor); may be left `null` if you don't need to record even that. Defaults to `null`. |
+| `impersonator_id` | No | ID of a user acting on behalf of another. Boomi processes typically have no impersonator; defaults to `null`. |
+| `message` | No | Short sanitized summary. Defaults to `null`. |
+| `tpl_message` | No | `[key: ..., params: [...]]` — `key` looks up a message template, `params` supplies the values the template engine substitutes into it. Defaults to `null`; omit entirely if there's nothing structured to say. |
+| `resource_changes` | No | `[field_name: [old_value, new_value]]` for a state transition. Defaults to `null`; typically stays `null` for EDI-loading actions since there's no natural before/after diff, but the library validates it if you do supply one. |
+| `trace_id` | No | Reused from an active OpenTelemetry span's trace ID when one exists (an opaque hex string, not a UUID); otherwise a fresh UUID is generated. |
+| `ip` | No | Client IP or `null`; defaults to `null`. |
+| `time` | No | ISO-8601 String or `Date`; defaults to now (stored as a BSON Date either way). |
 
-**Resolution order:**
-1. If `mongoUri` is provided → use it directly
-2. If `k8sSecretName` is provided → read from Kubernetes Secret
-3. If `awsSecretId` is provided → read from AWS Secrets Manager
-4. Fallback → `mongodb://127.0.0.1:27017/?directConnection=true`
+**Returns:** `Map` with `insertedId`, `trace_id`, and `time` (the resolved values).
 
-**Returns:** `String` — MongoDB connection URI
+**Throws:** `IllegalArgumentException` on a contract validation failure, or the
+underlying MongoDB exception (wrapped in a `RuntimeException`) after retries
+are exhausted. **There is no fail-soft variant** — the calling Boomi process
+must catch the exception and decide how to react (retry the business step,
+alert, or halt). Before throwing, the library emits a critical, sanitized
+telemetry event to SigNoz via the OpenTelemetry Logs SDK, and records the
+exception on the active span if one exists — see
+[Write Failure Handling](../references/audit-log-contract.md#write-failure-handling).
 
-**Example:**
+**Example** (a Boomi process only ever runs as a system actor loading/mapping
+EDI data, never a human "confirm this order" action — so this uses a
+realistic EDI-load scenario):
 
 ```groovy
 import boomi.BoomiAuditLogLibrary
 
-// From Kubernetes Secret
-String uri = BoomiAuditLogLibrary.resolveMongoUri([
-  k8sSecretName: 'oms-audit-writer',
-  k8sNamespace: 'mongodb',
-  k8sSecretKey: 'mongoUri'
-])
-
-// From AWS Secrets Manager
-String uri = BoomiAuditLogLibrary.resolveMongoUri([
-  awsSecretId: '/oms/dev/mongodb/audit-writer',
-  awsRegion: 'ap-east-1'
-])
-
-// Explicit URI
-String uri = BoomiAuditLogLibrary.resolveMongoUri([
-  mongoUri: 'mongodb://user:pass@host:27017/auditdb'
-])
-```
-
-#### `BoomiAuditLogLibrary.writeAuditLog(String mongoUri, String dbName, String collectionName, Map record)`
-
-Writes a single audit log document to MongoDB.
-
-**Parameters:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `mongoUri` | String | MongoDB connection URI (from `resolveMongoUri`) |
-| `dbName` | String | Target database name |
-| `collectionName` | String | Target collection name |
-| `record` | Map | Audit log document (see schema below) |
-
-**Returns:** `Map` with keys:
-- `insertedId` — hex string of the inserted document `_id`
-- `savedDocument` — the full document as saved in MongoDB
-
-**Example:**
-
-```groovy
-import boomi.BoomiAuditLogLibrary
-
-String uri = BoomiAuditLogLibrary.resolveMongoUri([
-  k8sSecretName: 'oms-audit-writer'
-])
-
-Map record = [
-  trace_id: 'abc123',
-  time: '2026-07-06T10:30:00Z',
-  action: 'orders.order.confirm',
-  resource_type: 'orders.order',
-  resource_id: 'ORD-2024-001',
-  user_id: 'user1',
-  resource_changes: [status: ['pending', 'confirmed']],
-  meta: [method: 'POST', path: '/api/v1/orders/ORD-2024-001/confirm', status: 200]
+Map event = [
+  action: 'boomi.document.load',
+  resource_type: 'boomi.document',
+  resource_id: 'orders-20260713.edi',  // the EDI file name, for this simple example
+  user_id: null,                       // Boomi runs as a system process -- no human actor to name
+  message: 'EDI order file loaded successfully',
+  tpl_message: [
+    key: 'boomi.document.loaded',
+    params: [
+      contract_version: '2.1',
+      tenant_id: 'HK_RETAIL'
+    ]
+  ],
+  meta: [
+    method: 'BOOMI',
+    path: 'boomi.document.load',
+    status: 200
+  ]
 ]
 
-def result = BoomiAuditLogLibrary.writeAuditLog(uri, 'oms_audit', 'auditlogs', record)
-println "Inserted: ${result.insertedId}"
+try {
+  def result = BoomiAuditLogLibrary.writeAuditLog(event)
+  println "Audit write OK: ${result.insertedId} (trace_id ${result.trace_id})"
+} catch (Exception e) {
+  // The library already emitted critical telemetry to SigNoz. Decide here how
+  // this Boomi process reacts: retry, alert, or halt the business flow.
+  println "Audit write failed: ${e.message}"
+}
 ```
 
-#### `BoomiAuditLogLibrary.readKubernetesSecretValue(String namespace, String secretName, String secretKey)`
+> **On `resource_id` here:** using the plain file name keeps this first
+> example simple, but the contract recommends against it for production use
+> — trading partners resend the same logical interchange under a different
+> filename, and reuse filenames for different content, so a raw file name is
+> not a reliable long-term identity. Prefer a stable load/interchange
+> identifier instead; see
+> [Audit Log Contract § Boomi EDI Document Load Failed](../references/audit-log-contract.md#boomi-edi-document-load-failed)
+> for the production-shaped version of this same scenario.
 
-Reads a single value from a Kubernetes Secret (base64-decoded).
+You do **not** need to resolve a MongoDB URI, pick a database/collection name,
+configure retries, or generate `trace_id`/`meta`/`time` yourself — the library
+does all of that internally when you omit them.
 
-**Parameters:**
+#### `BoomiAuditLogLibrary.closeAllClients()`
 
-| Parameter | Type | Description |
-|---|---|---|
-| `namespace` | String | Kubernetes namespace |
-| `secretName` | String | Secret name |
-| `secretKey` | String | Key within the Secret |
+Closes and clears all pooled MongoClients, and shuts down the shared
+`BoomiOtelLibrary` telemetry logger (see below). Call this at the end of
+short-lived batch jobs or test runs that need a clean shutdown; not
+required for long-running Boomi runtimes, which should keep reusing the
+pooled connection.
 
-**Returns:** `String` — decoded secret value
+### `BoomiOtelLibrary` (Telemetry & Tracing Helper)
 
-**Throws:** `RuntimeException` if secret/key not found or kubectl fails.
+`writeAuditLog` already calls this for you for trace-ID correlation and
+failure telemetry — you don't need to touch it just to write audit records.
+Call it directly when you want SigNoz to show a **trace** of your Boomi
+process: when it started, how long each lengthy subprocess took, and when it
+completed. The full step-by-step how-to is
+[Process Tracing In SigNoz](#process-tracing-in-signoz) just below; this
+table is the method reference.
 
-#### `BoomiAuditLogLibrary.readAwsSecretString(String secretId, String awsRegion)`
+| Method | Purpose |
+|---|---|
+| `BoomiOtelLibrary.startSpan(serviceName, spanName, parentTraceparent = null)` | Starts a timed span (process- or subprocess-level). Returns a handle Map (`span`, `scope`, `traceparent`, `traceId`, `spanId`) to pass to `endSpan`. |
+| `BoomiOtelLibrary.endSpan(spanHandle, error = null)` | Ends a span, recording its duration. Pass `error` to mark it failed and emit a SigNoz failure log automatically. |
+| `BoomiOtelLibrary.withSpan(serviceName, spanName, parentTraceparent = null) { handle -> ... }` | Runs a block of work as a timed span, always ending it (even on exception) — the recommended way to time a subprocess. |
+| `BoomiOtelLibrary.recordError(serviceName, spanHandle, message, cause)` | Records an error on a span **without** ending it, and always emits a SigNoz failure log. |
+| `BoomiOtelLibrary.currentTraceId()` | Returns the active OpenTelemetry span's trace ID, or `null` if there is none. |
+| `BoomiOtelLibrary.emitCriticalFailure(serviceName, failureType, message, traceId, cause)` | Sends a critical, sanitized failure log to SigNoz and records `cause` on the active span, if any. Never throws. |
+| `BoomiOtelLibrary.resolveEndpoint()` / `resolveTracesEndpoint()` | Return the OTLP/HTTP endpoints telemetry is sent to (`BOOMI_AUDIT_OTEL_ENDPOINT` for logs, `BOOMI_AUDIT_OTEL_TRACES_ENDPOINT` for traces — the latter defaults to the former with `/v1/logs` swapped for `/v1/traces`). |
+| `BoomiOtelLibrary.shutdown()` | Shuts down the cached telemetry logger and tracer. Also called by `BoomiAuditLogLibrary.closeAllClients()`. |
 
-Reads a secret string from AWS Secrets Manager.
+### Process Tracing In SigNoz
 
-**Parameters:**
+This is the authoritative how-to for timing a Boomi process in SigNoz —
+process owners and admins both use it. It runs through one concrete,
+realistic process end to end: **loading an EDI order file from a trading
+partner**, which naturally breaks into three parts:
 
-| Parameter | Type | Description |
-|---|---|---|
-| `secretId` | String | Secret ID or ARN |
-| `awsRegion` | String | AWS region |
+1. **Load the file** — retrieve `orders-20260713.edi` from the trading-partner drop location.
+2. **Map and export** — translate the EDI fields and write `orders-20260713.import.json`.
+3. **Move to done** — move the original file to a "done"/archive location.
 
-**Returns:** `String` — secret value (string or decoded binary)
+One run becomes **one trace** with **one process-level span** (the whole run)
+and **three subprocess spans** nested underneath, bracketed by two audit-log
+records (`boomi.document.receive` at the start, `boomi.document.load` at the
+end):
+
+```mermaid
+flowchart LR
+  subgraph trace["One trace — one shared trace_id"]
+    direction LR
+    A1(("Audit:\nboomi.document.receive")) --> S1["Span:\nload_file"]
+    S1 --> S2["Span:\nmap_and_export"]
+    S2 --> S3["Span:\nmove_to_done"]
+    S3 --> A2(("Audit:\nboomi.document.load"))
+  end
+```
+
+#### Full worked example (single script)
+
+The common case: the whole process runs as one Groovy script, so every span
+automatically nests under whichever span is already active — no parent
+wiring needed.
+
+```groovy
+import boomi.BoomiOtelLibrary
+import boomi.BoomiAuditLogLibrary
+
+final String SERVICE_NAME = 'oms-audit-writer'
+String fileName = 'orders-20260713.edi'
+String loadId = 'LOAD-48391'
+
+// 1) Start the trace + the process-level span, and record that the file was
+//    received (the contract's completed-fact form of "the run started").
+def processHandle = BoomiOtelLibrary.startSpan(SERVICE_NAME, 'boomi.process.edi_order_load')
+BoomiAuditLogLibrary.writeAuditLog([
+  action: 'boomi.document.receive',
+  resource_type: 'boomi.document',
+  resource_id: loadId,
+  user_id: 'sys:boomi-service',
+  tpl_message: [key: 'boomi.document.received', params: [file_name: fileName]]
+])
+
+// 2) Subprocess 1: load the EDI file from the trading-partner drop location.
+BoomiOtelLibrary.withSpan(SERVICE_NAME, 'boomi.process.edi_order_load.load_file') { handle ->
+  // ... read `fileName` from the SFTP/AS2 drop location ...
+}
+
+// 3) Subprocess 2: map EDI fields to the internal format and export the result.
+BoomiOtelLibrary.withSpan(SERVICE_NAME, 'boomi.process.edi_order_load.map_and_export') { handle ->
+  // ... apply the EDI-to-JSON mapping, write orders-20260713.import.json ...
+}
+
+// 4) Subprocess 3: move the original EDI file to the "done" archive location.
+BoomiOtelLibrary.withSpan(SERVICE_NAME, 'boomi.process.edi_order_load.move_to_done') { handle ->
+  // ... move fileName into the done/archive folder ...
+}
+
+// 5) Record the completed load milestone (error_code omitted = null = success),
+//    and end the process span.
+BoomiAuditLogLibrary.writeAuditLog([
+  action: 'boomi.document.load',
+  resource_type: 'boomi.document',
+  resource_id: loadId,
+  user_id: 'sys:boomi-service',
+  tpl_message: [key: 'boomi.document.loaded', params: [file_name: fileName]]
+])
+BoomiOtelLibrary.endSpan(processHandle)
+```
+
+Both audit writes automatically share the process span's trace ID — no extra
+wiring. `meta`, `trace_id`, and `time` are omitted on purpose: the library
+auto-defaults `meta` for Boomi callers and resolves `trace_id`/`time` itself
+(see [`meta` For Non-HTTP Producers](../references/audit-log-contract.md#meta-for-non-http-producers-boomiedi)).
+Naming follows the [contract](../references/audit-log-contract.md#action-resource_typeverb):
+the beginning is the completed fact `boomi.document.receive`, the end is the
+milestone `boomi.document.load` whose outcome lives only in `error_code`.
+
+#### Which call, when
+
+| Part of your process | Start tracking | End tracking | What SigNoz shows |
+|---|---|---|---|
+| The whole process run | `startSpan(SVC, 'boomi.process.<name>')` in your first Groovy step | `endSpan(processHandle)` in your last Groovy step | One parent bar spanning the entire run |
+| A part inside one Groovy step | `withSpan(SVC, 'boomi.process.<name>.<part>') { ... }` | (automatic — ends when the closure ends, even on error) | One child bar with that part's duration |
+| A part crossing several shapes | `startSpan(SVC, 'boomi.process.<name>.<part>', parentTraceparent)` in the shape where it begins | `endSpan(partHandle)` in the shape where it finishes | Same child bar, timed across the shapes |
+| A part that failed | — | `endSpan(partHandle, exception)` (or let `withSpan` catch it) | The bar turns red, with the exception attached |
+
+Rules of thumb:
+
+- **Every `startSpan` must be matched by exactly one `endSpan`** — an
+  unmatched span never gets an end time and shows as incomplete in SigNoz.
+  This is why `withSpan` is preferred when the part fits in one step: it
+  can never leak a span, even when the work throws.
+- Start spans in order, end them in reverse order (a part's span should be
+  ended before the process span that contains it).
+
+#### Reading the trace in SigNoz
+
+Open SigNoz → **Traces** tab → filter `service.name = oms-audit-writer` →
+open the trace. Each part appears as its own timed bar under the process
+bar — a "waterfall" (durations illustrative):
+
+```text
+boomi.process.edi_order_load                                    total: 10.4s
+├─ load_file          ▓▓▓                                           0.6s
+├─ map_and_export      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  8.4s  <- slow, worth investigating
+└─ move_to_done                                                 ▓▓   0.5s
+```
+
+Without subprocess spans, all you would know is "this run took 10.4s." With
+them, you know `map_and_export` is where nearly all the time went.
+
+> **Why the three parts are spans, not audit records.** Only the
+> process-level `receive`/`load` pair is written to the audit log; the three
+> timing bars are SigNoz spans. Timing is telemetry, not a business fact
+> (contract [Non-Goals](../references/audit-log-contract.md#non-goals--what-this-collection-is-not-for)):
+> SigNoz answers "which step was slow"; the audit log answers "did the load
+> succeed, and when." Neither duplicates the other.
+
+#### Handling errors
+
+- **A part fails and the process should stop** — for example
+  `map_and_export` hits a file missing a required EDI segment:
+
+  ```groovy
+  try {
+    BoomiOtelLibrary.withSpan(SERVICE_NAME, 'boomi.process.edi_order_load.map_and_export') { handle ->
+      if (!hasRequiredInterchangeHeader) {
+        throw new IllegalStateException('Required interchange header segment is missing')
+      }
+      // ... mapping work ...
+    }
+  } catch (Exception e) {
+    // withSpan already marked the span failed, recorded the exception on it,
+    // and emitted a critical failure log to SigNoz — before re-throwing here.
+    BoomiAuditLogLibrary.writeAuditLog([
+      action: 'boomi.document.load',
+      error_code: 'ERR_SOURCE_FILE_INVALID',
+      resource_type: 'boomi.document',
+      resource_id: loadId,
+      message: 'EDI document load failed: required interchange header segment missing'
+    ])
+    BoomiOtelLibrary.endSpan(processHandle, e)
+    throw e
+  }
+  ```
+
+  You still write the `boomi.document.load` record — the *same* milestone
+  action as the success path, with the failure carried **only** in
+  `error_code` (a failed attempt is still a completed business fact worth
+  recording), and you end the process span with the same error.
+- **An error happens but the part continues** (for example a transient SFTP
+  hiccup that an internal retry resolves): call
+  `recordError(SERVICE_NAME, spanHandle, message, cause)` — it attaches the
+  exception to the span and logs it to SigNoz, without ending the span or
+  stopping the part.
+
+#### Continuing a trace across separate Boomi shapes
+
+A span object only lives in the memory of the script execution that created
+it — it cannot stay "open" across two separate Boomi shape executions. But a
+later span only needs its parent's **trace ID + span ID**, carried as a
+portable string, to nest correctly. `startSpan`'s handle exposes exactly
+that: `handle.traceparent` (W3C format, e.g.
+`00-1ee79875...-761fc1b3...-01`). Store it in a Boomi Dynamic Process
+Property; a later shape reads it back and passes it as `parentTraceparent`:
+
+```groovy
+// Shape 1 (process start, then load_file)
+def handle = BoomiOtelLibrary.startSpan('oms-audit-writer', 'boomi.process.edi_order_load')
+BoomiAuditLogLibrary.writeAuditLog([action: 'boomi.document.receive', resource_type: 'boomi.document', resource_id: 'LOAD-48391'])
+// ... load_file work here, in the same span/scope ...
+// store handle.traceparent in a Dynamic Process Property, e.g. DPP_TRACEPARENT
+
+// Shape 2, a separate script execution (map_and_export)
+String parentTraceparent = /* read DPP_TRACEPARENT */
+def mapHandle = BoomiOtelLibrary.startSpan('oms-audit-writer', 'boomi.process.edi_order_load.map_and_export', parentTraceparent)
+// ... mapping work ...
+BoomiOtelLibrary.endSpan(mapHandle)
+
+// Shape 3, a separate script execution (move_to_done, then process complete)
+def moveHandle = BoomiOtelLibrary.startSpan('oms-audit-writer', 'boomi.process.edi_order_load.move_to_done', parentTraceparent)
+// ... move work ...
+BoomiOtelLibrary.endSpan(moveHandle)
+BoomiAuditLogLibrary.writeAuditLog([action: 'boomi.document.load', resource_type: 'boomi.document', resource_id: 'LOAD-48391'])
+```
+
+Every shape's span lands under the same trace in SigNoz even though they ran
+as separate executions. The one tradeoff: no single execution can
+`endSpan(processHandle)` for the overall run, so the whole-run duration is
+best read from the two audit timestamps (`boomi.document.load.time` minus
+`boomi.document.receive.time`) rather than one continuously-open span.
+
+For the design-level "why it works this way" (ambient span nesting, the
+`traceparent` propagation mechanism), see
+[Boomi Groovy Library Architecture](../references/boomi-groovy-library-architecture.md).
+
+#### Diagnostic Methods (Operator Use Only)
+
+`BoomiAuditLogLibrary` also exposes `resolveMongoUri()`, `redactUri(uri)`,
+`readKubernetesSecretValue(...)`, and `readAwsSecretString(...)`. These exist
+for an infra operator diagnosing connection resolution — a Boomi process
+calling `writeAuditLog` never needs them and never sees a connection string
+at all. They are documented in
+[Operator Runbook § Diagnostic Library Methods](operator-runbook.md#diagnostic-library-methods-operator-use-only).
 
 ---
 
 ## Audit Log Document Schema
 
-The recommended audit log document structure:
+The authoritative schema and field semantics are defined in the
+[Audit Log Contract](../references/audit-log-contract.md). That contract is
+shared by Boomi and every other OMS audit producer; this integration guide does
+not define a separate Boomi-specific document shape.
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `trace_id` | String | Yes | Unique trace identifier for correlation |
-| `time` | String (ISO 8601) | Yes | Event timestamp in UTC |
-| `action` | String | Yes | Dot-notation action identifier (e.g., `orders.order.confirm`) |
-| `resource_type` | String | Yes | Resource type being acted on |
-| `resource_id` | String | Yes | Specific resource identifier |
-| `user_id` | String | Yes | Acting user identifier |
-| `ip` | String | No | Client IP address |
-| `error_code` | String/null | No | Error code if action failed |
-| `message` | String/null | No | Human-readable message |
-| `tpl_message` | Map | No | Templated message (`key` + `params`) |
-| `resource_changes` | Map | No | Before/after values of changed fields |
-| `meta` | Map | No | Request metadata (method, path, status, user-agent) |
+In particular:
 
-**Example document:**
+- only `time`, `action`, `resource_type`, and `meta` (with `method`/`path`/`status`) are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional; `meta` is additionally auto-defaulted by the library when a Boomi caller omits it entirely, so it is effectively optional in practice too;
+- `action` is the full `{resource_type}.{verb}` string, matching the production `oms-backend` schema (not a bare verb);
+- `resource_type` is a namespaced noun;
+- `error_code` carries the success/failure contract;
+- `user_id` carries a recommended (not enforced) actor prefix;
+- `tpl_message`, when present, contains exactly `key` (looks up a message template) and module-owned `params` (the values substituted into it);
+- `resource_changes` (`{field: [old, new]}`) is the preferred way to record a state transition;
+- `trace_id` reuses an active OpenTelemetry span's trace ID when one exists, otherwise a generated UUID; either way it is shared correlation data and must not have a unique index.
 
-```json
-{
-  "trace_id": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
-  "time": "2026-07-06T10:30:00Z",
-  "action": "orders.order.confirm",
-  "resource_type": "orders.order",
-  "resource_id": "ORD-2024-001",
-  "user_id": "user1",
-  "ip": "192.168.1.122",
-  "error_code": null,
-  "tpl_message": {
-    "key": "orders.order.status.changed",
-    "params": {"order_no": "ORD-2024-001", "from": "PENDING", "to": "PROCESSING"}
-  },
-  "resource_changes": {
-    "status": ["pending", "confirmed"]
-  },
-  "meta": {
-    "method": "POST",
-    "path": "/api/v1/orders/ORD-2024-001/confirm",
-    "status": 200
-  }
-}
-```
-
----
-
-## Secret Formats
-
-### Kubernetes Secret (Recommended — Free, Already Provisioned)
-
-The library reads base64-encoded values from Kubernetes Secrets via `kubectl`.
-
-**To create the secret** (one-time operator step):
-
-```bash
-scripts/create-audit-writer-secret.sh
-```
-
-This generates the secret from existing MongoDB credentials. Expected structure:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: oms-audit-writer
-  namespace: mongodb
-type: Opaque
-data:
-  mongoUri: <base64-encoded MongoDB URI>
-```
-
-**Library usage:**
-
-```groovy
-String uri = BoomiAuditLogLibrary.resolveMongoUri([
-  k8sSecretName: 'oms-audit-writer',
-  k8sNamespace: 'mongodb',
-  k8sSecretKey: 'mongoUri'
-])
-```
-
-### AWS Secrets Manager (Optional — NOT Provisioned by Default)
-
-> **Note:** This path is NOT provisioned by the current Terraform stack. Use it only if your Boomi runtime cannot access `kubectl`. You would need to manually create the secret in AWS Secrets Manager.
-
-The library accepts two formats:
-
-**Format 1: Plain URI string**
-
-Secret value is the MongoDB URI directly:
-```
-mongodb://user:password@host:27017/dbname?authSource=admin
-```
-
-**Format 2: JSON object**
-
-Secret value is JSON with one of these keys (checked in order):
-```json
-{
-  "mongoUri": "mongodb://user:password@host:27017/dbname"
-}
-```
-
-Accepted JSON key names: `mongoUri`, `mongodbUri`, `uri`, `MONGO_URI`
+Read the contract before registering a new template key or params schema.
 
 ---
 
@@ -375,7 +484,8 @@ Accepted JSON key names: `mongoUri`, `mongodbUri`, `uri`, `MONGO_URI`
 
 ### OTLP Log Format
 
-Send OTLP JSON to the `/v1/logs` endpoint:
+The library builds this via the OpenTelemetry Logs SDK (not a hand-built
+payload); the wire format sent to the `/v1/logs` endpoint looks like:
 
 ```json
 {
@@ -387,22 +497,30 @@ Send OTLP JSON to the `/v1/logs` endpoint:
       ]
     },
     "scopeLogs": [{
-      "scope": {"name": "oms.auditlog.writer", "version": "2.0.0"},
+      "scope": {"name": "boomi.BoomiAuditLogLibrary"},
       "logRecords": [{
         "timeUnixNano": "1720263000000000000",
-        "severityNumber": 9,
-        "severityText": "INFO",
-        "body": {"stringValue": "orders.order.confirm"},
+        "severityNumber": 17,
+        "severityText": "ERROR",
+        "body": {"stringValue": "Audit write failed: mongo_write"},
         "attributes": [
+          {"key": "failure.type", "value": {"stringValue": "mongo_write"}},
+          {"key": "failure.message", "value": {"stringValue": "..."}},
           {"key": "trace_id", "value": {"stringValue": "abc123"}},
-          {"key": "action", "value": {"stringValue": "orders.order.confirm"}},
-          {"key": "resource_id", "value": {"stringValue": "ORD-2024-001"}}
+          {"key": "exception.type", "value": {"stringValue": "com.mongodb.MongoTimeoutException"}},
+          {"key": "exception.message", "value": {"stringValue": "..."}},
+          {"key": "exception.stacktrace", "value": {"stringValue": "..."}}
         ]
       }]
     }]
   }]
 }
 ```
+
+This is only emitted on a failure (see
+[Write Failure Handling](../references/audit-log-contract.md#write-failure-handling))
+— a successful write emits no telemetry event, since a successful write is
+itself the audit record.
 
 ### Accessing SigNoz Dashboard (Quick)
 
@@ -433,8 +551,8 @@ The Groovy library uses `@Grab` annotations for automatic dependency resolution:
 
 | Dependency | Version | Purpose |
 |---|---|---|
-| `org.mongodb:mongodb-driver-sync` | 5.1.2 | MongoDB Java driver |
-| `software.amazon.awssdk:secretsmanager` | 2.25.48 | AWS Secrets Manager client |
+| `org.mongodb:mongodb-driver-sync` | 5.1.2 | MongoDB Java driver (used internally by the library) |
+| `software.amazon.awssdk:secretsmanager` | 2.25.48 | Used internally for the operator-configured connection resolution — you never call it or handle what it reads |
 
 For Boomi deployment, either:
 - Include these JARs in the Boomi process classpath, OR
@@ -462,148 +580,178 @@ scripts/write-auditlog-and-telemetry.sh --otel-endpoint http://localhost:1/noop
 
 This validates the MongoDB write path independently of SigNoz availability.
 
-**Test with Kubernetes Secret:**
+The harness also accepts explicit secret-source flags for verifying each
+connection-resolution path — that is an operator task, documented in
+[Operator Runbook § Testing Secret Resolution Paths](operator-runbook.md#testing-secret-resolution-paths).
 
-```bash
-scripts/write-auditlog-and-telemetry.sh \
-  --mongo-uri-k8s-secret oms-audit-writer \
-  --mongo-uri-k8s-namespace mongodb \
-  --mongo-uri-k8s-key mongoUri
+---
+
+## Reliability: Timeouts, Retries, And Failure Telemetry
+
+**Core principle: an audit write failure must never be silent.** `writeAuditLog`
+always throws on a validation error or an exhausted retry, after first emitting
+a critical, sanitized telemetry event to SigNoz (see
+[Write Failure Handling](../references/audit-log-contract.md#write-failure-handling)
+in the contract). There is no fail-soft variant — the calling Boomi process
+must catch the exception and decide how to react: retry the business step
+through the process's own retry shape, alert a human, or halt the flow.
+
+### Sequence: Successful Write
+
+```mermaid
+sequenceDiagram
+  participant Boomi as Boomi Process
+  participant Audit as BoomiAuditLogLibrary
+  participant Otel as BoomiOtelLibrary
+  participant Mongo as MongoDB
+
+  Boomi->>Audit: writeAuditLog(event)
+  Audit->>Otel: currentTraceId()
+  Otel-->>Audit: active span's trace ID, or null
+  Audit->>Audit: prepareRecord() / validateRecord()
+  Audit->>Mongo: insertOne(record)
+  Mongo-->>Audit: insertedId
+  Audit-->>Boomi: {insertedId, trace_id, time}
 ```
 
-**Test with AWS Secrets Manager:**
+`BoomiOtelLibrary` is consulted only for `trace_id` resolution on the happy
+path — it does not participate in the MongoDB write itself.
 
-```bash
-scripts/write-auditlog-and-telemetry.sh \
-  --mongo-uri-secret-id /oms/dev/mongodb/audit-writer \
-  --aws-region ap-east-1
+### Sequence: Failed Write
+
+```mermaid
+sequenceDiagram
+  participant Boomi as Boomi Process
+  participant Audit as BoomiAuditLogLibrary
+  participant Otel as BoomiOtelLibrary
+  participant Mongo as MongoDB
+  participant SigNoz as SigNoz
+
+  Boomi->>Audit: writeAuditLog(event)
+  Audit->>Otel: currentTraceId()
+  Otel-->>Audit: trace ID (or null -> UUID fallback)
+  Audit->>Audit: prepareRecord() / validateRecord()
+  Audit->>Mongo: insertOne(record)
+  Mongo-->>Audit: connection error / timeout
+  Note over Audit: retries exhausted
+  Audit->>Otel: emitCriticalFailure(serviceName, "mongo_write", message, trace_id, cause)
+  Otel->>SigNoz: OTLP log record (via OpenTelemetry Logs SDK)
+  Otel->>Otel: Span.recordException(cause) on active span, if any
+  Otel-->>Audit: returns (never throws)
+  Audit-->>Boomi: throws RuntimeException
 ```
+
+`emitCriticalFailure` is best-effort and swallows its own errors internally
+(for example if SigNoz itself is unreachable) — it must never mask or
+replace the real exception `BoomiAuditLogLibrary` is already propagating to
+the Boomi process. This is why the arrow from `Otel` back to `Audit` is
+annotated "returns (never throws)": whatever happens inside
+`emitCriticalFailure`, `writeAuditLog` still throws the original MongoDB or
+validation exception afterward.
+
+### Timeout and retry defaults (fixed, not configurable)
+
+These are internal to the library — there is no `options` map to tune, which
+keeps the caller's surface to a single event Map:
+
+| Setting | Value | Why |
+|---|---|---|
+| Server selection timeout | 5s | Bounds how long a write waits to find a usable MongoDB node before failing. |
+| Connect timeout | 5s | Bounds TCP/TLS handshake time. |
+| Socket read timeout | 8s | Bounds how long a single operation can block on the wire. |
+| Max retries | 2 (3 attempts total) | Bounded exponential backoff: 250ms → 500ms → 1000ms. |
+
+Only **transient** errors are retried: connection timeouts, socket errors, and
+driver-flagged `RetryableWriteError` conditions. Validation errors and write
+errors such as duplicate keys are never retried — retrying these would not
+change the outcome. If the retry backoff sleep itself is interrupted (for
+example the JVM/thread is shutting down), this is a terminal failure, not an
+uncaught `InterruptedException`.
+
+### Connection reuse
+
+The library keeps one pooled `MongoClient` per distinct URI (cached process-wide), instead of
+creating and closing a new client — and paying a fresh TCP/TLS/auth handshake — on every single
+audit write. Call `BoomiAuditLogLibrary.closeAllClients()` only when you need a clean shutdown
+(short-lived batch jobs, test runs); long-running Boomi runtimes should leave the pool open.
+
+### What happens on validation or write failure
+
+`writeAuditLog` emits a critical, sanitized telemetry event to SigNoz via the
+OpenTelemetry Logs SDK (OTLP/HTTP) — containing the failure class, producer,
+exception type/message/stack trace, and `trace_id` when valid — and, if there
+is a currently active OpenTelemetry span, records the same exception on that
+span (`Span.recordException`) so it appears inline on the trace. It then
+throws:
+
+- `IllegalArgumentException` for a contract validation failure (missing required field, malformed
+  `tpl_message`, or an unparsable `time`).
+- The underlying MongoDB exception, wrapped in a `RuntimeException`, after retries are exhausted or
+  for a non-retryable Mongo error.
+
+Because the exception always propagates, the platform's
+`Boomi audit writes - no telemetry received` alert (see
+[SigNoz Dashboard Import Pack](../references/signoz-dashboard-import-pack.md)) remains a backstop:
+if a Boomi process catches the exception and does nothing further, missing telemetry is still
+detected independently.
+
+### Security: never log a raw Mongo URI
+
+A Boomi process calling `writeAuditLog` never sees a MongoDB URI or any
+credential at all — the library resolves the connection internally. If you
+are an operator doing connection diagnostics, use the redaction helper
+documented in
+[Operator Runbook § Diagnostic Library Methods](operator-runbook.md#diagnostic-library-methods-operator-use-only)
+rather than ever printing a raw URI.
 
 ---
 
 ## Error Handling
 
+Errors you can fix yourself (your event Map or the environment):
+
 | Error | Cause | Resolution |
 |---|---|---|
-| `Failed to read Kubernetes secret` | kubectl not available, wrong namespace, or missing RBAC | Verify kubectl access and secret exists |
-| `Secret JSON does not contain mongoUri key` | AWS secret payload format mismatch | Use one of: `mongoUri`, `mongodbUri`, `uri`, `MONGO_URI` |
-| `MongoTimeoutException` | MongoDB unreachable | Check URI, network access, port-forward if dev |
-| `RuntimeException: Secret payload is empty` | Secret exists but has no value | Recreate the secret with valid content |
+| `Audit record is missing required field(s): ...` | The event Map passed to `writeAuditLog` is missing one or more required contract fields | Populate all required fields listed in [Audit Log Document Schema](#audit-log-document-schema) before calling the library |
+| `action '...' must start with resource_type '...'` | `action` is not `resource_type` + `.` + verb | Fix the action per the [contract's naming rules](../references/audit-log-contract.md#action-resource_typeverb) |
+| `tpl_message, when present, must be a Map with at least "key"` | `tpl_message` is not a Map, or is missing `key` | Pass `tpl_message: [key: ..., params: [...]]`, or omit `tpl_message` entirely |
+| `time must be a valid ISO-8601 UTC timestamp, got: ...` | `time` was supplied as a String the library could not parse | Omit `time` (the library uses now), or pass a valid ISO-8601 UTC string with milliseconds |
+| `MongoTimeoutException` / `MongoSocketException` | MongoDB unreachable, or slower than the configured timeout | Check network access, port-forward if dev; these are retried automatically before surfacing |
+
+Errors that belong to your infra operator (secret/credential resolution —
+you cannot fix these from Boomi process code): anything mentioning
+`Kubernetes secret`, `Secret JSON`, `Secret payload`,
+`Unable to resolve MongoDB connection`, or a
+`falling back to local dev default` warning. Hand these to the operator —
+their reference is
+[Operator Runbook § Secret-Resolution Errors](operator-runbook.md#secret-resolution-errors).
 
 ---
 
 ## Accessing SigNoz Dashboard
 
-### First-Time Login (Admin Account Creation)
+### Getting An Account
 
-In this repo, the SigNoz admin account is normally **already bootstrapped
-automatically** by an Infra Operator/Architect (SigNoz's root-user feature --
-no self-service "first to sign up" race). As a Boomi Admin, you should
-receive an **Editor**-role invite from that admin rather than performing
-first-time signup yourself.
+SigNoz accounts are administered by the infra operator — workspace
+bootstrap, user invitations, roles, and notification channels are their
+job, not yours. As a Boomi Admin you should simply **receive an invite**:
 
-> **Fallback:** only if you are personally standing up a brand-new
-> environment and the automated bootstrap hasn't been run yet, SigNoz falls
-> back to a **self-service signup** flow -- the first user to access the
-> dashboard becomes the admin. See
-> [Operator Runbook § Step 7A](operator-runbook.md#step-7a-signoz-admin-account-bootstrap-automated-no-manual-signup)
-> for the recommended automated path, or use the manual **Sign Up** steps
-> further down this section if you must do it by hand.
+- **Editor** role if you build dashboards/alerts for integration flows;
+- **Viewer** role if you only read logs, traces, and reports.
 
-### First-Login Action Checklist (What To Do In Dashboard)
+If you have no account, or you believe you have the wrong role, ask the
+operator (their reference is
+[Operator Runbook § Step 7A](operator-runbook.md#step-7a-signoz-admin-account-bootstrap-automated-no-manual-signup)).
+Then log in:
 
-After logging in (whether via automated bootstrap + invite, or manual first
-signup), use this order:
+```bash
+# Dev (port-forward)
+scripts/open-signoz-ui.sh
+# Then open http://127.0.0.1:3301
 
-1. **Add your first data source**
-  - Optional in this repo. OTLP ingestion path is already part of platform setup.
-2. **Send logs / traces / metrics**
-  - Logs and traces are validated by:
-    - `scripts/verify-platform-health.sh --smoke-test`
-    - `scripts/run-audit-telemetry-test.sh`
-  - Metrics are optional for the current audit-log integration path.
-3. **Setup alerts**
-  - Automated: `bash scripts/provision.sh signoz-observability --auto-approve`
-    already creates 5 baseline alerts (MongoDB, PostgreSQL, K8s, OTel
-    Collector, app telemetry). Add more by hand only for cases the baseline
-    set doesn't cover. See [SigNoz Dashboard Import Pack](../references/signoz-dashboard-import-pack.md).
-4. **Setup saved views**
-  - Recommended. Save baseline filters (for example `service.name = oms-audit-writer`).
-5. **Setup dashboards**
-  - Automated by the same `signoz-observability` command as alerts above.
-
-Minimum requirement to operate safely: validate ingestion + create role-based users.
-Saved views should still be treated as a day-2 hardening task; alerts and dashboards are already automated.
-
-### Notifications (SMTP And Alternatives)
-
-You only need SMTP if you want **email** alert notifications from SigNoz.
-
-- If email is required: configure SMTP in SigNoz deployment values and test a notification channel.
-- If email is not required: use Slack/webhook/PagerDuty channels instead (no SMTP needed).
-- For dev/local-only environments: you can defer notification channel setup until shared usage begins.
-
-### Recommended Account Model (Minimum)
-
-Use at least three user accounts per environment:
-
-1. **Platform Admin account** (for example `omsadmin@sml.com`)
-  - Persona: Infra Architect/Admin
-  - Role: **Admin**
-  - Purpose: workspace setup, user invitations, role management
-
-2. **Infra Backup Admin account** (for example `infraadmin@sml.com`)
-  - Persona: Infra Architect/Admin
-  - Role: **Admin**
-  - Purpose: escalation owner and continuity if primary admin is unavailable
-
-3. **Report Viewer account** (general telemetry consumer)
-  - Persona: Enterprise Architect, stakeholder, compliance reviewer
-  - Role: **Viewer**
-  - Purpose: open dashboards/reports, inspect traces/logs, no configuration changes
-
-For integration operations, add this account pattern:
-
-4. **Boomi Admin account**
-  - Persona: Boomi Admin
-  - Role: **Editor**
-  - Purpose: build and maintain operational dashboards/alerts for integration flows
-
-1. Open the dashboard:
-   ```bash
-   # Dev (port-forward)
-   scripts/open-signoz-ui.sh
-   # Then open http://127.0.0.1:3301
-   
-   # Production (ingress)
-   scripts/open-signoz-ui.sh --mode ingress
-   ```
-
-2. If the admin account was already bootstrapped automatically, log in with
-   the credentials from `kubectl -n signoz get secret signoz-root-user ...`
-   (see Operator Runbook Step 7A) or your invited Editor/Viewer account.
-   Otherwise (manual fallback only), you see a **Sign Up** form. Fill in:
-   - Name
-   - Email (becomes your login)
-   - Password (your choice, min 8 chars)
-   - Organization name
-
-3. Click **Get Started** — you are now the admin (manual fallback only).
-
-4. To invite additional users: **Settings** → **Organization** → **Invite Members**
-
-### Creating Additional Users
-
-As admin:
-1. Go to **Settings** → **Organization** → **Members**
-2. Click **Invite Members**
-3. Enter email, select role (**Admin**, **Editor**, or **Viewer**)
-4. User receives signup link (or navigates to the dashboard URL)
-
-**Role recommendations:**
-- Boomi Admin → **Editor** (can create dashboards, alerts)
-- Enterprise Architect → **Viewer** (read-only access to all dashboards)
-- Compliance reviewer → **Viewer**
+# Production (ingress)
+scripts/open-signoz-ui.sh --mode ingress
+```
 
 ### Navigating the Dashboard
 
@@ -634,7 +782,7 @@ If you have never used SigNoz before, this is the fastest way to see real data e
    ```
    service.name = oms-audit-test-pod
    ```
-5. You should see one log line with `body = "smoke.test.pod"`. Click it to expand
+5. You should see one log line with `body = "boomi.process.flag"`. Click it to expand
    attributes — you will see `trace_id`, `action`, and `pod_name` matching what
    the script printed.
 6. Go to the **Services** tab — `oms-audit-test-pod` should now be listed as a
@@ -659,75 +807,26 @@ If you have never used SigNoz before, this is the fastest way to see real data e
 
 ---
 
-## Querying Audit Logs From MongoDB
+## Viewing Your Audit Records
 
-### Setting Up Read-Only Access
+As a Boomi Admin you have two windows into what your process recorded — and
+neither requires a MongoDB client or database credentials:
 
-A dedicated read-only user is required to query audit logs without risking writes.
+1. **SigNoz (your normal window).** Every audit *failure* shows up as a log
+   record in SigNoz, and every process *trace* (spans) shows up in the
+   Traces tab. Use [Finding Audit Events in SigNoz](#finding-audit-events-in-signoz)
+   above — filter `service.name = oms-audit-writer`. This is your day-to-day
+   "did it work?" check.
+2. **The automated smoke test.** `scripts/run-audit-telemetry-test.sh`
+   writes a record **and reads it back from MongoDB for you**, reporting
+   pass/fail — you never run a database query yourself. See
+   [Complete Testing Workflow](#complete-testing-workflow).
 
-**Create the user** (run once by an operator or architect):
-
-```bash
-scripts/create-audit-reader.sh --db oms_audit --username audit_reader
-```
-
-This outputs the connection string and password. Save both securely.
-
-**Or with a specific password:**
-
-```bash
-scripts/create-audit-reader.sh --db oms_audit --username audit_reader --password 'MySecurePass123!'
-```
-
-### Connecting to MongoDB (Dev)
-
-1. Start port-forward to MongoDB:
-   ```bash
-   kubectl -n mongodb port-forward svc/psmdb-rs0 27017:27017
-   ```
-
-2. Connect with mongosh:
-   ```bash
-   mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/oms_audit?authSource=oms_audit&directConnection=true'
-   ```
-
-### Common Queries
-
-**Recent audit events:**
-```javascript
-db.auditlogs.find().sort({ time: -1 }).limit(10)
-```
-
-**Events for a specific order:**
-```javascript
-db.auditlogs.find({ resource_id: 'ORD-2024-001' }).sort({ time: -1 })
-```
-
-**Events by action type in a date range:**
-```javascript
-db.auditlogs.find({
-  action: 'orders.order.confirm',
-  time: { $gte: '2026-07-01T00:00:00Z', $lte: '2026-07-06T23:59:59Z' }
-}).sort({ time: -1 })
-```
-
-**Events by user:**
-```javascript
-db.auditlogs.find({ user_id: 'user1' }).sort({ time: -1 }).limit(20)
-```
-
-**Count events by action (aggregation):**
-```javascript
-db.auditlogs.aggregate([
-  { $group: { _id: '$action', count: { $sum: 1 } } },
-  { $sort: { count: -1 } }
-])
-```
-
-**Find by trace_id (cross-reference with SigNoz):**
-```javascript
-db.auditlogs.findOne({ trace_id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6' })
-```
+> **Need to query the MongoDB audit store directly?** That is a compliance/
+> analyst task that needs a read-only database account and a MongoDB client
+> (MongoDB Compass or `mongosh`) your infra operator sets up — you do not
+> handle database credentials. Ask your operator; their reference is
+> [Operator Runbook § Read-Only Audit Querying](operator-runbook.md#read-only-audit-querying-operators--analysts).
 
 ---
 
@@ -790,6 +889,11 @@ Pod deleted.
 
 ### Option B: Local Test (Groovy Library)
 
+> Mostly a **library-maintainer** path — use it when changing the Groovy
+> library code itself. For a normal "is my environment working?" check,
+> Option A (above) needs no port-forwards. Maintainers also see
+> [Library Architecture § Compiling And Testing Both Files Together](../references/boomi-groovy-library-architecture.md#compiling-and-testing-both-files-together).
+
 Runs the Groovy test harness locally — requires port-forwards and Groovy installed.
 
 **Prerequisites:**
@@ -814,17 +918,19 @@ scripts/write-auditlog-and-telemetry.sh --otel-endpoint http://localhost:1/noop
 
 ### Verifying Results
 
-**In MongoDB** (query the audit record):
-```bash
-mongosh 'mongodb://audit_reader:<password>@127.0.0.1:27017/oms_audit?authSource=oms_audit&directConnection=true' \
-  --eval "db.auditlogs.find({action:'smoke.test.pod'}).sort({time:-1}).limit(1)"
-```
+The in-cluster test (Option A) **verifies MongoDB for you** — it reads the
+record back and reports `Read-back: OK`, so there is no database query for
+you to run. To confirm the telemetry side in **SigNoz**:
 
-**In SigNoz** (find the telemetry):
 1. Open SigNoz dashboard (`scripts/open-signoz-ui.sh`)
-2. Go to **Logs** tab
+2. Go to the **Logs** tab
 3. Filter: `service.name = oms-audit-test-pod`
-4. Find the entry with matching trace_id
+4. Find the entry with the matching trace_id the script printed
+
+If you specifically need to inspect the persisted audit record in MongoDB
+(a compliance/analyst need), that requires an operator-provisioned read-only
+account and a MongoDB client — see
+[Operator Runbook § Read-Only Audit Querying](operator-runbook.md#read-only-audit-querying-operators--analysts).
 
 ### Automated Verification
 
@@ -833,3 +939,11 @@ scripts/verify-platform-health.sh --smoke-test
 ```
 
 This runs the full write → read-back cycle from within the cluster automatically.
+
+---
+
+## Operator Setup (Moved)
+
+Credential, secret, and MongoDB-account material intentionally does **not**
+live in this guide — a Boomi developer never needs it. Operators: see
+[Operator Runbook § Boomi Audit Writer: Credentials, Secrets, And Accounts](operator-runbook.md#boomi-audit-writer-credentials-secrets-and-accounts).

@@ -150,11 +150,9 @@ spec:
             user_id: "user1",
             message: null,
             tpl_message: {
-              key: "orders.order.status.changed",
+              key: "orders.order.confirmed",
               params: {
-                order_no: "ORD-2024-001",
-                from: "PENDING",
-                to: "PROCESSING"
+                order_no: "ORD-2024-001"
               }
             },
             resource_changes: {
@@ -173,7 +171,7 @@ spec:
             trace_id: "${TRACE_ID}-n",
             ip: "192.168.1.78",
             time: "2026-05-26T17:25:47Z",
-            action: "boomi.process.track",
+            action: "boomi.process.flag",
             error_code: null,
             resource_type: "boomi.process",
             resource_id: "{6808CCD2-D77A-49C8-A96C-ED2CB38F9916}",
@@ -197,9 +195,7 @@ spec:
                 fileconfig_id: "0"
               }
             },
-            resource_changes: {
-              event: ["Track", "Track"]
-            },
+            resource_changes: null,
             meta: {
               method: "BOOMI",
               path: "EDI_EPlatform_UpdateFixItem_V3",
@@ -215,7 +211,7 @@ spec:
             trace_id: "${TRACE_ID}-e",
             ip: "192.168.0.132",
             time: "2026-05-26T17:20:45Z",
-            action: "boomi.process.error",
+            action: "boomi.process.complete",
             error_code: "BOOMI_ON_ERROR",
             resource_type: "boomi.process",
             resource_id: "{23FC181C-7804-41BF-89F0-217BE9041A7C}",
@@ -239,9 +235,7 @@ spec:
                 fileconfig_id: "30069"
               }
             },
-            resource_changes: {
-              event: ["On Error", "On Error"]
-            },
+            resource_changes: null,
             meta: {
               method: "BOOMI",
               path: "EDI_Eplatform_OrderGrouping_V8",
@@ -291,10 +285,10 @@ spec:
                 "timeUnixNano": "${NOW_NANO}",
                 "severityNumber": 9,
                 "severityText": "INFO",
-                "body": {"stringValue": "boomi.process.track"},
+                "body": {"stringValue": "boomi.process.flag"},
                 "attributes": [
                   {"key": "trace_id", "value": {"stringValue": "${TRACE_ID}"}},
-                  {"key": "action", "value": {"stringValue": "boomi.process.track"}},
+                  {"key": "action", "value": {"stringValue": "boomi.process.flag"}},
                   {"key": "resource_type", "value": {"stringValue": "boomi.process"}},
                   {"key": "records.inserted", "value": {"intValue": "3"}},
                   {"key": "pod_name", "value": {"stringValue": "${POD_NAME}"}}
