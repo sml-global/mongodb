@@ -49,8 +49,8 @@ if (!options || options.h) {
   System.exit(0)
 }
 
-String dbName = options.'db' ?: 'oms_audit'
-String collectionName = options.'collection' ?: 'auditlogs'
+String dbName = 'oms_audit'
+String collectionName = 'auditlogs'
 String otelEndpoint = options.'otel-endpoint' ?: 'http://127.0.0.1:3301/v1/logs'
 String serviceName = options.'service-name' ?: 'oms-audit-simulator'
 String resourceId = options.'resource-id' ?: 'ORD-2024-001'
@@ -127,7 +127,10 @@ Map<String, Object> mapBoomiRowToAuditRecord(Map<String, String> raw, String she
     trace_id: UUID.randomUUID().toString().replace('-', ''),
     ip: extractIp(serverName),
     time: startTime,
-    action: isError ? 'boomi.process.error' : 'boomi.process.track',
+    // Contract naming: the verb never encodes the outcome. A Track row is an
+    // informational milestone (flag verb, error_code null); an Error row is
+    // the process run completing with a failure (complete verb + error_code).
+    action: isError ? 'boomi.process.complete' : 'boomi.process.flag',
     error_code: isError ? 'BOOMI_ON_ERROR' : null,
     resource_type: 'boomi.process',
     resource_id: resourceIdValue,
@@ -151,9 +154,10 @@ Map<String, Object> mapBoomiRowToAuditRecord(Map<String, String> raw, String she
         fileconfig_id: raw['fk_fileconfig_fileconfigid'] ?: ''
       ]
     ],
-    resource_changes: [
-      event: [event, event]
-    ],
+    // No before/after field diff exists for an EDI tracking row, so no
+    // resource_changes -- per the contract, leave it null rather than
+    // inventing a fake old/new pair.
+    resource_changes: null,
     meta: [
       method: 'BOOMI',
       path: source,
@@ -224,14 +228,28 @@ List<Map<String, Object>> loadBoomiAuditRecordsFromWorkbook(String workbookPath,
   return records
 }
 
-String mongoUri = BoomiAuditLogLibrary.resolveMongoUri([
-  mongoUri: options.'mongo-uri',
-  k8sSecretName: options.'mongo-uri-k8s-secret',
-  k8sNamespace: options.'mongo-uri-k8s-namespace',
-  k8sSecretKey: options.'mongo-uri-k8s-key',
-  awsSecretId: options.'mongo-uri-secret-id',
-  awsRegion: options.'aws-region'
-])
+// BoomiAuditLogLibrary.writeAuditLog() resolves the MongoDB URI, database,
+// and collection internally. These CLI flags are translated into the same
+// override properties the library checks, so the existing flags keep working
+// without the caller needing to pass a URI/db/collection through by hand.
+if (options.'mongo-uri') {
+  System.setProperty('BOOMI_AUDIT_MONGO_URI', options.'mongo-uri')
+}
+if (options.'mongo-uri-k8s-secret') {
+  System.setProperty('BOOMI_AUDIT_K8S_SECRET_NAME', options.'mongo-uri-k8s-secret')
+}
+if (options.'mongo-uri-k8s-namespace') {
+  System.setProperty('BOOMI_AUDIT_K8S_NAMESPACE', options.'mongo-uri-k8s-namespace')
+}
+if (options.'mongo-uri-k8s-key') {
+  System.setProperty('BOOMI_AUDIT_K8S_SECRET_KEY', options.'mongo-uri-k8s-key')
+}
+if (options.'mongo-uri-secret-id') {
+  System.setProperty('BOOMI_AUDIT_AWS_SECRET_ID', options.'mongo-uri-secret-id')
+}
+if (options.'aws-region') {
+  System.setProperty('AWS_REGION', options.'aws-region')
+}
 
 List<Map<String, Object>> records = loadBoomiAuditRecordsFromWorkbook(boomiLogXlsx, nowIso, resourceId, userId)
 if (records.isEmpty()) {
@@ -246,11 +264,9 @@ if (records.isEmpty()) {
     user_id: userId,
     message: null,
     tpl_message: [
-      key: 'orders.order.status.changed',
+      key: 'orders.order.confirmed',
       params: [
-        order_no: resourceId,
-        from: 'PENDING',
-        to: 'PROCESSING'
+        order_no: resourceId
       ]
     ],
     resource_changes: [
@@ -268,12 +284,12 @@ if (records.isEmpty()) {
 println "Writing ${records.size()} audit log record(s) to MongoDB..."
 List<Map<String, Object>> mongoResults = []
 records.each { Map<String, Object> record ->
-  def mongoResult = BoomiAuditLogLibrary.writeAuditLog(mongoUri, dbName, collectionName, record)
+  def mongoResult = BoomiAuditLogLibrary.writeAuditLog(record)
   mongoResults << [
     insertedId: mongoResult.insertedId,
-    traceId: record.trace_id,
+    traceId: mongoResult.trace_id,
     action: record.action,
-    time: record.time,
+    time: mongoResult.time,
     resourceId: record.resource_id
   ]
 }
@@ -287,7 +303,7 @@ println JsonOutput.prettyPrint(JsonOutput.toJson([
 
 Map<String, Object> telemetryRecord = records[0]
 String telemetryTraceId = telemetryRecord.trace_id?.toString() ?: traceId
-String telemetryAction = telemetryRecord.action?.toString() ?: 'boomi.process.track'
+String telemetryAction = telemetryRecord.action?.toString() ?: 'boomi.process.flag'
 String telemetryResourceType = telemetryRecord.resource_type?.toString() ?: 'boomi.process'
 String telemetryResourceId = telemetryRecord.resource_id?.toString() ?: resourceId
 String telemetryUserId = telemetryRecord.user_id?.toString() ?: userId
