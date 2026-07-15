@@ -21,7 +21,6 @@ background needed.
 | **Owner / approver** | OMS Architecture |
 | **Supersedes** | 2.0 (2026-07-14) |
 | **Source of truth** | `oms-backend` `apps/core/schemas.py` — `AuditLogEntry`, `TplMessage`, `AuditLogMeta` |
-| **Per-record marker** | `tpl_message.params.contract_version: "2.1"` (optional; see [Reserved Params](#reserved-params)) |
 
 **Related docs:**
 - [Boomi Integration Guide](../guides/boomi-integration-guide.md) — how Boomi calls the audit writer
@@ -35,36 +34,31 @@ background needed.
 > **Audience:** Developer. If you read only one section, read this one.
 
 Only four things are strictly required: `time`, `action`, `resource_type`, and
-`meta` (with `meta.method`/`meta.path`/`meta.status`). Everything else —
+`meta` (with `meta.boomi_process_id`/`meta.main_program_code`/`meta.sub_program_code`). Everything else —
 `trace_id`, `ip`, `error_code`, `resource_id`, `user_id`, `impersonator_id`,
 `message`, `tpl_message`, `resource_changes` — is optional. Supply a field
 whenever you have the information; do not invent a placeholder value just to
-fill it in. `meta` is required in the persisted document, but the Groovy
-library auto-defaults it for Boomi callers that omit it entirely — see
-[`meta` For Non-HTTP Producers](#meta-for-non-http-producers-boomiedi).
+fill it in.
 
 ```json
 {
   "trace_id": "a47ac10b-58cc-4372-a567-0e02b2c3d479",
   "ip": "10.0.1.45",
   "time": "2026-07-13T10:30:00.123Z",
-  "action": "orders.order.confirm",
+  "action": "load",
   "error_code": null,
-  "resource_type": "orders.order",
-  "resource_id": "ORD-2024-001",
-  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
-  "message": "Order confirmed by customer service agent",
+  "resource_type": "boomi.document",
+  "resource_id": "TCHIBO-0001.csv",
+  "user_id": null,
+  "message": "EDI file transformed to ELT-ready JSON",
   "tpl_message": {
-    "key": "orders.order.confirmed",
-    "params": { "order_no": "ORD-2024-001" }
-  },
-  "resource_changes": {
-    "status": ["PENDING", "PROCESSING"]
+    "key": "boomi.document.loaded",
+    "params": { "file_name": "TCHIBO-0001.csv" }
   },
   "meta": {
-    "method": "BOOMI",
-    "path": "orders.order.confirm",
-    "status": 200
+    "boomi_process_id": "EU-TC-0001",
+    "main_program_code": "EU",
+    "sub_program_code": "TC"
   }
 }
 ```
@@ -72,10 +66,10 @@ library auto-defaults it for Boomi callers that omit it entirely — see
 **The five golden rules:**
 
 1. **Only `time`, `action`, `resource_type`, and `meta` are required.** Every other field is optional — supply it when known, omit it (or use `null`) otherwise.
-2. **`action` is the full `{resource_type}.{verb}` string** (for example `orders.order.confirm`), matching production exactly. `resource_type` alone is the noun (`orders.order`); the verb comes from the registry.
+2. **`action` is a verb from the controlled registry** (for example `confirm`, `cancel`, `load`, `receive`).
 3. **`error_code` decides the outcome** (`null` = succeeded, non-null = failed). Do not encode the outcome anywhere else — not in `action`, not in `tpl_message.key`.
 4. **Audit completed business facts, not timing or progress.** Duration, "started", "running", and retries go to SigNoz, not here.
-5. **No secrets, no raw payloads.** Prefer pseudonymous identifiers; offload large payloads to a governed `payload_uri` in `tpl_message.params`.
+5. **No secrets, no raw payloads.** Prefer pseudonymous identifiers and keep message params minimal.
 
 ---
 
@@ -121,13 +115,12 @@ model, and vice versa. Module-specific flexibility exists inside
 
 | Rule | Status |
 |---|---|
-| Required fields enforced: `time`, `action`, `resource_type`, `meta` (with `method`/`path`/`status`) | Enforced by library |
+| Required fields enforced: `time`, `action`, `resource_type`, `meta` (with `boomi_process_id`/`main_program_code`/`sub_program_code`) | Enforced by library |
 | `time` auto-generated/parsed as a native BSON Date when absent or supplied as an ISO-8601 string, with strict (non-lenient) parsing | Enforced by library |
 | `trace_id` reused from an active OpenTelemetry span context when one exists, otherwise auto-generated (UUID) and returned to the caller | Enforced by library |
-| `meta` auto-defaulted by the library for Boomi callers that omit it (`method: "BOOMI"`, `path: action`, `status` derived from `error_code`) | Enforced by library |
+| `meta` validation requires all three Boomi identity fields (`boomi_process_id`, `main_program_code`, `sub_program_code`) | Enforced by library |
 | MongoDB URI, database, and collection resolved internally (caller never supplies them) | Enforced by library |
 | Emit critical telemetry via the OpenTelemetry Logs SDK (OTLP/HTTP to SigNoz) and record the exception on the active span if one exists, then throw on any write failure (no fail-soft variant) | Enforced by library |
-| Reserved-param collision detection in `tpl_message.params` | Target — not yet implemented |
 | `impersonator_id` populated for delegated/impersonated actions | Target — no current producer sets this |
 
 Operational enforcement (insert-only role, retention/legal-hold, payload
@@ -147,35 +140,27 @@ not set `_id` themselves.
   "trace_id": "a47ac10b-58cc-4372-a567-0e02b2c3d479",
   "ip": "10.0.1.45",
   "time": "2026-07-13T10:30:00.123Z",
-  "action": "orders.order.confirm",
+  "action": "load",
   "error_code": null,
-  "resource_type": "orders.order",
-  "resource_id": "ORD-2024-001",
-  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
+  "resource_type": "boomi.document",
+  "resource_id": "TCHIBO-0001.csv",
+  "user_id": null,
   "impersonator_id": null,
-  "message": "Order confirmed by customer service agent",
+  "message": "EDI file transformed to ELT-ready JSON",
   "tpl_message": {
-    "key": "orders.order.confirmed",
-    "params": {
-      "order_no": "ORD-2024-001",
-      "contract_version": "2.1",
-      "tenant_id": "HK_RETAIL"
-    }
-  },
-  "resource_changes": {
-    "status": ["PENDING", "PROCESSING"]
+    "key": "boomi.document.loaded",
+    "params": { "file_name": "TCHIBO-0001.csv" }
   },
   "meta": {
-    "method": "BOOMI",
-    "path": "orders.order.confirm",
-    "status": 200,
-    "ua": null
+    "boomi_process_id": "EU-TC-0001",
+    "main_program_code": "EU",
+    "sub_program_code": "TC"
   }
 }
 ```
 
 No other top-level fields are part of this contract. Extend via
-`tpl_message.params` (see [Reserved Params](#reserved-params)), not by
+`tpl_message.params`, not by
 inventing new top-level keys — a new top-level field requires updating the
 Pydantic model and this document together.
 
@@ -186,7 +171,7 @@ Pydantic model and this document together.
 | `trace_id` | String/null | No | Correlates records/telemetry for one logical cross-system operation. The library reuses an active OpenTelemetry span's trace ID when one exists, otherwise auto-generates a UUID. It is shared, not unique per record — not a value the caller needs to construct. |
 | `ip` | String/null | No | Trusted originating actor/client IP. Behind proxies, use only an ingress-normalized value or a validated forwarding header. Use `null` when it can't be established reliably. |
 | `time` | Date (BSON) | Yes | Business event time, stored as a native MongoDB Date. Supply an ISO-8601 UTC string (with milliseconds) or omit it; the library parses/generates the Date itself. |
-| `action` | String | Yes | `{resource_type}.{verb}`, for example `orders.order.confirm`. The verb comes from the registry; the full string equals `resource_type` + `.` + verb. |
+| `action` | String | Yes | Verb from the controlled registry, for example `confirm`, `cancel`, `load`, `receive`. |
 | `error_code` | String/null | No | `null` means succeeded. A stable non-empty code means failed. Never store exception text or a stack trace here. |
 | `resource_type` | String | Yes | Namespaced business noun `{context}.{scope}`, for example `orders.order` or `boomi.document`. |
 | `resource_id` | String/null | No | Identifier of the resource. Recommended: a UUID for an internally-generated OMS entity; for an external entity (an EDI interchange, a D365/PLM record) use that system's own stable identifier rather than inventing a UUID. |
@@ -194,33 +179,22 @@ Pydantic model and this document together.
 | `impersonator_id` | String/null | No | ID of a user acting on behalf of another (for example an admin impersonating a customer). |
 | `message` | String/null | No | Short, human-readable, sanitized summary. Not a raw payload or exception dump. |
 | `tpl_message` | Object/null | No | `{key: string, params: object}` for structured, i18n-friendly messaging. Omit entirely when there's nothing structured to say. |
-| `resource_changes` | Object/null | No | `{field_name: [old_value, new_value]}` for a state transition. Prefer this over inventing `old_status`/`new_status` params. |
-| `meta` | Object | Yes | `{method: string, path: string, status: integer, ua: string/null}` — request/integration context. Required in the persisted document, but the library auto-defaults it when a Boomi caller omits it entirely — see below for non-HTTP producers. |
+| `resource_changes` | Object/null | No | `{field_name: [old_value, new_value]}` for a state transition. Prefer this over inventing `old_status`/`new_status` params. For Boomi EDI load/transform flows, this is typically omitted (`null`) because no canonical source-of-record field transition is expected at the integration step. |
+| `meta` | Object | Yes | `{boomi_process_id: string, main_program_code: string, sub_program_code: string}` — Boomi process identity context for audit filtering and reporting. |
 
 Empty strings do not satisfy a required field. A nullable field being absent
 and a nullable field explicitly set to JSON `null` are both acceptable.
 
-### `meta` For Non-HTTP Producers (Boomi/EDI)
+### `meta` For Boomi Producers
 
-`meta` is required in the persisted document — it is modeled on an HTTP
-request because it originated from the OMS backend's own API audit logging,
-and the production Pydantic model does not make it optional. Boomi processes
-are not fielding inbound HTTP requests, so **the Groovy library auto-defaults
-`meta` when a Boomi caller omits it entirely**, using this mapping:
+`meta` is required and must include:
 
-| `meta` field | Boomi/EDI mapping |
-|---|---|
-| `method` | The invoking mechanism, for example `"BOOMI"` (the library's default), or a specific connector/protocol (`"SFTP"`, `"AS2"`) supplied explicitly. |
-| `path` | The `action` value (the library's default), or the specific Boomi process/component name supplied explicitly. |
-| `status` | A numeric outcome code analogous to an HTTP status. The library defaults this to `200` when `error_code` is absent/`null` and `500` when `error_code` is set; supply your own value for a more specific code. |
-| `ua` | Optional; omit, or use the Boomi Atom/runtime name if useful for diagnostics. |
+- `boomi_process_id`
+- `main_program_code`
+- `sub_program_code`
 
-A Boomi module only needs to supply its own `meta` when it wants a more
-specific `method`/`path`/`status` than this default; otherwise omit `meta`
-entirely and let the library fill it in. Supplying a partial `meta` map (for
-example only `method`) is not auto-completed — the library either uses the
-default as a whole or validates the caller-supplied map as a whole, so supply
-all three of `method`/`path`/`status` together if you supply any of them.
+These fields identify which Boomi process emitted the audit event and are used
+for filtering and reporting.
 
 ## Naming Rules
 
@@ -258,14 +232,10 @@ order's `resource_type` just because the two are related. Invalid examples
 include `confirm_order` (verb included), `BoomiProcess` (wrong format), and
 `process` (no context).
 
-### Action: `{resource_type}.{verb}`
+### Action: Verb From Registry
 
-`action` is the full dotted string produced by concatenating `resource_type`
-and a verb from the controlled registry: `action = resource_type + "." + verb`
-— for example `orders.order` + `confirm` = `orders.order.confirm`. This
-matches the production schema exactly, so `action` alone is enough to identify
-both the resource and what happened without a join. The verb portion must
-still come from the registry and must not encode the outcome.
+`action` is a verb chosen from the controlled registry. Keep it simple and
+stable so dashboards and filters can aggregate behavior consistently.
 
 Registry examples: `create`, `confirm`, `cancel`, `validate`, `load`, `receive`,
 `rollback`, `upload`, `approve`, `promote`, `demote`, `activate`, `deactivate`,
@@ -288,8 +258,8 @@ Duration, "running", and progress belong in SigNoz.
 
 | Anti-pattern | Compliant | Reason |
 |---|---|---|
-| `action: "confirm"` (bare verb only) | `action: "orders.order.confirm"` | Production requires the full `{resource_type}.{verb}` string. |
-| `action: "validation_failed"` | `action: "orders.order.validate"` + `error_code` | The outcome lives in `error_code`, not the verb. |
+| `action: "confirm_order"` | `action: "confirm"` | Action values should be stable verbs from the registry. |
+| `action: "validation_failed"` | `action: "validate"` + `error_code` | The outcome lives in `error_code`, not the verb. |
 | `resource_type: "bulk"` | `resource_type: "orders.batch"` | `bulk` destroys business entity identity. |
 
 Prefer a small stable vocabulary of verbs. Adding one requires a registry pull
@@ -326,7 +296,7 @@ normal entity identity, for example:
 ```text
 resource_type: orders.order
 resource_id: ORD-001
-action: orders.order.confirm
+action: confirm
 ```
 
 This preserves existing entity-timeline queries and provides complete evidence
@@ -346,12 +316,10 @@ An execution summary is supplementary:
 - Do not use a shared sentinel such as `"BULK"` or `"MULTIPLE"`; it destroys
   resource identity and makes unrelated operations indistinguishable.
 - The summary and all entity events share the same `trace_id` for correlation.
-- Every entity event carries the summary's `resource_id` in the reserved
-  `operation_id` param so one execution is identifiable without assuming a
-  trace contains one batch.
-- A summary may include bounded counts, IDs, and a governed `payload_uri`,
-  but a manifest is supplementary evidence and never replaces mandatory entity
-  events.
+- If needed, every entity event may carry the summary operation identifier in a
+  module-defined `tpl_message.params` key.
+- A summary may include bounded counts and IDs, but supplementary data must not
+  replace mandatory entity events.
 - Emit the completed summary only after all business outcomes are known.
 
 For high-volume operations, preserve these semantics and control load with a
@@ -381,7 +349,7 @@ additional audit outcomes.
 
 > **Audience:** Developer.
 
-A single business action such as `orders.order.confirm` can involve several
+A single business action such as `confirm` can involve several
 internal steps (for example: validate address, check inventory, charge
 payment, notify ERP), and a step may need to communicate a caution that is not
 a failure. Do not model this by nesting an array of messages inside
@@ -390,8 +358,7 @@ bundled report written after the fact.
 
 **Write one record per step, immediately, as its own action.** Each step:
 
-- uses its own `{resource_type}.{verb}` action (for example
-  `orders.order.validate_address`, `orders.order.check_inventory`);
+- uses its own action verb (for example `validate`, `check_inventory`);
 - carries its own `error_code` (`null` or a stable failure code);
 - shares the same `trace_id` (and the same `resource_type`/`resource_id` when
   the steps act on one entity) so the sequence is reconstructed by querying
@@ -442,9 +409,16 @@ responsibility between them:
   extension point in this document (see
   [Module-Owned Params](#module-owned-params)).
 
+Do not place process identity fields (`boomi_process_id`, `main_program_code`,
+`sub_program_code`) in `tpl_message.params`; those belong to `meta`.
+
 In short: `key` says *which* message, `params` supplies *what* goes in it.
 
 ### `resource_changes` (optional, prefer this for state transitions)
+
+For Boomi EDI load/transform integrations, `resource_changes` is generally not
+needed and should usually be omitted (`null`). Use it only when the Boomi step
+is truly asserting a before/after change on a canonical business resource field.
 
 Use the real, indexable `resource_changes` field — not ad hoc `params`
 fields — to record a field-level state transition:
@@ -474,48 +448,9 @@ Parameter names use lowercase `snake_case`. Values must be JSON-serializable.
 Do not repeat fixed top-level fields such as `trace_id`, `action`,
 `resource_type`, `resource_id`, or `user_id` inside `params`.
 
-### Reserved Params
-
-These names have contract-wide meaning and sit flat, directly in
-`tpl_message.params`, alongside a module's business fields. A module must not
-reuse a reserved name for a different purpose. Because `tpl_message` itself is
-optional, a record must include `tpl_message` (even with a generic `key`) if
-it needs to carry any of these.
-
-| Param | Type | Required | Rule |
-|---|---|---|---|
-| `contract_version` | String | Recommended | Version of this contract the record was produced against, for example `"2.1"`. |
-| `tenant_id` | String | Recommended | Stable tenant/brand identifier. |
-| `operation_id` | String | Conditional | On an entity event, the `resource_id` of its execution summary. |
-| `parent_operation_id` | String | Conditional | On an async child operation, the parent operation's ID. |
-| `affected_ids` | Array of strings | Conditional | Bounded list of resources in a bulk summary. Omit when it would exceed the size limits. |
-| `affected_count` | Integer | Conditional | Total resources targeted by a bulk operation. Zero or greater. |
-| `success_count` | Integer | Conditional | Entity actions that succeeded. Required on a completed bulk summary. |
-| `failure_count` | Integer | Conditional | Entity actions that failed. Required on a completed bulk summary. |
-| `failed_ids` | Array of strings | Optional | Bounded diagnostic list of failed IDs. Never present a partial list as complete. |
-| `payload_uri` | String | Optional | Reference to an approved encrypted private object for an offloaded payload. |
-| `payload_sha256` | String | Conditional | Hex SHA-256 of the `payload_uri` object; required whenever `payload_uri` is present, for integrity and 404 detection. |
-
-For a completed bulk summary:
-
-- `success_count + failure_count` must equal `affected_count`;
-- `error_code` is `null` only when `failure_count` is zero;
-- a partial result uses a stable non-null code such as `ORD_ERR_PARTIAL_FAILURE`;
-- `affected_ids` and `failed_ids` contain only string IDs and must not
-  be silently truncated;
-- when an ID list is omitted due to size, `affected_count` and a governed
-  `payload_uri` (with `payload_sha256`) are required;
-- a bounded diagnostic subset must be documented by the module as a subset and
-  must not appear to be the complete list.
-
-Counts summarize the execution; they do not replace the mandatory entity audit
-events.
-
-`payload_uri` must not be a public URL, presigned URL, or URI containing
-credentials or personal data. The referenced object must have access control,
-encryption, and a storage lifetime greater than or equal to the audit retention
-period, and it must be deleted in coordination with the audit record so no
-orphaned payload outlives its index.
+There is no backend-enforced reserved key list for `tpl_message.params` in the
+current OMS codebase. Keep `params` limited to what the i18n template needs to
+render the OMS-facing message.
 
 ## Data Protection And Size Rules
 
@@ -536,8 +471,6 @@ The module extension point is not a raw-payload escape hatch.
 - Do not store stack traces, SQL statements, or unrestricted exception text.
 - A serialized `tpl_message.params` object must not exceed 32 KiB.
 - A complete serialized audit document must not exceed 64 KiB.
-- When an approved external payload is necessary, store only its governed
-  `payload_uri` reference in the audit record.
 
 Exceeding a limit is a validation failure. The library must not silently
 truncate evidence because truncation could make an audit record misleading.
@@ -655,13 +588,13 @@ The shared audit library must validate the common contract before attempting a
 database write:
 
 - required fields present: `time`, `action`, `resource_type`, and `meta`
-  (with `meta.method`, `meta.path`, `meta.status`);
+  (with `meta.boomi_process_id`, `meta.main_program_code`, `meta.sub_program_code`);
 - field types and non-empty strings for required fields;
 - native BSON Date `time`, generated/parsed by the library;
 - `resource_type` naming rules, and that `action` starts with
   `resource_type + "."`;
 - `tpl_message` shape when present (`key` + `params` only);
-- `meta` shape (`method`/`path`/`status` present, `ua` optional);
+- `meta` shape (`boomi_process_id`/`main_program_code`/`sub_program_code` present);
 - entity fan-out, bulk-summary count, and affected-ID rules;
 - prohibited sensitive keys and size limits.
 
@@ -683,7 +616,7 @@ validation or insertion failure.
   "trace_id": "a47ac10b-58cc-4372-a567-0e02b2c3d479",
   "ip": "10.0.1.45",
   "time": "2026-07-13T10:30:00.123Z",
-  "action": "orders.order.confirm",
+  "action": "confirm",
   "error_code": null,
   "resource_type": "orders.order",
   "resource_id": "ORD-2024-001",
@@ -693,18 +626,16 @@ validation or insertion failure.
     "key": "orders.order.confirmed",
     "params": {
       "order_no": "ORD-2024-001",
-      "erp_reference": "ERP-99912",
-      "contract_version": "2.1",
-      "tenant_id": "HK_RETAIL"
+      "erp_reference": "ERP-99912"
     }
   },
   "resource_changes": {
     "status": ["PENDING", "PROCESSING"]
   },
   "meta": {
-    "method": "BOOMI",
-    "path": "orders.order.confirm",
-    "status": 200
+    "boomi_process_id": "PROC-ORDER-CONFIRM-001",
+    "main_program_code": "ORDERS",
+    "sub_program_code": "ORDER_CONFIRM"
   }
 }
 ```
@@ -716,28 +647,24 @@ validation or insertion failure.
   "trace_id": "a47ac10b-58cc-4372-a567-0e02b2c3d479",
   "ip": null,
   "time": "2026-07-13T10:31:12.004Z",
-  "action": "boomi.document.load",
+  "action": "load",
   "error_code": "ERR_SOURCE_FILE_INVALID",
   "resource_type": "boomi.document",
-  "resource_id": "LOAD-48391",
+  "resource_id": "TCHIBO-0001.csv",
   "user_id": "sys:boomi-service",
   "message": "EDI document load failed: source file validation error",
   "tpl_message": {
     "key": "boomi.document.load_failed",
     "params": {
-      "process_id": "e3c4d5e6-f7a8-4b9c-8d1e-4f5a6b7c8d9e",
-      "source": "EDI Loader",
       "file_name": "orders-20260713.edi",
       "interchange_control_number": "000012345",
-      "failure_reason": "Required interchange header is missing",
-      "contract_version": "2.1",
-      "tenant_id": "HK_RETAIL"
+      "failure_reason": "Required interchange header is missing"
     }
   },
   "meta": {
-    "method": "BOOMI",
-    "path": "boomi.document.load",
-    "status": 500
+    "boomi_process_id": "EU-TC-0001",
+    "main_program_code": "EU",
+    "sub_program_code": "TC"
   }
 }
 ```
@@ -750,9 +677,8 @@ load was attempted (a completed business fact) and it failed. There is no
 `load_failed` action and no failure encoded in the verb, per
 [Success And Failure](#success-and-failure).
 
-`resource_id` here is the EDI loader's own load number (`LOAD-48391`), used
-directly rather than wrapped in a generated UUID, per the external-entity
-guidance above. Record the interchange control number (ISA13/GS06) as
+`resource_id` here uses the input file identity (`TCHIBO-0001.csv`) as the
+business-facing Boomi document identifier. Record the interchange control number (ISA13/GS06) as
 `interchange_control_number` in `params` rather than relying on `file_name`
 for identity — vendors resend the same logical interchange under different
 filenames and reuse filenames for different content.
@@ -775,7 +701,7 @@ one entity event per order; it does not replace them.
   "trace_id": "b58bd21c-69dd-4a83-9678-1f13c3d4e58a",
   "ip": "203.0.113.42",
   "time": "2026-07-13T10:32:05.117Z",
-  "action": "orders.batch.confirm",
+  "action": "confirm",
   "error_code": null,
   "resource_type": "orders.batch",
   "resource_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f",
@@ -784,8 +710,6 @@ one entity event per order; it does not replace them.
   "tpl_message": {
     "key": "orders.batch.confirmed",
     "params": {
-      "contract_version": "2.1",
-      "tenant_id": "HK_RETAIL",
       "affected_ids": ["ORD-001", "ORD-002", "ORD-003"],
       "affected_count": 3,
       "success_count": 3,
@@ -793,9 +717,9 @@ one entity event per order; it does not replace them.
     }
   },
   "meta": {
-    "method": "BOOMI",
-    "path": "orders.batch.confirm",
-    "status": 200
+    "boomi_process_id": "PROC-BATCH-CONFIRM-001",
+    "main_program_code": "ORDERS",
+    "sub_program_code": "BULK_CONFIRM"
   }
 }
 ```
@@ -808,7 +732,7 @@ timeline:
   "trace_id": "b58bd21c-69dd-4a83-9678-1f13c3d4e58a",
   "ip": "203.0.113.42",
   "time": "2026-07-13T10:32:05.118Z",
-  "action": "orders.order.confirm",
+  "action": "confirm",
   "error_code": null,
   "resource_type": "orders.order",
   "resource_id": "ORD-001",
@@ -817,8 +741,6 @@ timeline:
   "tpl_message": {
     "key": "orders.order.confirmed",
     "params": {
-      "contract_version": "2.1",
-      "tenant_id": "HK_RETAIL",
       "operation_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f"
     }
   },
@@ -826,24 +748,22 @@ timeline:
     "status": ["PENDING", "CONFIRMED"]
   },
   "meta": {
-    "method": "BOOMI",
-    "path": "orders.order.confirm",
-    "status": 200
+    "boomi_process_id": "PROC-BATCH-CONFIRM-001",
+    "main_program_code": "ORDERS",
+    "sub_program_code": "BULK_CONFIRM"
   }
 }
 ```
 
-For a larger batch, the summary may omit `affected_ids`, retain the exact
-counts, and provide a governed `payload_uri` (with `payload_sha256`)
-containing the complete target manifest. Entity events are still emitted
-alongside the summary.
+For a larger batch, the summary may omit long ID lists and keep exact counts.
+Entity events are still emitted alongside the summary.
 
 ## Change Control
 
-Top-level fields, field meanings, actor prefixes, reserved params, and result
+Top-level fields, field meanings, actor prefixes, and result
 values are architecture-owned and mirror `oms-backend`'s `AuditLogEntry`.
 Changing any of them requires contract review, a coordinated change to the
-Pydantic model, a `contract_version` bump, and coordinated updates to
+Pydantic model, and coordinated updates to
 producers, validators, indexes, queries, dashboards, and documentation.
 
 The controlled vocabularies — `context`, `scope`, `action` verbs, and
@@ -860,8 +780,8 @@ key when the business meaning changes.
 
 | Version | Date | Change |
 |---|---|---|
-| 2.1 | 2026-07-14 | **Refined trace correlation, meta ergonomics, and messaging wording** — no field-set changes. `trace_id` now reuses an active OpenTelemetry span's trace ID when one exists (implementing correlation-rules step 2), instead of only ever generating a UUID; it is documented as an opaque correlation string since an OTel trace ID is not UUID-formatted. Write-failure telemetry is now emitted through the real OpenTelemetry Logs SDK (OTLP/HTTP) instead of a hand-built payload, and the exception is also recorded on the active span (`Span.recordException`) when one exists. The Groovy library now auto-defaults `meta` for Boomi callers that omit it entirely (`method: "BOOMI"`, `path: action`, `status` derived from `error_code`) — `meta` stays required in the persisted document (per the production Pydantic model) but is effectively optional for a Boomi caller. Tightened the `tpl_message` explanation: `key` is the template-lookup identifier, `params` are the substitution values the template engine interpolates into it. Fixed lenient date parsing in the Groovy library (`SimpleDateFormat` now runs with `setLenient(false)`, rejecting invalid dates like month 13 instead of silently rolling them over). Added `mo` (manufacturing order) to the `scope` registry as its own business entity distinct from `order`. Clarified that `resource_changes` is expected to stay `null` for Boomi/EDI-loading actions (no natural before/after diff) while remaining available to other modules. |
-| 2.0 | 2026-07-14 | **Realigned with the production `AuditLogEntry` schema** in `oms-backend` (`apps/core/schemas.py`), which had diverged from this contract. Only `time`, `action`, `resource_type`, and `meta` (with `method`/`path`/`status`) are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional. `action` reverts to the full `{resource_type}.{verb}` string (matching production) instead of a bare verb. Reinstated `resource_changes` (`{field: [old, new]}`) and `meta` as real top-level fields. Added the missing `impersonator_id` field. Dropped the mandatory UUID constraint on `resource_id`/`trace_id`/`operation_id` (recommended for internal entities, but external entities should use their own stable identifier) — the backend schema never enforced this. `tpl_message.key` is no longer library-derived; it is a free-form producer-chosen string, matching the production `TplMessage` model, and `tpl_message` itself is optional. |
-| 1.2 | 2026-07-14 | Removed the `std` wrapper — reserved params now sit flat, directly in `tpl_message.params`, alongside module fields. All system-generated identifiers (`trace_id`, `resource_id`, `operation_id`, `parent_operation_id`, and the identifier after `usr:`) are now UUID format. `time` is now a native BSON Date, generated/parsed by the library, not a formatted string. Expanded the action registry with `start`, `complete`, `compress`, `uncompress`, `copy`, `delete`, `update`, `merge`, `sync_to_d365`, `sync_from_d365`, `sync_from_plm`. The Groovy library was rewritten to a single simple `writeAuditLog(Map event)` call: it resolves the MongoDB connection, database, and collection internally; auto-generates `trace_id` (UUID) and `time` (BSON Date) when absent; and always emits critical SigNoz telemetry then throws on any failure — the fail-soft `writeAuditLogSafely` variant was removed. |
+| 2.1 | 2026-07-14 | **Refined trace correlation and messaging wording**. `trace_id` now reuses an active OpenTelemetry span's trace ID when one exists. Write-failure telemetry is emitted through the OpenTelemetry Logs SDK (OTLP/HTTP), and the exception is also recorded on the active span (`Span.recordException`) when one exists. Tightened the `tpl_message` explanation: `key` is the template-lookup identifier and `params` are template substitution values for rendering. Clarified that `resource_changes` is expected to stay `null` for Boomi/EDI-loading actions (no natural before/after diff) while remaining available to other modules. |
+| 2.0 | 2026-07-14 | **Realigned field requirements and producer usage.** Only `time`, `action`, `resource_type`, and `meta` are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional. `resource_changes` remains available as `{field: [old, new]}`. Added `impersonator_id`. `tpl_message.key` is producer-chosen and `tpl_message` itself is optional. |
+| 1.2 | 2026-07-14 | Removed the `std` wrapper and simplified `tpl_message` handling. Expanded action registry entries. The Groovy library was rewritten to a single `writeAuditLog(Map event)` call with internal connection resolution and strict failure signaling. |
 | 1.1 | 2026-07-14 | Removed `idempotency_key` and all dedup/uniqueness machinery — duplicates from write retries are an accepted, low-cost outcome. Added [Multi-Step Actions And Warnings](#multi-step-actions-and-warnings): one record per step, `flag` action for business-meaningful warnings. Replaced the DLQ/quarantine model with [Write Failure Handling](#write-failure-handling): the library emits critical SigNoz telemetry then throws, and the calling Boomi/OMS process handles the exception. Added `rfid` (context) and `prozip` (scope) to the registry. Compressed the template-key section — `key` is fully derived and carries no independent meaning. Corrected the `orders.order` confirm examples to a human `usr:` actor. |
-| 1.0 | 2026-07-14 | First versioned edition: library-derived keys, `std` namespace with mandatory `contract_version`/`tenant_id`, async `parent_operation_id`, coordinated payload lifecycle with `payload_sha256`, PII pseudonymization, and business-milestone actions (`receive`/`load`) replacing `start`/`stop`. |
+| 1.0 | 2026-07-14 | First versioned edition: baseline audit contract, PII guidance, and business-milestone action conventions. |

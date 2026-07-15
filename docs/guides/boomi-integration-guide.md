@@ -121,7 +121,7 @@ business fields the [Audit Log Contract](../references/audit-log-contract.md)
 requires — nothing else. The library resolves the MongoDB connection, the
 fixed database, and the fixed collection internally; resolves `trace_id` from
 an active OpenTelemetry span when one exists (otherwise a fresh UUID),
-defaults `meta` when you omit it entirely, and generates `time` (a native BSON
+and generates `time` (a native BSON
 Date) when you omit it; retries transient connection errors internally; and
 emits critical SigNoz telemetry (via the OpenTelemetry Logs SDK, with the
 exception recorded on the active span if any) before throwing on any failure.
@@ -130,15 +130,15 @@ exception recorded on the active span if any) before throwing on any failure.
 
 | Key | Required | Description |
 |---|---|---|
-| `action` | Yes | `{resource_type}.{verb}`, e.g. `boomi.document.load`. |
+| `action` | Yes | Action verb from the documented list, e.g. `confirm`, `cancel`, `load`, `receive`. |
 | `resource_type` | Yes | Namespaced noun, e.g. `boomi.document`. |
-| `meta` | Yes\* | `[method: ..., path: ..., status: ...]` — required in the persisted document, but you may omit it entirely: the library then defaults it to `[method: 'BOOMI', path: action, status: (error_code ? 500 : 200)]`. See [`meta` For Non-HTTP Producers](../references/audit-log-contract.md#meta-for-non-http-producers-boomiedi). |
+| `meta` | Yes | `[boomi_process_id: ..., main_program_code: ..., sub_program_code: ...]` — required Boomi process identity context for audit correlation and reporting. |
 | `error_code` | No | `null` on success, a stable code on failure. Defaults to `null`. |
 | `resource_id` | No | Identifier of the resource — the external system's own ID is preferred for an EDI/Boomi entity (for example a stable load/interchange identifier; see the caveat under the example below), or a UUID for an internally-generated entity. Defaults to `null`. |
-| `user_id` | No | Namespaced actor id. Recommended `sys:boomi-service` for an automated Boomi process (there's no human actor); may be left `null` if you don't need to record even that. Defaults to `null`. |
+| `user_id` | No | For Boomi process writes this should be `null` (no human actor). |
 | `impersonator_id` | No | ID of a user acting on behalf of another. Boomi processes typically have no impersonator; defaults to `null`. |
 | `message` | No | Short sanitized summary. Defaults to `null`. |
-| `tpl_message` | No | `[key: ..., params: [...]]` — `key` looks up a message template, `params` supplies the values the template engine substitutes into it. Defaults to `null`; omit entirely if there's nothing structured to say. |
+| `tpl_message` | No | `[key: ..., params: [...]]` — OMS message-rendering payload only. `key` is the i18n template lookup key, and `params` are the template substitution values. Do not use this object to carry transport/process identity metadata. Defaults to `null`; omit entirely if there's nothing structured to say. |
 | `resource_changes` | No | `[field_name: [old_value, new_value]]` for a state transition. Defaults to `null`; typically stays `null` for EDI-loading actions since there's no natural before/after diff, but the library validates it if you do supply one. |
 | `trace_id` | No | Reused from an active OpenTelemetry span's trace ID when one exists (an opaque hex string, not a UUID); otherwise a fresh UUID is generated. |
 | `ip` | No | Client IP or `null`; defaults to `null`. |
@@ -163,22 +163,19 @@ realistic EDI-load scenario):
 import boomi.BoomiAuditLogLibrary
 
 Map event = [
-  action: 'boomi.document.load',
+  action: 'load',
   resource_type: 'boomi.document',
-  resource_id: 'orders-20260713.edi',  // the EDI file name, for this simple example
+  resource_id: 'TCHIBO-0001.csv',
   user_id: null,                       // Boomi runs as a system process -- no human actor to name
   message: 'EDI order file loaded successfully',
   tpl_message: [
     key: 'boomi.document.loaded',
-    params: [
-      contract_version: '2.1',
-      tenant_id: 'HK_RETAIL'
-    ]
+    params: [file_name: 'TCHIBO-0001.csv']
   ],
   meta: [
-    method: 'BOOMI',
-    path: 'boomi.document.load',
-    status: 200
+    boomi_process_id: 'EU-TC-0001',
+    main_program_code: 'EU',
+    sub_program_code: 'TC'
   ]
 ]
 
@@ -202,8 +199,16 @@ try {
 > for the production-shaped version of this same scenario.
 
 You do **not** need to resolve a MongoDB URI, pick a database/collection name,
-configure retries, or generate `trace_id`/`meta`/`time` yourself — the library
-does all of that internally when you omit them.
+configure retries, or generate `trace_id`/`time` yourself. You do need to pass
+the Boomi process identity inside `meta`.
+
+For SigNoz and audit correlation, keep using `trace_id` as the primary key
+across traces/logs/audit documents, and use `boomi_process_id` plus
+program codes for additional grouping in dashboards and operational reports.
+
+`tpl_message` exists for OMS rendering: `key` is the i18n lookup key and
+`params` are template substitution values. In OMS frontend this is handled by
+`vue-i18n`.
 
 #### `BoomiAuditLogLibrary.closeAllClients()`
 
@@ -247,8 +252,7 @@ partner**, which naturally breaks into three parts:
 
 One run becomes **one trace** with **one process-level span** (the whole run)
 and **three subprocess spans** nested underneath, bracketed by two audit-log
-records (`boomi.document.receive` at the start, `boomi.document.load` at the
-end):
+records (`receive` at the start, `load` at the end):
 
 ```mermaid
 flowchart LR
@@ -257,7 +261,7 @@ flowchart LR
     A1(("Audit:\nboomi.document.receive")) --> S1["Span:\nload_file"]
     S1 --> S2["Span:\nmap_and_export"]
     S2 --> S3["Span:\nmove_to_done"]
-    S3 --> A2(("Audit:\nboomi.document.load"))
+    S3 --> A2(("Audit:\nload"))
   end
 ```
 
@@ -274,15 +278,21 @@ import boomi.BoomiAuditLogLibrary
 final String SERVICE_NAME = 'oms-audit-writer'
 String fileName = 'orders-20260713.edi'
 String loadId = 'LOAD-48391'
+String processId = 'EU-TC-0001'
 
 // 1) Start the trace + the process-level span, and record that the file was
 //    received (the contract's completed-fact form of "the run started").
 def processHandle = BoomiOtelLibrary.startSpan(SERVICE_NAME, 'boomi.process.edi_order_load')
 BoomiAuditLogLibrary.writeAuditLog([
-  action: 'boomi.document.receive',
+  action: 'receive',
   resource_type: 'boomi.document',
-  resource_id: loadId,
-  user_id: 'sys:boomi-service',
+  resource_id: 'TCHIBO-0001.csv',
+  user_id: null,
+  meta: [
+    boomi_process_id: processId,
+    main_program_code: 'EU',
+    sub_program_code: 'TC'
+  ],
   tpl_message: [key: 'boomi.document.received', params: [file_name: fileName]]
 ])
 
@@ -304,22 +314,27 @@ BoomiOtelLibrary.withSpan(SERVICE_NAME, 'boomi.process.edi_order_load.move_to_do
 // 5) Record the completed load milestone (error_code omitted = null = success),
 //    and end the process span.
 BoomiAuditLogLibrary.writeAuditLog([
-  action: 'boomi.document.load',
+  action: 'load',
   resource_type: 'boomi.document',
-  resource_id: loadId,
-  user_id: 'sys:boomi-service',
+  resource_id: 'TCHIBO-0001.csv',
+  user_id: null,
+  meta: [
+    boomi_process_id: processId,
+    main_program_code: 'EU',
+    sub_program_code: 'TC'
+  ],
   tpl_message: [key: 'boomi.document.loaded', params: [file_name: fileName]]
 ])
 BoomiOtelLibrary.endSpan(processHandle)
 ```
 
 Both audit writes automatically share the process span's trace ID — no extra
-wiring. `meta`, `trace_id`, and `time` are omitted on purpose: the library
-auto-defaults `meta` for Boomi callers and resolves `trace_id`/`time` itself
-(see [`meta` For Non-HTTP Producers](../references/audit-log-contract.md#meta-for-non-http-producers-boomiedi)).
-Naming follows the [contract](../references/audit-log-contract.md#action-resource_typeverb):
-the beginning is the completed fact `boomi.document.receive`, the end is the
-milestone `boomi.document.load` whose outcome lives only in `error_code`.
+wiring. `trace_id` and `time` may be omitted on purpose because the library
+resolves/generates them automatically. `meta` should be supplied explicitly
+with `boomi_process_id`, `main_program_code`, and `sub_program_code`.
+Naming follows the [contract](../references/audit-log-contract.md#action-verb-from-registry):
+the beginning is the completed fact `receive`, the end is the
+milestone `load` whose outcome lives only in `error_code`.
 
 #### Which call, when
 
@@ -379,7 +394,7 @@ them, you know `map_and_export` is where nearly all the time went.
     // withSpan already marked the span failed, recorded the exception on it,
     // and emitted a critical failure log to SigNoz — before re-throwing here.
     BoomiAuditLogLibrary.writeAuditLog([
-      action: 'boomi.document.load',
+      action: 'load',
       error_code: 'ERR_SOURCE_FILE_INVALID',
       resource_type: 'boomi.document',
       resource_id: loadId,
@@ -390,7 +405,7 @@ them, you know `map_and_export` is where nearly all the time went.
   }
   ```
 
-  You still write the `boomi.document.load` record — the *same* milestone
+  You still write the `load` record — the *same* milestone
   action as the success path, with the failure carried **only** in
   `error_code` (a failed attempt is still a completed business fact worth
   recording), and you end the process span with the same error.
@@ -427,13 +442,13 @@ BoomiOtelLibrary.endSpan(mapHandle)
 def moveHandle = BoomiOtelLibrary.startSpan('oms-audit-writer', 'boomi.process.edi_order_load.move_to_done', parentTraceparent)
 // ... move work ...
 BoomiOtelLibrary.endSpan(moveHandle)
-BoomiAuditLogLibrary.writeAuditLog([action: 'boomi.document.load', resource_type: 'boomi.document', resource_id: 'LOAD-48391'])
+BoomiAuditLogLibrary.writeAuditLog([action: 'load', resource_type: 'boomi.document', resource_id: 'TCHIBO-0001.csv'])
 ```
 
 Every shape's span lands under the same trace in SigNoz even though they ran
 as separate executions. The one tradeoff: no single execution can
 `endSpan(processHandle)` for the overall run, so the whole-run duration is
-best read from the two audit timestamps (`boomi.document.load.time` minus
+best read from the two audit timestamps (`load.time` minus
 `boomi.document.receive.time`) rather than one continuously-open span.
 
 For the design-level "why it works this way" (ambient span nesting, the
@@ -460,12 +475,12 @@ not define a separate Boomi-specific document shape.
 
 In particular:
 
-- only `time`, `action`, `resource_type`, and `meta` (with `method`/`path`/`status`) are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional; `meta` is additionally auto-defaulted by the library when a Boomi caller omits it entirely, so it is effectively optional in practice too;
-- `action` is the full `{resource_type}.{verb}` string, matching the production `oms-backend` schema (not a bare verb);
+- only `time`, `action`, `resource_type`, and `meta` are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional; for Boomi flows, `meta` carries `boomi_process_id`, `main_program_code`, and `sub_program_code`;
+- `action` is a verb from the documented action list (for example `confirm`, `cancel`, `load`, `receive`);
 - `resource_type` is a namespaced noun;
 - `error_code` carries the success/failure contract;
 - `user_id` carries a recommended (not enforced) actor prefix;
-- `tpl_message`, when present, contains exactly `key` (looks up a message template) and module-owned `params` (the values substituted into it);
+- `tpl_message`, when present, contains exactly `key` (i18n template lookup key) and `params` (template substitution values for OMS message rendering);
 - `resource_changes` (`{field: [old, new]}`) is the preferred way to record a state transition;
 - `trace_id` reuses an active OpenTelemetry span's trace ID when one exists, otherwise a generated UUID; either way it is shared correlation data and must not have a unique index.
 
@@ -800,7 +815,7 @@ If you have never used SigNoz before, this is the fastest way to see real data e
 2. In the filter bar, type: `service.name = oms-audit-writer`
 3. You can further filter by:
    - `trace_id = <specific-trace-id>` — find one specific event
-   - `action = orders.order.confirm` — find all events of a type
+  - `action = confirm` — find all events of a type
    - `resource_id = ORD-2024-001` — find events for a specific resource
 4. Click any log entry to expand full attributes
 5. Copy the `trace_id` to cross-reference with MongoDB audit record

@@ -191,11 +191,11 @@ language, with a realistic example for each line.
 
 | Plain-language name | Must fill in? | What it means | Example |
 |---|---|---|---|
-| **What Happened** | ✅ Must fill in | A short label for the business event: what kind of thing, then what happened to it, joined by a dot | `orders.order.confirm` (an order was confirmed) |
+| **What Happened** | ✅ Must fill in | A short action verb from the approved list | `confirm` |
 | **What Kind Of Thing** | ✅ Must fill in | The category of business item this note is about | `orders.order` (this note is about an order) |
 | **Technical Details** | Usually automatic | Where this event came from (an automatic system, not a person, filled this in for you most of the time) | Filled in automatically for you — see note below |
 | **Which One** | Optional, but recommended | The specific item's ID/number | `ORD-2024-001` |
-| **Who Did It** | Optional, but recommended | The person or system that did this | `usr:jane.lee` (a person named Jane) or `sys:boomi-service` (an automated system) |
+| **Who Did It** | Optional | For Boomi process writes this is usually `null` (no human actor) |
 | **Did It Work?** | Optional | Leave blank if it succeeded. Fill in a short code if it failed. | Blank = success. `ERR_SOURCE_FILE_INVALID` = a specific failure reason |
 | **Short Message** | Optional | A plain sentence describing what happened, for a human reading the Logbook later | `"Order confirmed by customer service agent"` |
 | **What Changed** | Optional | If something's status changed, what it changed from and to | Status changed from `PENDING` to `CONFIRMED` |
@@ -204,8 +204,9 @@ language, with a realistic example for each line.
 > originally designed for our website/app (which naturally has things like
 > "which web address was used"). Since your Boomi process isn't a website,
 > this line is filled in automatically for you with a sensible Boomi-shaped
-> default. You only need to touch it if an IT engineer specifically asks you
-> to customize it.
+> default. In practice, your Boomi Admin may set this to include process
+> identity (process ID + main/sub program code) for easier reporting. You only
+> need to touch it if an IT engineer specifically asks you to customize it.
 
 ### The Calls You Will Use (Which One, When, Passing What)
 
@@ -239,18 +240,18 @@ and its
 
 ---
 
-## 7. Worked Example: A Successful Order Confirmation
+## 7. Worked Example: A Successful Confirmation
 
-Imagine your Boomi process just confirmed order `ORD-2024-001` on behalf of
-a customer service agent named Jane. Here is what gets filled in, and what
+Imagine your Boomi process confirmed one incoming file payload.
+Here is what gets filled in, and what
 it means in plain language:
 
 | Line | What you'd write | In plain words |
 |---|---|---|
-| What Happened | `orders.order.confirm` | "An order was confirmed" |
-| What Kind Of Thing | `orders.order` | "This note is about an order" |
-| Which One | `ORD-2024-001` | "Specifically, order number ORD-2024-001" |
-| Who Did It | `usr:jane.lee` | "Jane confirmed it" |
+| What Happened | `confirm` | "A confirmation action happened" |
+| What Kind Of Thing | `boomi.document` | "This note is about an incoming Boomi document" |
+| Which One | `TCHIBO-0001.csv` | "Specifically, file TCHIBO-0001.csv" |
+| Who Did It | `null` | "An automated process did this (no human user)" |
 | Did It Work? | *(left blank)* | "Yes, it succeeded" |
 | Short Message | `Order confirmed by customer service agent` | A plain-English summary |
 | What Changed | Status: `PENDING` → `CONFIRMED` | "The order's status flipped from Pending to Confirmed" |
@@ -270,10 +271,10 @@ the load failed.
 
 | Line | What you'd write | In plain words |
 |---|---|---|
-| What Happened | `boomi.document.load` | "We tried to load an incoming file" |
+| What Happened | `load` | "We tried to load an incoming file" |
 | What Kind Of Thing | `boomi.document` | "This note is about an incoming data file" |
-| Which One | `LOAD-48391` | "Specifically, load number LOAD-48391" |
-| Who Did It | `sys:boomi-service` | "An automated system did this, not a person" |
+| Which One | `TCHIBO-0001.csv` | "Specifically, file TCHIBO-0001.csv" |
+| Who Did It | `null` | "An automated system did this, not a person" |
 | Did It Work? | `ERR_SOURCE_FILE_INVALID` | "No — here's the specific reason it failed" |
 | Short Message | `Source file validation failed` | A plain-English summary |
 
