@@ -479,7 +479,7 @@ In particular:
 - `action` is a verb from the documented action list (for example `confirm`, `cancel`, `load`, `receive`);
 - `resource_type` is a namespaced noun;
 - `error_code` carries the success/failure contract;
-- `user_id` carries a recommended (not enforced) actor prefix;
+- `user_id` should be `null` for Boomi cron-driven process writes (no human actor);
 - `tpl_message`, when present, contains exactly `key` (i18n template lookup key) and `params` (template substitution values for OMS message rendering);
 - `resource_changes` (`{field: [old, new]}`) is the preferred way to record a state transition;
 - `trace_id` reuses an active OpenTelemetry span's trace ID when one exists, otherwise a generated UUID; either way it is shared correlation data and must not have a unique index.

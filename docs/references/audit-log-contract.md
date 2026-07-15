@@ -175,7 +175,7 @@ Pydantic model and this document together.
 | `error_code` | String/null | No | `null` means succeeded. A stable non-empty code means failed. Never store exception text or a stack trace here. |
 | `resource_type` | String | Yes | Namespaced business noun `{context}.{scope}`, for example `orders.order` or `boomi.document`. |
 | `resource_id` | String/null | No | Identifier of the resource. Recommended: a UUID for an internally-generated OMS entity; for an external entity (an EDI interchange, a D365/PLM record) use that system's own stable identifier rather than inventing a UUID. |
-| `user_id` | String/null | No | Actor identifier. Recommended prefix convention (`usr:`/`sys:`/`api:`, see below) — a producer discipline, not a backend-enforced format. |
+| `user_id` | String/null | No | Actor identifier. Use `null` when there is no human actor (for example Boomi cron-driven process writes). |
 | `impersonator_id` | String/null | No | ID of a user acting on behalf of another (for example an admin impersonating a customer). |
 | `message` | String/null | No | Short, human-readable, sanitized summary. Not a raw payload or exception dump. |
 | `tpl_message` | Object/null | No | `{key: string, params: object}` for structured, i18n-friendly messaging. Omit entirely when there's nothing structured to say. |
@@ -266,22 +266,15 @@ Prefer a small stable vocabulary of verbs. Adding one requires a registry pull
 request; renaming a verb changes the query contract and requires architecture
 review.
 
-### User ID: Actor Prefix (recommended convention)
+### User ID Guidance
 
 `user_id` is a plain optional string in the backend schema — there is no
-Pydantic-enforced format. This contract still recommends a namespaced prefix,
-because "who did this" is central to an audit trail even when the field itself
-accepts any string:
+Pydantic-enforced format.
 
-| Prefix | Actor | Examples |
-|---|---|---|
-| `usr:` | Authenticated human user | `usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f` |
-| `sys:` | Internal service, scheduler, or batch process | `sys:boomi-service`, `sys:nightly-reconciliation` |
-| `api:` | External API client or vendor integration | `api:vendor-stripe` |
-
-The identifier after the prefix must be stable and must not be an email
-address, display name, credential, access token, or other mutable/sensitive
-value.
+- Use an opaque, stable user identifier when a human actor exists.
+- Use `null` when no human actor exists (for example scheduled/cron Boomi flows).
+- Never store email addresses, display names, credentials, access tokens, or
+  other mutable/sensitive values in `user_id`.
 
 ### Bulk Operations
 
@@ -458,8 +451,8 @@ The module extension point is not a raw-payload escape hatch.
 
 - Never store passwords, access tokens, API keys, connection strings, payment
   card data, or authentication headers.
-- Prefer pseudonymous references over personal data. Identities use opaque
-  tokens (as `user_id` already does with `usr:`/`sys:`/`api:` prefixes); keep the
+- Prefer pseudonymous references over personal data. Identities should use
+  opaque tokens in `user_id`; keep the
   token-to-identity mapping in a separate, mutable, erasable identity store so a
   right-to-be-forgotten request is satisfied by severing the mapping rather than
   mutating the immutable audit record. Crypto-shredding is only a fallback for
@@ -591,8 +584,7 @@ database write:
   (with `meta.boomi_process_id`, `meta.main_program_code`, `meta.sub_program_code`);
 - field types and non-empty strings for required fields;
 - native BSON Date `time`, generated/parsed by the library;
-- `resource_type` naming rules, and that `action` starts with
-  `resource_type + "."`;
+- `resource_type` naming rules, and that `action` is a registry verb;
 - `tpl_message` shape when present (`key` + `params` only);
 - `meta` shape (`boomi_process_id`/`main_program_code`/`sub_program_code` present);
 - entity fan-out, bulk-summary count, and affected-ID rules;
@@ -620,7 +612,7 @@ validation or insertion failure.
   "error_code": null,
   "resource_type": "orders.order",
   "resource_id": "ORD-2024-001",
-  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
+  "user_id": "018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
   "message": "Order confirmed by customer service agent",
   "tpl_message": {
     "key": "orders.order.confirmed",
@@ -651,7 +643,7 @@ validation or insertion failure.
   "error_code": "ERR_SOURCE_FILE_INVALID",
   "resource_type": "boomi.document",
   "resource_id": "TCHIBO-0001.csv",
-  "user_id": "sys:boomi-service",
+  "user_id": null,
   "message": "EDI document load failed: source file validation error",
   "tpl_message": {
     "key": "boomi.document.load_failed",
@@ -705,7 +697,7 @@ one entity event per order; it does not replace them.
   "error_code": null,
   "resource_type": "orders.batch",
   "resource_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f",
-  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
+  "user_id": "018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
   "message": "Bulk order confirmation completed",
   "tpl_message": {
     "key": "orders.batch.confirmed",
@@ -736,7 +728,7 @@ timeline:
   "error_code": null,
   "resource_type": "orders.order",
   "resource_id": "ORD-001",
-  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
+  "user_id": "018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
   "message": "Order confirmed by bulk operation",
   "tpl_message": {
     "key": "orders.order.confirmed",
@@ -760,7 +752,7 @@ Entity events are still emitted alongside the summary.
 
 ## Change Control
 
-Top-level fields, field meanings, actor prefixes, and result
+Top-level fields, field meanings, and result
 values are architecture-owned and mirror `oms-backend`'s `AuditLogEntry`.
 Changing any of them requires contract review, a coordinated change to the
 Pydantic model, and coordinated updates to
@@ -783,5 +775,5 @@ key when the business meaning changes.
 | 2.1 | 2026-07-14 | **Refined trace correlation and messaging wording**. `trace_id` now reuses an active OpenTelemetry span's trace ID when one exists. Write-failure telemetry is emitted through the OpenTelemetry Logs SDK (OTLP/HTTP), and the exception is also recorded on the active span (`Span.recordException`) when one exists. Tightened the `tpl_message` explanation: `key` is the template-lookup identifier and `params` are template substitution values for rendering. Clarified that `resource_changes` is expected to stay `null` for Boomi/EDI-loading actions (no natural before/after diff) while remaining available to other modules. |
 | 2.0 | 2026-07-14 | **Realigned field requirements and producer usage.** Only `time`, `action`, `resource_type`, and `meta` are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional. `resource_changes` remains available as `{field: [old, new]}`. Added `impersonator_id`. `tpl_message.key` is producer-chosen and `tpl_message` itself is optional. |
 | 1.2 | 2026-07-14 | Removed the `std` wrapper and simplified `tpl_message` handling. Expanded action registry entries. The Groovy library was rewritten to a single `writeAuditLog(Map event)` call with internal connection resolution and strict failure signaling. |
-| 1.1 | 2026-07-14 | Removed `idempotency_key` and all dedup/uniqueness machinery — duplicates from write retries are an accepted, low-cost outcome. Added [Multi-Step Actions And Warnings](#multi-step-actions-and-warnings): one record per step, `flag` action for business-meaningful warnings. Replaced the DLQ/quarantine model with [Write Failure Handling](#write-failure-handling): the library emits critical SigNoz telemetry then throws, and the calling Boomi/OMS process handles the exception. Added `rfid` (context) and `prozip` (scope) to the registry. Compressed the template-key section — `key` is fully derived and carries no independent meaning. Corrected the `orders.order` confirm examples to a human `usr:` actor. |
+| 1.1 | 2026-07-14 | Removed `idempotency_key` and all dedup/uniqueness machinery — duplicates from write retries are an accepted, low-cost outcome. Added [Multi-Step Actions And Warnings](#multi-step-actions-and-warnings): one record per step, `flag` action for business-meaningful warnings. Replaced the DLQ/quarantine model with [Write Failure Handling](#write-failure-handling): the library emits critical SigNoz telemetry then throws, and the calling Boomi/OMS process handles the exception. Added `rfid` (context) and `prozip` (scope) to the registry. Compressed the template-key section — `key` is fully derived and carries no independent meaning. Corrected the `orders.order` confirm examples to a human actor identifier. |
 | 1.0 | 2026-07-14 | First versioned edition: baseline audit contract, PII guidance, and business-milestone action conventions. |
