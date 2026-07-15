@@ -708,7 +708,7 @@ db.auditlogs.find({ resource_id: 'ORD-2024-001' }).sort({ time: -1 })
 
 // Events by action in a date range (time is a native BSON Date -> use new Date())
 db.auditlogs.find({
-  action: 'orders.order.confirm',
+  action: 'confirm',
   time: { $gte: new Date('2026-07-01T00:00:00Z'), $lte: new Date('2026-07-06T23:59:59Z') }
 }).sort({ time: -1 })
 
@@ -722,7 +722,7 @@ db.auditlogs.aggregate([
 ])
 ```
 
-Query the full `{resource_type}.{verb}` action string, and use `new Date(...)`
+Query action by verb and use `new Date(...)`
 bounds — because `time` is stored as a native BSON Date, a plain string
 comparison would silently match nothing.
 
