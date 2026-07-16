@@ -275,7 +275,7 @@ the load failed.
 | What Kind Of Thing | `boomi.document` | "This note is about an incoming data file" |
 | Which One | `LOAD-48391` | "Specifically, load number LOAD-48391" |
 | Who Did It | `sys:boomi-service` | "An automated system did this, not a person" |
-| Did It Work? | `BOM-OD-0001` | "No — here's the specific reason it failed" |
+| Did It Work? | `BOM-OD-0001` | "A registered problem reference; the Short Message row says what actually went wrong" |
 | Short Message | `Source file validation failed` | A plain-English summary |
 
 **What happens next:** the note is written into the Logbook (yes, even
