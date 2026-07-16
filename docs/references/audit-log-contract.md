@@ -15,12 +15,13 @@ background needed.
 
 | Field | Value |
 |---|---|
-| **Contract version** | 2.1 |
+| **Contract version** | 2.2 |
 | **Status** | Required for new audit-log integrations |
-| **Effective date** | 2026-07-14 |
+| **Effective date** | 2026-07-16 |
 | **Owner / approver** | OMS Architecture |
-| **Supersedes** | 2.0 (2026-07-14) |
+| **Supersedes** | 2.1 (2026-07-14) |
 | **Source of truth** | `oms-backend` `apps/core/schemas.py` — `AuditLogEntry`, `TplMessage`, `AuditLogMeta` |
+| **Per-record marker** | `tpl_message.params.contract_version: "2.2"` (optional; see [Reserved Params](#reserved-params)) |
 
 **Related docs:**
 - [Boomi Integration Guide](../guides/boomi-integration-guide.md) — how Boomi calls the audit writer
@@ -172,7 +173,7 @@ Pydantic model and this document together.
 | `ip` | String/null | No | Trusted originating actor/client IP. Behind proxies, use only an ingress-normalized value or a validated forwarding header. Use `null` when it can't be established reliably. |
 | `time` | Date (BSON) | Yes | Business event time, stored as a native MongoDB Date. Supply an ISO-8601 UTC string (with milliseconds) or omit it; the library parses/generates the Date itself. |
 | `action` | String | Yes | `{resource_type}.{verb}`, for example `orders.order.confirm`. The verb comes from the registry; the full string equals `resource_type` + `.` + verb. |
-| `error_code` | String/null | No | `null` means succeeded. A failure must use a canonical non-null code matching `^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-\d{4}$`. Never store exception text or a stack trace here; keep human detail in `message`/`tpl_message.params` and technical exception detail in SigNoz. |
+| `error_code` | String/null | No | `null` means succeeded. A failure must use the canonical non-null format documented in [Success And Failure](#success-and-failure). Never store exception text or a stack trace here; keep human detail in `message`/`tpl_message.params` and technical exception detail in SigNoz. |
 | `resource_type` | String | Yes | Namespaced business noun `{context}.{scope}`, for example `orders.order` or `boomi.document`. |
 | `resource_id` | String/null | No | Identifier of the resource. Recommended: a UUID for an internally-generated OMS entity; for an external entity (an EDI interchange, a D365/PLM record) use that system's own stable identifier rather than inventing a UUID. |
 | `user_id` | String/null | No | Actor identifier. Use `null` when there is no human actor (for example Boomi cron-driven process writes). |
@@ -329,12 +330,39 @@ This contract records completed business attempts only:
 - A failure must never be written with a null `error_code`.
 - A success must never carry an `error_code`.
 
-Canonical error codes use the format `<SYSTEM>-<MODULE>-<NNNN>`:
+Canonical error codes use the format `<SYSTEM>-<MODULE>-<NNNN>`. Examples:
+`OMS-PD-0001` (Order Management System / Product) and `365-RP-0001`
+(Dynamics 365 / Report).
+
+**System legend**
+
+| Code | Full name |
+|---|---|
+| `OMS` | Order Management System |
+| `ART` | Artwork Center |
+| `BOM` | Boomi |
+| `365` | Dynamics 365 |
+| `IPP` | IPP |
+
+**Module legend** — these meanings are global across systems and are not
+redefined per system namespace.
+
+| Code | Full name |
+|---|---|
+| `PD` | Product |
+| `OD` | Order |
+| `FC` | Format Center |
+| `JC` | JCC |
+| `UR` | User |
+| `PS` | PPS |
+| `RP` | Report |
+
+Canonical format summary:
 
 | Part | Allowed values | Rule |
 |---|---|---|
 | `SYSTEM` | `OMS`, `ART`, `BOM`, `365`, `IPP` | Uppercase system namespace owned by the producing system. |
-| `MODULE` | `PD`, `OD`, `FC`, `JC`, `UR`, `PS`, `RP` | Uppercase module namespace owned by the producing bounded context. |
+| `MODULE` | `PD`, `OD`, `FC`, `JC`, `UR`, `PS`, `RP` | Uppercase module namespace owned by the producing bounded context; the code meanings above are global across all systems. |
 | `NNNN` | `0001`-`9999` | Exactly four digits, zero-padded, allocated independently inside each system/module namespace. |
 
 Exact regex:
@@ -346,6 +374,7 @@ Exact regex:
 Rules:
 
 - codes are uppercase;
+- use only the system and module registries above;
 - once published, a code is immutable;
 - codes are never reused;
 - a central registry allocates codes and prevents duplicates;
@@ -472,7 +501,7 @@ it needs to carry any of these.
 
 | Param | Type | Required | Rule |
 |---|---|---|---|
-| `contract_version` | String | Recommended | Version of this contract the record was produced against, for example `"2.1"`. |
+| `contract_version` | String | Recommended | Version of this contract the record was produced against, for example `"2.2"`. |
 | `tenant_id` | String | Recommended | Stable tenant/brand identifier. |
 | `operation_id` | String | Conditional | On an entity event, the `resource_id` of its execution summary. |
 | `parent_operation_id` | String | Conditional | On an async child operation, the parent operation's ID. |
@@ -678,7 +707,9 @@ validation or insertion failure.
     "key": "orders.order.confirmed",
     "params": {
       "order_no": "ORD-2024-001",
-      "erp_reference": "ERP-99912"
+      "erp_reference": "ERP-99912",
+      "contract_version": "2.2",
+      "tenant_id": "HK_RETAIL"
     }
   },
   "resource_changes": {
@@ -688,70 +719,6 @@ validation or insertion failure.
     "boomi_process_id": "PROC-ORDER-CONFIRM-001",
     "main_program_code": "ORDERS",
     "sub_program_code": "ORDER_CONFIRM"
-  }
-}
-```
-
-### OMS Partial Order Confirmation
-
-```json
-{
-  "trace_id": "b58bd21c-69dd-4a83-9678-1f13c3d4e58a",
-  "ip": "203.0.113.42",
-  "time": "2026-07-13T10:32:05.117Z",
-  "action": "orders.batch.confirm",
-  "error_code": "OMS-OD-0001",
-  "resource_type": "orders.batch",
-  "resource_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f",
-  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
-  "message": "Bulk order confirmation completed with one partial failure",
-  "tpl_message": {
-    "key": "orders.batch.confirmed_partial",
-    "params": {
-      "contract_version": "2.1",
-      "tenant_id": "HK_RETAIL",
-      "affected_ids": ["ORD-001", "ORD-002", "ORD-003"],
-      "affected_count": 3,
-      "success_count": 2,
-      "failure_count": 1,
-      "failed_ids": ["ORD-003"]
-    }
-  },
-  "meta": {
-    "method": "BOOMI",
-    "path": "orders.batch.confirm",
-    "status": 500
-  }
-}
-```
-
-### OMS Payment Authorization Failed
-
-```json
-{
-  "trace_id": "d75de42e-8bff-4d95-bb79-3b2e5f7a8b9c",
-  "ip": "203.0.113.11",
-  "time": "2026-07-13T10:31:42.884Z",
-  "action": "orders.payment.authorize",
-  "error_code": "OMS-PD-0001",
-  "resource_type": "orders.payment",
-  "resource_id": "PAY-2024-009",
-  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
-  "message": "Payment authorization failed for the order",
-  "tpl_message": {
-    "key": "orders.payment.authorize_failed",
-    "params": {
-      "contract_version": "2.1",
-      "tenant_id": "HK_RETAIL",
-      "order_no": "ORD-2024-001",
-      "authorization_attempt": 1,
-      "failure_reason": "Card issuer declined the transaction"
-    }
-  },
-  "meta": {
-    "method": "BOOMI",
-    "path": "orders.payment.authorize",
-    "status": 500
   }
 }
 ```
@@ -774,7 +741,9 @@ validation or insertion failure.
     "params": {
       "file_name": "orders-20260713.edi",
       "interchange_control_number": "000012345",
-      "failure_reason": "Required interchange header is missing"
+      "failure_reason": "Required interchange header is missing",
+      "contract_version": "2.2",
+      "tenant_id": "HK_RETAIL"
     }
   },
   "meta": {
@@ -807,37 +776,70 @@ present — a future Boomi module doing something more state-transition-like
 (for example correcting a previously-loaded record's field) can use it — but
 today's EDI-loading modules are expected to leave it `null`.
 
-### 365 Return Retry Failed
+### Bulk Order Confirmation Summary
 
-This example uses the `365-RP-0001` namespace for a 365-owned retryable
-processing failure. The completed attempt is audited here; the technical retry
-detail itself still belongs in SigNoz.
+The operation has its own generated identity. This summary is accompanied by
+one entity event per order; it does not replace them.
 
 ```json
 {
-  "trace_id": "c64cd31d-7aee-4c94-a968-2a1d4e5f6a7b",
-  "ip": "198.51.100.24",
-  "time": "2026-07-13T10:33:18.442Z",
-  "action": "returns.process.retry",
-  "error_code": "365-RP-0001",
-  "resource_type": "returns.process",
-  "resource_id": "RET-77881",
-  "user_id": "sys:d365-integration",
-  "message": "365 return retry failed after downstream validation",
+  "trace_id": "b58bd21c-69dd-4a83-9678-1f13c3d4e58a",
+  "ip": "203.0.113.42",
+  "time": "2026-07-13T10:32:05.117Z",
+  "action": "orders.batch.confirm",
+  "error_code": null,
+  "resource_type": "orders.batch",
+  "resource_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f",
+  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
+  "message": "Bulk order confirmation completed",
   "tpl_message": {
-    "key": "returns.process.retry_failed",
+    "key": "orders.batch.confirmed",
     "params": {
-      "contract_version": "2.1",
+      "contract_version": "2.2",
       "tenant_id": "HK_RETAIL",
-      "return_no": "RET-77881",
-      "retry_attempt": 2,
-      "failure_reason": "Downstream validation rejected the return line"
+      "affected_ids": ["ORD-001", "ORD-002", "ORD-003"],
+      "affected_count": 3,
+      "success_count": 3,
+      "failure_count": 0
     }
   },
   "meta": {
-    "method": "D365",
-    "path": "returns.process.retry",
-    "status": 500
+    "method": "BOOMI",
+    "path": "orders.batch.confirm",
+    "status": 200
+  }
+}
+```
+
+One associated entity event remains directly queryable by the existing order
+timeline:
+
+```json
+{
+  "trace_id": "b58bd21c-69dd-4a83-9678-1f13c3d4e58a",
+  "ip": "203.0.113.42",
+  "time": "2026-07-13T10:32:05.118Z",
+  "action": "orders.order.confirm",
+  "error_code": null,
+  "resource_type": "orders.order",
+  "resource_id": "ORD-001",
+  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
+  "message": "Order confirmed by bulk operation",
+  "tpl_message": {
+    "key": "orders.order.confirmed",
+    "params": {
+      "contract_version": "2.2",
+      "tenant_id": "HK_RETAIL",
+      "operation_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f"
+    }
+  },
+  "resource_changes": {
+    "status": ["PENDING", "CONFIRMED"]
+  },
+  "meta": {
+    "method": "BOOMI",
+    "path": "orders.order.confirm",
+    "status": 200
   }
 }
 ```
@@ -847,16 +849,18 @@ Entity events are still emitted alongside the summary.
 
 ## Change Control
 
-Top-level fields, field meanings, and result
-values are architecture-owned and mirror `oms-backend`'s `AuditLogEntry`.
-Changing any of them requires contract review, a coordinated change to the
-Pydantic model, and coordinated updates to
-producers, validators, indexes, queries, dashboards, and documentation.
+Top-level fields, field meanings, actor prefixes, reserved params, and result
+semantics are architecture-owned and mirror `oms-backend`'s `AuditLogEntry`.
+Changing any of them requires contract review, a `contract_version` bump, and
+coordinated updates to producers, validators, indexes, queries, dashboards,
+and documentation; when a change affects the persisted schema or runtime
+validation, it also requires a coordinated change to the Pydantic model.
 
-The controlled vocabularies — `context`, `scope`, `action` verbs, and
-`error_code` — are closed enums maintained in a version-controlled registry in
-Git. New values are added by pull request with architecture approval;
-producers select from the registry and must not invent values inline.
+The controlled vocabularies — `context`, `scope`, `action` verbs, the
+error-code `SYSTEM` registry, the error-code `MODULE` registry, and published
+`error_code` values — are closed enums maintained in a version-controlled
+registry in Git. New values are added by pull request with architecture
+approval; producers select from the registry and must not invent values inline.
 
 Adding a module-specific template and params does not require a top-level schema
 change, but the module must register and document the template before production
@@ -867,8 +871,9 @@ key when the business meaning changes.
 
 | Version | Date | Change |
 |---|---|---|
-| 2.1 | 2026-07-14 | **Refined trace correlation and messaging wording**. `trace_id` now reuses an active OpenTelemetry span's trace ID when one exists. Write-failure telemetry is emitted through the OpenTelemetry Logs SDK (OTLP/HTTP), and the exception is also recorded on the active span (`Span.recordException`) when one exists. Tightened the `tpl_message` explanation: `key` is the template-lookup identifier and `params` are template substitution values for rendering. Clarified that `resource_changes` is expected to stay `null` for Boomi/EDI-loading actions (no natural before/after diff) while remaining available to other modules. |
-| 2.0 | 2026-07-14 | **Realigned field requirements and producer usage.** Only `time`, `action`, `resource_type`, and `meta` are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional. `resource_changes` remains available as `{field: [old, new]}`. Added `impersonator_id`. `tpl_message.key` is producer-chosen and `tpl_message` itself is optional. |
-| 1.2 | 2026-07-14 | Removed the `std` wrapper and simplified `tpl_message` handling. Expanded action registry entries. The Groovy library was rewritten to a single `writeAuditLog(Map event)` call with internal connection resolution and strict failure signaling. |
-| 1.1 | 2026-07-14 | Removed `idempotency_key` and all dedup/uniqueness machinery — duplicates from write retries are an accepted, low-cost outcome. Added [Multi-Step Actions And Warnings](#multi-step-actions-and-warnings): one record per step, `flag` action for business-meaningful warnings. Replaced the DLQ/quarantine model with [Write Failure Handling](#write-failure-handling): the library emits critical SigNoz telemetry then throws, and the calling Boomi/OMS process handles the exception. Added `rfid` (context) and `prozip` (scope) to the registry. Compressed the template-key section — `key` is fully derived and carries no independent meaning. Corrected the `orders.order` confirm examples to a human actor identifier. |
-| 1.0 | 2026-07-14 | First versioned edition: baseline audit contract, PII guidance, and business-milestone action conventions. |
+| 2.2 | 2026-07-16 | Documented the canonical `error_code` convention as `<SYSTEM>-<MODULE>-<NNNN>`, with architecture-controlled system/module registries and examples. The stored field type remains `String`/`null`; runtime enforcement of the naming convention is deferred. |
+| 2.1 | 2026-07-14 | **Refined trace correlation, meta ergonomics, and messaging wording** — no field-set changes. `trace_id` now reuses an active OpenTelemetry span's trace ID when one exists (implementing correlation-rules step 2), instead of only ever generating a UUID; it is documented as an opaque correlation string since an OTel trace ID is not UUID-formatted. Write-failure telemetry is now emitted through the real OpenTelemetry Logs SDK (OTLP/HTTP) instead of a hand-built payload, and the exception is also recorded on the active span (`Span.recordException`) when one exists. The Groovy library now auto-defaults `meta` for Boomi callers that omit it entirely (`method: "BOOMI"`, `path: action`, `status` derived from `error_code`) — `meta` stays required in the persisted document (per the production Pydantic model) but is effectively optional for a Boomi caller. Tightened the `tpl_message` explanation: `key` is the template-lookup identifier, `params` are the substitution values the template engine interpolates into it. Fixed lenient date parsing in the Groovy library (`SimpleDateFormat` now runs with `setLenient(false)`, rejecting invalid dates like month 13 instead of silently rolling them over). Added `mo` (manufacturing order) to the `scope` registry as its own business entity distinct from `order`. Clarified that `resource_changes` is expected to stay `null` for Boomi/EDI-loading actions (no natural before/after diff) while remaining available to other modules. |
+| 2.0 | 2026-07-14 | **Realigned with the production `AuditLogEntry` schema** in `oms-backend` (`apps/core/schemas.py`), which had diverged from this contract. Only `time`, `action`, `resource_type`, and `meta` (with `method`/`path`/`status`) are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional. `action` reverts to the full `{resource_type}.{verb}` string (matching production) instead of a bare verb. Reinstated `resource_changes` (`{field: [old, new]}`) and `meta` as real top-level fields. Added the missing `impersonator_id` field. Dropped the mandatory UUID constraint on `resource_id`/`trace_id`/`operation_id` (recommended for internal entities, but external entities should use their own stable identifier) — the backend schema never enforced this. `tpl_message.key` is no longer library-derived; it is a free-form producer-chosen string, matching the production `TplMessage` model, and `tpl_message` itself is optional. |
+| 1.2 | 2026-07-14 | Removed the `std` wrapper — reserved params now sit flat, directly in `tpl_message.params`, alongside module fields. All system-generated identifiers (`trace_id`, `resource_id`, `operation_id`, `parent_operation_id`, and the identifier after `usr:`) are now UUID format. `time` is now a native BSON Date, generated/parsed by the library, not a formatted string. Expanded the action registry with `start`, `complete`, `compress`, `uncompress`, `copy`, `delete`, `update`, `merge`, `sync_to_d365`, `sync_from_d365`, `sync_from_plm`. The Groovy library was rewritten to a single simple `writeAuditLog(Map event)` call: it resolves the MongoDB connection, database, and collection internally; auto-generates `trace_id` (UUID) and `time` (BSON Date) when absent; and always emits critical SigNoz telemetry then throws on any failure — the fail-soft `writeAuditLogSafely` variant was removed. |
+| 1.1 | 2026-07-14 | Removed `idempotency_key` and all dedup/uniqueness machinery — duplicates from write retries are an accepted, low-cost outcome. Added [Multi-Step Actions And Warnings](#multi-step-actions-and-warnings): one record per step, `flag` action for business-meaningful warnings. Replaced the DLQ/quarantine model with [Write Failure Handling](#write-failure-handling): the library emits critical SigNoz telemetry then throws, and the calling Boomi/OMS process handles the exception. Added `rfid` (context) and `prozip` (scope) to the registry. Compressed the template-key section — `key` is fully derived and carries no independent meaning. Corrected the `orders.order` confirm examples to a human `usr:` actor. |
+| 1.0 | 2026-07-14 | First versioned edition: library-derived keys, `std` namespace with mandatory `contract_version`/`tenant_id`, async `parent_operation_id`, coordinated payload lifecycle with `payload_sha256`, PII pseudonymization, and business-milestone actions (`receive`/`load`) replacing `start`/`stop`. |
