@@ -192,10 +192,6 @@ try {
 }
 ```
 
-`BOM-OD-0001` identifies a Boomi-owned (`BOM`) Order-module (`OD`) error; the
-suffix is the stable registry number, and the adjacent message is the
-human-readable reason.
-
 > **On `resource_id` here:** using the plain file name keeps this first
 > example simple, but the contract recommends against it for production use
 > — trading partners resend the same logical interchange under a different
@@ -412,7 +408,11 @@ them, you know `map_and_export` is where nearly all the time went.
   }
   ```
 
-  You still write the `load` record — the *same* milestone
+  `BOM-OD-0001` identifies a Boomi-owned (`BOM`) Order-module (`OD`) error;
+  the suffix is the stable registry number, and the adjacent message is the
+  human-readable reason.
+
+  You still write the `boomi.document.load` record — the *same* milestone
   action as the success path, with the failure carried **only** in
   `error_code` (a failed attempt is still a completed business fact worth
   recording), and you end the process span with the same error.
