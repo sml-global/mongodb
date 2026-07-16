@@ -10,4 +10,5 @@ tfplan
 
 # Other
 docs/operations/command-log.md
+.worktrees/
 *.bak
