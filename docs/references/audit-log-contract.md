@@ -356,19 +356,20 @@ redefined per system namespace.
 | `UR` | User |
 | `PS` | PPS |
 | `RP` | Report |
+| `IE` | Item Explorer |
 
 Canonical format summary:
 
 | Part | Allowed values | Rule |
 |---|---|---|
 | `SYSTEM` | `OMS`, `ART`, `BOM`, `365`, `IPP` | Uppercase system namespace owned by the producing system. |
-| `MODULE` | `PD`, `OD`, `FC`, `JC`, `UR`, `PS`, `RP` | Uppercase module namespace owned by the producing bounded context; the code meanings above are global across all systems. |
+| `MODULE` | `PD`, `OD`, `FC`, `JC`, `UR`, `PS`, `RP`, `IE` | Uppercase module namespace owned by the producing bounded context; the code meanings above are global across all systems. |
 | `NNNN` | `0001`-`9999` | Exactly four digits, zero-padded, allocated independently inside each system/module namespace. |
 
 Exact regex:
 
 ```regex
-^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-(?!0000)\d{4}$
+^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP|IE)-(?!0000)\d{4}$
 ```
 
 Rules:
