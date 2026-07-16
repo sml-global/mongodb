@@ -28,12 +28,12 @@ The segments are:
 |---|---|---|
 | `SYSTEM` | `OMS`, `ART`, `BOM`, `365`, `IPP` | System that owns the error definition |
 | `MODULE` | `PD`, `OD`, `FC`, `JC`, `UR`, `PS`, `RP` | Stable business module |
-| `NNNN` | `0001` through `9999` | Zero-padded sequence allocated independently within each system/module namespace |
+| `NNNN` | `0001-9999` | Zero-padded sequence allocated independently within each system/module namespace |
 
 The validation expression is:
 
 ```regex
-^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-\d{4}$
+^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-(?!0000)\d{4}$
 ```
 
 Codes are uppercase, immutable after publication, and never reused. A central

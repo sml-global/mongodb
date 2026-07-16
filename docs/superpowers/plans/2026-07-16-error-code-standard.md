@@ -46,7 +46,7 @@ Use the canonical format `<SYSTEM>-<MODULE>-<NNNN>`, for example
 | `NNNN` | `0001`-`9999` | Four-digit, zero-padded sequence allocated independently within the system/module namespace. |
 
 Codes must match
-`^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-\d{4}$`.
+`^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-(?!0000)\d{4}$`.
 Once published, a code is immutable and must never be reused. Allocation must
 be recorded in the central error-code registry to prevent duplicates. The
 number does not encode severity, environment, HTTP status, or retryability.
