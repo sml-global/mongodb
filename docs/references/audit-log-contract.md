@@ -368,7 +368,7 @@ Canonical format summary:
 Exact regex:
 
 ```regex
-^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-\d{4}$
+^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-(?!0000)\d{4}$
 ```
 
 Rules:
