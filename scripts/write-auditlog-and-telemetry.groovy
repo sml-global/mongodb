@@ -131,7 +131,7 @@ Map<String, Object> mapBoomiRowToAuditRecord(Map<String, String> raw, String she
     // informational milestone (flag verb, error_code null); an Error row is
     // the process run completing with a failure (complete verb + error_code).
     action: isError ? 'boomi.process.complete' : 'boomi.process.flag',
-    error_code: isError ? 'BOOMI_ON_ERROR' : null,
+    error_code: isError ? 'BOM-OD-0001' : null,
     resource_type: 'boomi.process',
     resource_id: resourceIdValue,
     user_id: source ?: fallbackUserId,

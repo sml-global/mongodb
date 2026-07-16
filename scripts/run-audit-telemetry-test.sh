@@ -212,7 +212,7 @@ spec:
             ip: "192.168.0.132",
             time: "2026-05-26T17:20:45Z",
             action: "boomi.process.complete",
-            error_code: "BOOMI_ON_ERROR",
+            error_code: "BOM-OD-0001",
             resource_type: "boomi.process",
             resource_id: "{23FC181C-7804-41BF-89F0-217BE9041A7C}",
             user_id: "EDI_Eplatform_OrderGrouping_V8",
