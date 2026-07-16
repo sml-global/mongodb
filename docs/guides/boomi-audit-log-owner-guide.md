@@ -195,8 +195,8 @@ language, with a realistic example for each line.
 | **What Kind Of Thing** | ✅ Must fill in | The category of business item this note is about | `orders.order` (this note is about an order) |
 | **Technical Details** | Usually automatic | Where this event came from (an automatic system, not a person, filled this in for you most of the time) | Filled in automatically for you — see note below |
 | **Which One** | Optional, but recommended | The specific item's ID/number | `ORD-2024-001` |
-| **Who Did It** | Optional | For Boomi process writes this is usually `null` (no human actor) |
-| **Did It Work?** | Optional | Leave blank if it succeeded. Fill in a short code if it failed. | Blank = success. `ERR_SOURCE_FILE_INVALID` = a specific failure reason |
+| **Who Did It** | Optional, but recommended | The person or system that did this | `usr:jane.lee` (a person named Jane) or `sys:boomi-service` (an automated system) |
+| **Did It Work?** | Optional | Leave blank if it succeeded. Fill in a short code if it failed. | Blank = success. `BOM-OD-0001` = Boomi, Order module, registered error 0001. Copy the complete code exactly rather than memorizing it. |
 | **Short Message** | Optional | A plain sentence describing what happened, for a human reading the Logbook later | `"Order confirmed by customer service agent"` |
 | **What Changed** | Optional | If something's status changed, what it changed from and to | Status changed from `PENDING` to `CONFIRMED` |
 
@@ -273,9 +273,9 @@ the load failed.
 |---|---|---|
 | What Happened | `load` | "We tried to load an incoming file" |
 | What Kind Of Thing | `boomi.document` | "This note is about an incoming data file" |
-| Which One | `TCHIBO-0001.csv` | "Specifically, file TCHIBO-0001.csv" |
-| Who Did It | `null` | "An automated system did this, not a person" |
-| Did It Work? | `ERR_SOURCE_FILE_INVALID` | "No — here's the specific reason it failed" |
+| Which One | `LOAD-48391` | "Specifically, load number LOAD-48391" |
+| Who Did It | `sys:boomi-service` | "An automated system did this, not a person" |
+| Did It Work? | `BOM-OD-0001` | "No — here's the specific reason it failed" |
 | Short Message | `Source file validation failed` | A plain-English summary |
 
 **What happens next:** the note is written into the Logbook (yes, even
