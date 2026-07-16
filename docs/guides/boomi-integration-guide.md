@@ -132,8 +132,8 @@ exception recorded on the active span if any) before throwing on any failure.
 |---|---|---|
 | `action` | Yes | Action verb from the documented list, e.g. `confirm`, `cancel`, `load`, `receive`. |
 | `resource_type` | Yes | Namespaced noun, e.g. `boomi.document`. |
-| `meta` | Yes | `[boomi_process_id: ..., main_program_code: ..., sub_program_code: ...]` — required Boomi process identity context for audit correlation and reporting. |
-| `error_code` | No | `null` on success, a stable code on failure. Defaults to `null`. |
+| `meta` | Yes\* | `[method: ..., path: ..., status: ...]` — required in the persisted document, but you may omit it entirely: the library then defaults it to `[method: 'BOOMI', path: action, status: (error_code ? 500 : 200)]`. See [`meta` For Non-HTTP Producers](../references/audit-log-contract.md#meta-for-non-http-producers-boomiedi). |
+| `error_code` | No | `null` on success; failure values use `<SYSTEM>-<MODULE>-<NNNN>`. See [Audit Log Contract](../references/audit-log-contract.md#success-and-failure) for the complete rules. Defaults to `null`. |
 | `resource_id` | No | Identifier of the resource — the external system's own ID is preferred for an EDI/Boomi entity (for example a stable load/interchange identifier; see the caveat under the example below), or a UUID for an internally-generated entity. Defaults to `null`. |
 | `user_id` | No | For Boomi process writes this should be `null` (no human actor). |
 | `impersonator_id` | No | ID of a user acting on behalf of another. Boomi processes typically have no impersonator; defaults to `null`. |
@@ -170,7 +170,10 @@ Map event = [
   message: 'EDI order file loaded successfully',
   tpl_message: [
     key: 'boomi.document.loaded',
-    params: [file_name: 'TCHIBO-0001.csv']
+    params: [
+      contract_version: '2.2',
+      tenant_id: 'HK_RETAIL'
+    ]
   ],
   meta: [
     boomi_process_id: 'EU-TC-0001',
@@ -188,6 +191,10 @@ try {
   println "Audit write failed: ${e.message}"
 }
 ```
+
+`BOM-OD-0001` identifies a Boomi-owned (`BOM`) Order-module (`OD`) error; the
+suffix is the stable registry number, and the adjacent message is the
+human-readable reason.
 
 > **On `resource_id` here:** using the plain file name keeps this first
 > example simple, but the contract recommends against it for production use
@@ -394,8 +401,8 @@ them, you know `map_and_export` is where nearly all the time went.
     // withSpan already marked the span failed, recorded the exception on it,
     // and emitted a critical failure log to SigNoz — before re-throwing here.
     BoomiAuditLogLibrary.writeAuditLog([
-      action: 'load',
-      error_code: 'ERR_SOURCE_FILE_INVALID',
+      action: 'boomi.document.load',
+      error_code: 'BOM-OD-0001',
       resource_type: 'boomi.document',
       resource_id: loadId,
       message: 'EDI document load failed: required interchange header segment missing'
