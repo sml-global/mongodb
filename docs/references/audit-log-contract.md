@@ -171,8 +171,8 @@ Pydantic model and this document together.
 | `trace_id` | String/null | No | Correlates records/telemetry for one logical cross-system operation. The library reuses an active OpenTelemetry span's trace ID when one exists, otherwise auto-generates a UUID. It is shared, not unique per record — not a value the caller needs to construct. |
 | `ip` | String/null | No | Trusted originating actor/client IP. Behind proxies, use only an ingress-normalized value or a validated forwarding header. Use `null` when it can't be established reliably. |
 | `time` | Date (BSON) | Yes | Business event time, stored as a native MongoDB Date. Supply an ISO-8601 UTC string (with milliseconds) or omit it; the library parses/generates the Date itself. |
-| `action` | String | Yes | Verb from the controlled registry, for example `confirm`, `cancel`, `load`, `receive`. |
-| `error_code` | String/null | No | `null` means succeeded. A stable non-empty code means failed. Never store exception text or a stack trace here. |
+| `action` | String | Yes | `{resource_type}.{verb}`, for example `orders.order.confirm`. The verb comes from the registry; the full string equals `resource_type` + `.` + verb. |
+| `error_code` | String/null | No | `null` means succeeded. A failure must use a canonical non-null code matching `^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-\\d{4}$`. Never store exception text or a stack trace here; keep human detail in `message`/`tpl_message.params` and technical exception detail in SigNoz. |
 | `resource_type` | String | Yes | Namespaced business noun `{context}.{scope}`, for example `orders.order` or `boomi.document`. |
 | `resource_id` | String/null | No | Identifier of the resource. Recommended: a UUID for an internally-generated OMS entity; for an external entity (an EDI interchange, a D365/PLM record) use that system's own stable identifier rather than inventing a UUID. |
 | `user_id` | String/null | No | Actor identifier. Use `null` when there is no human actor (for example Boomi cron-driven process writes). |
@@ -329,10 +329,31 @@ This contract records completed business attempts only:
 - A failure must never be written with a null `error_code`.
 - A success must never carry an `error_code`.
 
-Use stable uppercase `snake_case` codes such as `ERR_VALIDATION`,
-`ERR_NOT_FOUND`, or `ERR_ERP_REJECTED`. The detailed sanitized explanation can
-appear in `message` and approved `params`; technical exceptions belong in
-SigNoz.
+Canonical error codes use the format `<SYSTEM>-<MODULE>-<NNNN>`:
+
+| Part | Allowed values | Rule |
+|---|---|---|
+| `SYSTEM` | `OMS`, `ART`, `BOM`, `365`, `IPP` | Uppercase system namespace owned by the producing system. |
+| `MODULE` | `PD`, `OD`, `FC`, `JC`, `UR`, `PS`, `RP` | Uppercase module namespace owned by the producing bounded context. |
+| `NNNN` | `0001`-`9999` | Exactly four digits, zero-padded, allocated independently inside each system/module namespace. |
+
+Exact regex:
+
+```regex
+^(OMS|ART|BOM|365|IPP)-(PD|OD|FC|JC|UR|PS|RP)-\d{4}$
+```
+
+Rules:
+
+- codes are uppercase;
+- once published, a code is immutable;
+- codes are never reused;
+- a central registry allocates codes and prevents duplicates;
+- the numeric suffix does not encode severity, environment, HTTP status, or retryability;
+- the error code is separate from the sanitized message, trace/request ID, `meta.status`/HTTP status, and SigNoz exception detail.
+
+The detailed sanitized explanation belongs in `message` and approved
+`tpl_message.params`; technical exceptions belong in SigNoz.
 
 Started, retrying, warning, and progress events are operational telemetry, not
 completed business audit outcomes. Send them to SigNoz rather than inventing
@@ -441,9 +462,48 @@ Parameter names use lowercase `snake_case`. Values must be JSON-serializable.
 Do not repeat fixed top-level fields such as `trace_id`, `action`,
 `resource_type`, `resource_id`, or `user_id` inside `params`.
 
-There is no backend-enforced reserved key list for `tpl_message.params` in the
-current OMS codebase. Keep `params` limited to what the i18n template needs to
-render the OMS-facing message.
+### Reserved Params
+
+These names have contract-wide meaning and sit flat, directly in
+`tpl_message.params`, alongside a module's business fields. A module must not
+reuse a reserved name for a different purpose. Because `tpl_message` itself is
+optional, a record must include `tpl_message` (even with a generic `key`) if
+it needs to carry any of these.
+
+| Param | Type | Required | Rule |
+|---|---|---|---|
+| `contract_version` | String | Recommended | Version of this contract the record was produced against, for example `"2.1"`. |
+| `tenant_id` | String | Recommended | Stable tenant/brand identifier. |
+| `operation_id` | String | Conditional | On an entity event, the `resource_id` of its execution summary. |
+| `parent_operation_id` | String | Conditional | On an async child operation, the parent operation's ID. |
+| `affected_ids` | Array of strings | Conditional | Bounded list of resources in a bulk summary. Omit when it would exceed the size limits. |
+| `affected_count` | Integer | Conditional | Total resources targeted by a bulk operation. Zero or greater. |
+| `success_count` | Integer | Conditional | Entity actions that succeeded. Required on a completed bulk summary. |
+| `failure_count` | Integer | Conditional | Entity actions that failed. Required on a completed bulk summary. |
+| `failed_ids` | Array of strings | Optional | Bounded diagnostic list of failed IDs. Never present a partial list as complete. |
+| `payload_uri` | String | Optional | Reference to an approved encrypted private object for an offloaded payload. |
+| `payload_sha256` | String | Conditional | Hex SHA-256 of the `payload_uri` object; required whenever `payload_uri` is present, for integrity and 404 detection. |
+
+For a completed bulk summary:
+
+- `success_count + failure_count` must equal `affected_count`;
+- `error_code` is `null` only when `failure_count` is zero;
+- a partial result uses a stable non-null code such as `OMS-OD-0001`;
+- `affected_ids` and `failed_ids` contain only string IDs and must not
+  be silently truncated;
+- when an ID list is omitted due to size, `affected_count` and a governed
+  `payload_uri` (with `payload_sha256`) are required;
+- a bounded diagnostic subset must be documented by the module as a subset and
+  must not appear to be the complete list.
+
+Counts summarize the execution; they do not replace the mandatory entity audit
+events.
+
+`payload_uri` must not be a public URL, presigned URL, or URI containing
+credentials or personal data. The referenced object must have access control,
+encryption, and a storage lifetime greater than or equal to the audit retention
+period, and it must be deleted in coordination with the audit record so no
+orphaned payload outlives its index.
 
 ## Data Protection And Size Rules
 
@@ -632,6 +692,70 @@ validation or insertion failure.
 }
 ```
 
+### OMS Partial Order Confirmation
+
+```json
+{
+  "trace_id": "b58bd21c-69dd-4a83-9678-1f13c3d4e58a",
+  "ip": "203.0.113.42",
+  "time": "2026-07-13T10:32:05.117Z",
+  "action": "orders.batch.confirm",
+  "error_code": "OMS-OD-0001",
+  "resource_type": "orders.batch",
+  "resource_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f",
+  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
+  "message": "Bulk order confirmation completed with one partial failure",
+  "tpl_message": {
+    "key": "orders.batch.confirmed_partial",
+    "params": {
+      "contract_version": "2.1",
+      "tenant_id": "HK_RETAIL",
+      "affected_ids": ["ORD-001", "ORD-002", "ORD-003"],
+      "affected_count": 3,
+      "success_count": 2,
+      "failure_count": 1,
+      "failed_ids": ["ORD-003"]
+    }
+  },
+  "meta": {
+    "method": "BOOMI",
+    "path": "orders.batch.confirm",
+    "status": 500
+  }
+}
+```
+
+### OMS Payment Authorization Failed
+
+```json
+{
+  "trace_id": "d75de42e-8bff-4d95-bb79-3b2e5f7a8b9c",
+  "ip": "203.0.113.11",
+  "time": "2026-07-13T10:31:42.884Z",
+  "action": "orders.payment.authorize",
+  "error_code": "OMS-PD-0001",
+  "resource_type": "orders.payment",
+  "resource_id": "PAY-2024-009",
+  "user_id": "usr:018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
+  "message": "Payment authorization failed for the order",
+  "tpl_message": {
+    "key": "orders.payment.authorize_failed",
+    "params": {
+      "contract_version": "2.1",
+      "tenant_id": "HK_RETAIL",
+      "order_no": "ORD-2024-001",
+      "authorization_attempt": 1,
+      "failure_reason": "Card issuer declined the transaction"
+    }
+  },
+  "meta": {
+    "method": "BOOMI",
+    "path": "orders.payment.authorize",
+    "status": 500
+  }
+}
+```
+
 ### Boomi EDI Document Load Failed
 
 ```json
@@ -639,8 +763,8 @@ validation or insertion failure.
   "trace_id": "a47ac10b-58cc-4372-a567-0e02b2c3d479",
   "ip": null,
   "time": "2026-07-13T10:31:12.004Z",
-  "action": "load",
-  "error_code": "ERR_SOURCE_FILE_INVALID",
+  "action": "boomi.document.load",
+  "error_code": "BOM-OD-0001",
   "resource_type": "boomi.document",
   "resource_id": "TCHIBO-0001.csv",
   "user_id": null,
@@ -683,66 +807,37 @@ present — a future Boomi module doing something more state-transition-like
 (for example correcting a previously-loaded record's field) can use it — but
 today's EDI-loading modules are expected to leave it `null`.
 
-### Bulk Order Confirmation Summary
+### 365 Return Retry Failed
 
-The operation has its own generated identity. This summary is accompanied by
-one entity event per order; it does not replace them.
-
-```json
-{
-  "trace_id": "b58bd21c-69dd-4a83-9678-1f13c3d4e58a",
-  "ip": "203.0.113.42",
-  "time": "2026-07-13T10:32:05.117Z",
-  "action": "confirm",
-  "error_code": null,
-  "resource_type": "orders.batch",
-  "resource_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f",
-  "user_id": "018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
-  "message": "Bulk order confirmation completed",
-  "tpl_message": {
-    "key": "orders.batch.confirmed",
-    "params": {
-      "affected_ids": ["ORD-001", "ORD-002", "ORD-003"],
-      "affected_count": 3,
-      "success_count": 3,
-      "failure_count": 0
-    }
-  },
-  "meta": {
-    "boomi_process_id": "PROC-BATCH-CONFIRM-001",
-    "main_program_code": "ORDERS",
-    "sub_program_code": "BULK_CONFIRM"
-  }
-}
-```
-
-One associated entity event remains directly queryable by the existing order
-timeline:
+This example uses the `365-RP-0001` namespace for a 365-owned retryable
+processing failure. The completed attempt is audited here; the technical retry
+detail itself still belongs in SigNoz.
 
 ```json
 {
-  "trace_id": "b58bd21c-69dd-4a83-9678-1f13c3d4e58a",
-  "ip": "203.0.113.42",
-  "time": "2026-07-13T10:32:05.118Z",
-  "action": "confirm",
-  "error_code": null,
-  "resource_type": "orders.order",
-  "resource_id": "ORD-001",
-  "user_id": "018f2e4a-6b3c-7d21-9a4f-5e6b7c8d9e0f",
-  "message": "Order confirmed by bulk operation",
+  "trace_id": "c64cd31d-7aee-4c94-a968-2a1d4e5f6a7b",
+  "ip": "198.51.100.24",
+  "time": "2026-07-13T10:33:18.442Z",
+  "action": "returns.process.retry",
+  "error_code": "365-RP-0001",
+  "resource_type": "returns.process",
+  "resource_id": "RET-77881",
+  "user_id": "sys:d365-integration",
+  "message": "365 return retry failed after downstream validation",
   "tpl_message": {
-    "key": "orders.order.confirmed",
+    "key": "returns.process.retry_failed",
     "params": {
-      "operation_id": "f4d5e6f7-a8b9-4c1d-9e2f-5a6b7c8d9e1f"
+      "contract_version": "2.1",
+      "tenant_id": "HK_RETAIL",
+      "return_no": "RET-77881",
+      "retry_attempt": 2,
+      "failure_reason": "Downstream validation rejected the return line"
     }
   },
-  "resource_changes": {
-    "status": ["PENDING", "CONFIRMED"]
-  },
   "meta": {
-    "boomi_process_id": "PROC-BATCH-CONFIRM-001",
-    "main_program_code": "ORDERS",
-    "sub_program_code": "BULK_CONFIRM"
+    "method": "D365",
+    "path": "returns.process.retry",
+    "status": 500
   }
 }
 ```
