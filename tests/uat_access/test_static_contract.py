@@ -18,6 +18,55 @@ ACCESS_ANALYZER_RESOURCE_PATTERN = re.compile(
     r'^\s*resource\s+"aws_accessanalyzer_analyzer"\s+"[^"]+"\s*\{',
     re.MULTILINE,
 )
+EKS_ACCESS_ENTRY_RESOURCE_PATTERN = re.compile(
+    r'^resource\s+"aws_eks_access_entry"\s+"workforce"\s*\{'
+    r'(?:(?!^\}).)*?^\s*for_each\s*=\s*local\.principals\s*$'
+    r'(?:(?!^\}).)*?^\s*cluster_name\s*=\s*var\.eks_cluster_name\s*$'
+    r'(?:(?!^\}).)*?^\s*principal_arn\s*=\s*each\.value\s*$'
+    r'(?:(?!^\}).)*?^\}',
+    re.MULTILINE | re.DOTALL,
+)
+EKS_CLUSTER_POLICY_RESOURCE_PATTERN = re.compile(
+    r'^resource\s+"aws_eks_access_policy_association"\s+"cluster_admin"\s*\{'
+    r'(?:(?!^\}).)*?^\s*for_each\s*=\s*toset\(\['
+    r'\s*"infra_admin",\s*"application_developer",?\s*\]\)\s*$'
+    r'(?:(?!^\}).)*?^\s*policy_arn\s*=\s*'
+    r'"arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"\s*$'
+    r'(?:(?!^\}).)*?^\s*type\s*=\s*"cluster"\s*$'
+    r'(?:(?!^\}).)*?^\}',
+    re.MULTILINE | re.DOTALL,
+)
+EKS_BOOMI_POLICY_RESOURCE_PATTERN = re.compile(
+    r'^resource\s+"aws_eks_access_policy_association"\s+"boomi_admin"\s*\{'
+    r'(?:(?!^\}).)*?^\s*principal_arn\s*=\s*'
+    r'aws_eks_access_entry\.workforce\["boomi_admin"\]\.principal_arn\s*$'
+    r'(?:(?!^\}).)*?^\s*policy_arn\s*=\s*'
+    r'"arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy"\s*$'
+    r'(?:(?!^\}).)*?^\s*type\s*=\s*"namespace"\s*$'
+    r'(?:(?!^\}).)*?^\s*namespaces\s*=\s*\[var\.boomi_namespace\]\s*$'
+    r'(?:(?!^\}).)*?^\}',
+    re.MULTILINE | re.DOTALL,
+)
+PRINCIPAL_MAP_PATTERN = re.compile(
+    r'^\s*principals\s*=\s*\{(?P<body>.*?)^\s*\}',
+    re.MULTILINE | re.DOTALL,
+)
+PRINCIPAL_KEY_PATTERN = re.compile(r'^\s*([a-z][a-z0-9_]*)\s*=', re.MULTILINE)
+EKS_ACCESS_ENTRY_DECLARATION_PATTERN = re.compile(
+    r'^resource\s+"aws_eks_access_entry"\s+"[^"]+"\s*\{', re.MULTILINE
+)
+EKS_POLICY_ASSOCIATION_DECLARATION_PATTERN = re.compile(
+    r'^resource\s+"aws_eks_access_policy_association"\s+"[^"]+"\s*\{',
+    re.MULTILINE,
+)
+ROLE_ARN_VARIABLE_PATTERN = re.compile(
+    r'^variable\s+"([a-z][a-z0-9_]*_role_arn)"\s*\{', re.MULTILINE
+)
+EXPECTED_PERMISSION_SET_PREFIXES = {
+    "infra_admin_role_arn": "AWSReservedSSO_UATInfraAdminEA_",
+    "application_developer_role_arn": "AWSReservedSSO_UATApplicationDeveloper_",
+    "boomi_admin_role_arn": "AWSReservedSSO_UATBoomiAdmin_",
+}
 
 
 def terraform_text(root_name):
@@ -40,6 +89,58 @@ class StaticContractTests(unittest.TestCase):
 
         self.assertRegex(main_tf, ACCESS_ANALYZER_RESOURCE_PATTERN)
 
+    def test_eks_access_defines_exact_workforce_principals(self):
+        main_tf = (TERRAFORM_ROOT / "eks-access" / "main.tf").read_text(
+            encoding="utf-8"
+        )
+        principal_map = PRINCIPAL_MAP_PATTERN.search(main_tf)
+
+        self.assertIsNotNone(principal_map)
+        self.assertEqual(
+            set(PRINCIPAL_KEY_PATTERN.findall(principal_map.group("body"))),
+            {"infra_admin", "application_developer", "boomi_admin"},
+        )
+        self.assertNotIn("process_owner", terraform_text("eks-access"))
+
+    def test_eks_access_defines_entry_and_policy_resource_shapes(self):
+        main_tf = (TERRAFORM_ROOT / "eks-access" / "main.tf").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(len(EKS_ACCESS_ENTRY_DECLARATION_PATTERN.findall(main_tf)), 1)
+        self.assertEqual(
+            len(EKS_POLICY_ASSOCIATION_DECLARATION_PATTERN.findall(main_tf)), 2
+        )
+        self.assertRegex(main_tf, EKS_ACCESS_ENTRY_RESOURCE_PATTERN)
+        self.assertRegex(main_tf, EKS_CLUSTER_POLICY_RESOURCE_PATTERN)
+        self.assertRegex(main_tf, EKS_BOOMI_POLICY_RESOURCE_PATTERN)
+
+    def test_eks_access_defines_exact_role_arn_inputs(self):
+        variables_tf = (TERRAFORM_ROOT / "eks-access" / "variables.tf").read_text(
+            encoding="utf-8"
+        )
+        uat_tfvars = (TERRAFORM_ROOT / "eks-access" / "uat.tfvars").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            set(ROLE_ARN_VARIABLE_PATTERN.findall(variables_tf)),
+            set(EXPECTED_PERMISSION_SET_PREFIXES),
+        )
+        expected_arn_prefix = (
+            "^arn:aws:iam::672172129937:role/aws-reserved/"
+            "sso\\\\.amazonaws\\\\.com/[^/]+/"
+        )
+        for variable_name, permission_set_prefix in (
+            EXPECTED_PERMISSION_SET_PREFIXES.items()
+        ):
+            with self.subTest(variable=variable_name):
+                self.assertIn(
+                    f'"{expected_arn_prefix}{permission_set_prefix}[A-Za-z0-9]+$"',
+                    variables_tf,
+                )
+                self.assertNotIn(variable_name, uat_tfvars)
+
     def test_access_roots_exclude_identity_center_and_iam_users(self):
         for root_name in ("access-governance", "eks-access"):
             root = TERRAFORM_ROOT / root_name
@@ -51,6 +152,9 @@ class StaticContractTests(unittest.TestCase):
                 for token in FORBIDDEN_RESOURCE_TOKENS:
                     self.assertNotIn(token, contents)
                 self.assertNotIn(DEV_ACCOUNT_ID, contents)
+                self.assertNotRegex(contents, r'(?m)^\s*(?:data|resource)\s+"aws_iam_')
+                self.assertNotIn("aws-auth", contents)
+                self.assertNotIn("saml", contents.lower())
 
     def test_access_roots_use_only_approved_account_id(self):
         for root_name in ("access-governance", "eks-access"):
