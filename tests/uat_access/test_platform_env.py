@@ -121,6 +121,20 @@ exit 64
             "jsonpath={.contexts[0].context.cluster}\n",
         )
 
+    def test_dev_kubernetes_cluster_reference_fails_closed(self):
+        dev_reference = (
+            "arn:aws:eks:ap-east-1:815402439714:cluster/"
+            "EKS-boomi-runtime-cluster"
+        )
+        result = self.run_shell(
+            f'source "{PLATFORM_ENV}" && load_platform_env uat && verify_kubernetes_context',
+            context=dev_reference,
+            cluster_reference=dev_reference,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not target UAT", result.stderr)
+
     def test_same_account_wrong_region_cluster_reference_fails_closed(self):
         result = self.run_shell(
             f'source "{PLATFORM_ENV}" && load_platform_env uat && verify_kubernetes_context',
