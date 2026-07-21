@@ -59,6 +59,9 @@ EKS_POLICY_ASSOCIATION_DECLARATION_PATTERN = re.compile(
     r'^resource\s+"aws_eks_access_policy_association"\s+"[^"]+"\s*\{',
     re.MULTILINE,
 )
+OUTPUT_DECLARATION_PATTERN = re.compile(
+    r'^output\s+"(?P<name>[a-z][a-z0-9_]*)"\s*\{', re.MULTILINE
+)
 ROLE_ARN_VARIABLE_PATTERN = re.compile(
     r'^variable\s+"([a-z][a-z0-9_]*_role_arn)"\s*\{', re.MULTILINE
 )
@@ -79,6 +82,20 @@ def terraform_text(root_name):
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.suffix in {".tf", ".tfvars"}
     )
+
+
+def output_blocks(contents):
+    declarations = list(OUTPUT_DECLARATION_PATTERN.finditer(contents))
+    return {
+        declaration.group("name"): contents[
+            declaration.start() : (
+                declarations[index + 1].start()
+                if index + 1 < len(declarations)
+                else len(contents)
+            )
+        ]
+        for index, declaration in enumerate(declarations)
+    }
 
 
 class StaticContractTests(unittest.TestCase):
@@ -140,6 +157,43 @@ class StaticContractTests(unittest.TestCase):
                     variables_tf,
                 )
                 self.assertNotIn(variable_name, uat_tfvars)
+
+    def test_eks_access_uat_tfvars_targets_runtime_cluster_and_namespace(self):
+        uat_tfvars = (TERRAFORM_ROOT / "eks-access" / "uat.tfvars").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertRegex(
+            uat_tfvars,
+            re.compile(
+                r'^\s*eks_cluster_name\s*=\s*"EKS-boomi-runtime-cluster"\s*$',
+                re.MULTILINE,
+            ),
+        )
+        self.assertRegex(
+            uat_tfvars,
+            re.compile(
+                r'^\s*boomi_namespace\s*=\s*"boomi-uat"\s*$', re.MULTILINE
+            ),
+        )
+
+    def test_eks_access_outputs_only_entry_and_policy_association_arns(self):
+        outputs_tf = (TERRAFORM_ROOT / "eks-access" / "outputs.tf").read_text(
+            encoding="utf-8"
+        )
+        output_names = [
+            match.group("name")
+            for match in OUTPUT_DECLARATION_PATTERN.finditer(outputs_tf)
+        ]
+        outputs = output_blocks(outputs_tf)
+
+        self.assertEqual(
+            output_names, ["access_entry_arns", "associated_policy_arns"]
+        )
+        self.assertRegex(outputs["access_entry_arns"], r"\.access_entry_arn\b")
+        self.assertNotRegex(outputs["access_entry_arns"], r"\.association_arn\b")
+        self.assertRegex(outputs["associated_policy_arns"], r"\.association_arn\b")
+        self.assertNotRegex(outputs["associated_policy_arns"], r"\.policy_arn\b")
 
     def test_access_roots_exclude_identity_center_and_iam_users(self):
         for root_name in ("access-governance", "eks-access"):
