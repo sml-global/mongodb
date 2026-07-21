@@ -119,7 +119,7 @@ verify_kubernetes_context() {
 
   expected_cluster_reference="arn:aws:eks:${AWS_REGION}:${EXPECTED_AWS_ACCOUNT_ID}:cluster/${EKS_CLUSTER_NAME}"
   if [[ "$active_cluster_reference" != "$expected_cluster_reference" ]]; then
-    _platform_env_error "current Kubernetes context '${current_context}' resolves to '${active_cluster_reference}'; expected '${expected_cluster_reference}' for UAT"
+    _platform_env_error "current Kubernetes context '${current_context}' does not target UAT; resolves to '${active_cluster_reference}'; expected '${expected_cluster_reference}'"
     return 1
   fi
 }
