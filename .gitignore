@@ -12,3 +12,7 @@ tfplan
 docs/operations/command-log.md
 .worktrees/
 *.bak
+
+# Local UAT workforce principal input and generated EKS access values
+config/environments/uat-workforce-principals.json
+platform-prerequisites/terraform/eks-access/generated.auto.tfvars.json
