@@ -62,6 +62,9 @@ EKS_POLICY_ASSOCIATION_DECLARATION_PATTERN = re.compile(
 OUTPUT_DECLARATION_PATTERN = re.compile(
     r'^output\s+"(?P<name>[a-z][a-z0-9_]*)"\s*\{', re.MULTILINE
 )
+TOP_LEVEL_ASSIGNMENT_PATTERN = re.compile(
+    r'^[ \t]*(?P<name>[a-z][a-z0-9_]*)[ \t]*=', re.MULTILINE
+)
 ROLE_ARN_VARIABLE_PATTERN = re.compile(
     r'^variable\s+"([a-z][a-z0-9_]*_role_arn)"\s*\{', re.MULTILINE
 )
@@ -163,19 +166,30 @@ class StaticContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertRegex(
-            uat_tfvars,
-            re.compile(
-                r'^\s*eks_cluster_name\s*=\s*"EKS-boomi-runtime-cluster"\s*$',
-                re.MULTILINE,
-            ),
+        self.assertEqual(
+            set(TOP_LEVEL_ASSIGNMENT_PATTERN.findall(uat_tfvars)),
+            {
+                "aws_region",
+                "expected_account_id",
+                "eks_cluster_name",
+                "boomi_namespace",
+            },
         )
-        self.assertRegex(
-            uat_tfvars,
-            re.compile(
-                r'^\s*boomi_namespace\s*=\s*"boomi-uat"\s*$', re.MULTILINE
-            ),
-        )
+        expected_values = {
+            "aws_region": "ap-east-1",
+            "expected_account_id": "672172129937",
+            "eks_cluster_name": "EKS-boomi-runtime-cluster",
+            "boomi_namespace": "boomi-uat",
+        }
+        for variable_name, expected_value in expected_values.items():
+            with self.subTest(variable=variable_name):
+                self.assertRegex(
+                    uat_tfvars,
+                    re.compile(
+                        rf'^\s*{variable_name}\s*=\s*"{expected_value}"\s*$',
+                        re.MULTILINE,
+                    ),
+                )
 
     def test_eks_access_outputs_only_entry_and_policy_association_arns(self):
         outputs_tf = (TERRAFORM_ROOT / "eks-access" / "outputs.tf").read_text(
@@ -192,8 +206,8 @@ class StaticContractTests(unittest.TestCase):
         )
         self.assertRegex(outputs["access_entry_arns"], r"\.access_entry_arn\b")
         self.assertNotRegex(outputs["access_entry_arns"], r"\.association_arn\b")
-        self.assertRegex(outputs["associated_policy_arns"], r"\.association_arn\b")
-        self.assertNotRegex(outputs["associated_policy_arns"], r"\.policy_arn\b")
+        self.assertRegex(outputs["associated_policy_arns"], r"\.policy_arn\b")
+        self.assertNotRegex(outputs["associated_policy_arns"], r"\.association_arn\b")
 
     def test_access_roots_exclude_identity_center_and_iam_users(self):
         for root_name in ("access-governance", "eks-access"):
