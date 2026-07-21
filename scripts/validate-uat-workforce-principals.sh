@@ -20,6 +20,10 @@ fail() {
   exit 1
 }
 
+reject_directory_output() {
+  [[ ! -d "$OUTPUT_PATH" ]] || fail "output path must not be a directory or resolve to a directory; choose a regular file path: $OUTPUT_PATH"
+}
+
 cleanup() {
   if [[ -n "$TEMP_OUTPUT" ]]; then
     rm -f "$TEMP_OUTPUT"
@@ -59,6 +63,7 @@ OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
 OUTPUT_NAME="$(basename "$OUTPUT_PATH")"
 [[ -d "$OUTPUT_DIR" ]] || fail "output directory does not exist: $OUTPUT_DIR"
 [[ -w "$OUTPUT_DIR" ]] || fail "output directory is not writable: $OUTPUT_DIR"
+reject_directory_output
 
 if ! jq -e '
   type == "object" and
@@ -122,6 +127,7 @@ fi
 
 jq empty "$TEMP_OUTPUT" || fail "generated output is not valid JSON."
 chmod 0600 "$TEMP_OUTPUT" || fail "could not set output permissions to 0600."
+reject_directory_output
 mv -f "$TEMP_OUTPUT" "$OUTPUT_PATH" || fail "could not atomically replace output: $OUTPUT_PATH"
 TEMP_OUTPUT=""
 
