@@ -101,6 +101,8 @@ verify_aws_identity() {
 
 verify_kubernetes_context() {
   local current_context
+  local active_cluster_reference
+  local expected_cluster_reference
 
   _validate_required_platform_env || return 1
   _validate_uat_contract || return 1
@@ -110,8 +112,14 @@ verify_kubernetes_context() {
     return 1
   fi
 
-  if [[ "$current_context" != *"$EXPECTED_AWS_ACCOUNT_ID"* || "$current_context" != *"$EKS_CLUSTER_NAME"* ]]; then
-    _platform_env_error "current Kubernetes context '${current_context}' does not target UAT account ${EXPECTED_AWS_ACCOUNT_ID} cluster ${EKS_CLUSTER_NAME}"
+  if ! active_cluster_reference="$(kubectl config view --minify -o 'jsonpath={.contexts[0].context.cluster}')"; then
+    _platform_env_error "unable to resolve the active cluster reference for Kubernetes context '${current_context}'"
+    return 1
+  fi
+
+  expected_cluster_reference="arn:aws:eks:${AWS_REGION}:${EXPECTED_AWS_ACCOUNT_ID}:cluster/${EKS_CLUSTER_NAME}"
+  if [[ "$active_cluster_reference" != "$expected_cluster_reference" ]]; then
+    _platform_env_error "current Kubernetes context '${current_context}' resolves to '${active_cluster_reference}'; expected '${expected_cluster_reference}' for UAT"
     return 1
   fi
 }
