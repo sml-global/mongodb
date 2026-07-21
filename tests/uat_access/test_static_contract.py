@@ -14,6 +14,10 @@ FORBIDDEN_RESOURCE_TOKENS = (
     "aws_iam_access_key",
 )
 ACCOUNT_ID_PATTERN = re.compile(r"(?<!\d)\d{12}(?!\d)")
+ACCESS_ANALYZER_RESOURCE_PATTERN = re.compile(
+    r'^\s*resource\s+"aws_accessanalyzer_analyzer"\s+"[^"]+"\s*\{',
+    re.MULTILINE,
+)
 
 
 def terraform_text(root_name):
@@ -34,7 +38,7 @@ class StaticContractTests(unittest.TestCase):
             TERRAFORM_ROOT / "access-governance" / "main.tf"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("aws_accessanalyzer_analyzer", main_tf)
+        self.assertRegex(main_tf, ACCESS_ANALYZER_RESOURCE_PATTERN)
 
     def test_access_roots_exclude_identity_center_and_iam_users(self):
         for root_name in ("access-governance", "eks-access"):
