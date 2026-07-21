@@ -36,6 +36,10 @@ if [[ "$#" -eq 2 && "$1" == "config" && "$2" == "current-context" ]]; then
   printf '%s\\n' "$MOCK_KUBE_CONTEXT"
   exit 0
 fi
+if [[ "$#" -eq 5 && "$1" == "config" && "$2" == "view" && "$3" == "--minify" && "$4" == "-o" && "$5" == 'jsonpath={.contexts[0].context.cluster}' ]]; then
+    printf '%s\\n' "$MOCK_KUBE_CLUSTER_REFERENCE"
+    exit 0
+fi
 printf 'unsupported mock kubectl invocation: %s\\n' "$*" >&2
 exit 64
 """,
@@ -49,12 +53,19 @@ exit 64
         mock_path.write_text(content)
         mock_path.chmod(mock_path.stat().st_mode | stat.S_IXUSR)
 
-    def run_shell(self, command, account="672172129937", context=""):
+    def run_shell(
+        self,
+        command,
+        account="672172129937",
+        context="",
+        cluster_reference="",
+    ):
         env = os.environ.copy()
         env.update({
             "PATH": f"{self.mock_bin}:{env['PATH']}",
             "MOCK_AWS_ACCOUNT_ID": account,
             "MOCK_KUBE_CONTEXT": context,
+            "MOCK_KUBE_CLUSTER_REFERENCE": cluster_reference,
             "MOCK_COMMAND_LOG": str(self.command_log),
         })
         return subprocess.run(
@@ -91,17 +102,112 @@ exit 64
         self.assertIn("accepts only uat", result.stderr)
         self.assertFalse(self.command_log.exists())
 
-    def test_dev_kubernetes_context_fails_closed(self):
+    def test_canonical_uat_kubernetes_context_succeeds(self):
+        canonical_reference = (
+            "arn:aws:eks:ap-east-1:672172129937:cluster/"
+            "EKS-boomi-runtime-cluster"
+        )
+        result = self.run_shell(
+            f'source "{PLATFORM_ENV}" && load_platform_env uat && verify_kubernetes_context',
+            context=canonical_reference,
+            cluster_reference=canonical_reference,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.command_log.read_text(),
+            "kubectl config current-context\n"
+            "kubectl config view --minify -o "
+            "jsonpath={.contexts[0].context.cluster}\n",
+        )
+
+    def test_same_account_wrong_region_cluster_reference_fails_closed(self):
         result = self.run_shell(
             f'source "{PLATFORM_ENV}" && load_platform_env uat && verify_kubernetes_context',
             context=(
-                "arn:aws:eks:ap-east-1:815402439714:cluster/"
+                "arn:aws:eks:us-east-1:672172129937:cluster/"
+                "EKS-boomi-runtime-cluster"
+            ),
+            cluster_reference=(
+                "arn:aws:eks:us-east-1:672172129937:cluster/"
                 "EKS-boomi-runtime-cluster"
             ),
         )
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("does not target UAT", result.stderr)
+        self.assertIn(
+            "expected 'arn:aws:eks:ap-east-1:672172129937:cluster/"
+            "EKS-boomi-runtime-cluster'",
+            result.stderr,
+        )
+        self.assertEqual(
+            self.command_log.read_text(),
+            "kubectl config current-context\n"
+            "kubectl config view --minify -o "
+            "jsonpath={.contexts[0].context.cluster}\n",
+        )
+
+    def test_lookalike_cluster_reference_fails_closed(self):
+        result = self.run_shell(
+            f'source "{PLATFORM_ENV}" && load_platform_env uat && verify_kubernetes_context',
+            context="uat-admin",
+            cluster_reference=(
+                "arn:aws:eks:ap-east-1:672172129937:cluster/"
+                "EKS-boomi-runtime-cluster-lookalike"
+            ),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "expected 'arn:aws:eks:ap-east-1:672172129937:cluster/"
+            "EKS-boomi-runtime-cluster'",
+            result.stderr,
+        )
+        self.assertEqual(
+            self.command_log.read_text(),
+            "kubectl config current-context\n"
+            "kubectl config view --minify -o "
+            "jsonpath={.contexts[0].context.cluster}\n",
+        )
+
+    def test_alias_context_succeeds_when_cluster_reference_is_canonical(self):
+        canonical_reference = (
+            "arn:aws:eks:ap-east-1:672172129937:cluster/"
+            "EKS-boomi-runtime-cluster"
+        )
+        result = self.run_shell(
+            f'source "{PLATFORM_ENV}" && load_platform_env uat && verify_kubernetes_context',
+            context="uat-admin-alias",
+            cluster_reference=canonical_reference,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.command_log.read_text(),
+            "kubectl config current-context\n"
+            "kubectl config view --minify -o "
+            "jsonpath={.contexts[0].context.cluster}\n",
+        )
+
+    def test_alias_context_fails_when_cluster_reference_is_not_canonical(self):
+        result = self.run_shell(
+            f'source "{PLATFORM_ENV}" && load_platform_env uat && verify_kubernetes_context',
+            context="uat-admin-alias",
+            cluster_reference="local-uat-cluster",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "expected 'arn:aws:eks:ap-east-1:672172129937:cluster/"
+            "EKS-boomi-runtime-cluster'",
+            result.stderr,
+        )
+        self.assertEqual(
+            self.command_log.read_text(),
+            "kubectl config current-context\n"
+            "kubectl config view --minify -o "
+            "jsonpath={.contexts[0].context.cluster}\n",
+        )
 
 
 if __name__ == "__main__":
