@@ -11,16 +11,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_ENV = REPO_ROOT / "scripts" / "lib" / "platform-env.sh"
 PROVISION_UAT_ACCESS = REPO_ROOT / "scripts" / "provision-uat-access.sh"
-PRINCIPAL_INPUT = (
-    REPO_ROOT / "config" / "environments" / "uat-workforce-principals.json"
-)
-GENERATED_TFVARS = (
-    REPO_ROOT
-    / "platform-prerequisites"
-    / "terraform"
-    / "eks-access"
-    / "generated.auto.tfvars.json"
-)
 
 
 class PlatformEnvironmentTests(unittest.TestCase):
@@ -240,16 +230,15 @@ exit 64
 class UATAccessProvisioningTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.mock_bin = Path(self.temp_dir.name) / "bin"
+        self.temp_path = Path(self.temp_dir.name)
+        self.mock_bin = self.temp_path / "bin"
         self.mock_bin.mkdir()
-        self.command_log = Path(self.temp_dir.name) / "commands.log"
+        self.command_log = self.temp_path / "commands.log"
+        self.principal_input = self.temp_path / "uat-workforce-principals.json"
+        self.generated_tfvars = self.temp_path / "generated.auto.tfvars.json"
         self.real_jq = shutil.which("jq")
         if self.real_jq is None:
             self.skipTest("jq is required by the offline principal validator")
-        self.saved_files = {
-            path: path.read_bytes() if path.exists() else None
-            for path in (PRINCIPAL_INPUT, GENERATED_TFVARS)
-        }
         self._write_mock(
             "aws",
             """#!/usr/bin/env bash
@@ -257,6 +246,9 @@ printf 'aws %s\n' "$*" >> "$MOCK_COMMAND_LOG"
 if [[ "$1 $2" == "sts get-caller-identity" ]]; then
   printf '%s\n' "$MOCK_AWS_ACCOUNT_ID"
   exit 0
+fi
+if [[ "$1 $2" == "s3api head-bucket" && "${MOCK_BACKEND_FAIL:-false}" == "true" ]]; then
+    exit 42
 fi
 if [[ "$1 $2" == "s3api head-bucket" || "$1 $2" == "s3api head-object" ]]; then
   exit 0
@@ -284,7 +276,46 @@ exit 64
             "terraform",
             """#!/usr/bin/env bash
 printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
-if [[ " $* " == *" plan "* && "${MOCK_TERRAFORM_FAIL_PLAN:-false}" == "true" ]]; then
+chdir=""
+command=""
+plan_output=""
+arguments=("$@")
+for ((index = 0; index < ${#arguments[@]}; index++)); do
+    argument="${arguments[$index]}"
+    case "$argument" in
+        -chdir=*) chdir="${argument#-chdir=}" ;;
+        fmt|validate|plan|apply) command="$argument" ;;
+        -out=*) plan_output="${argument#-out=}" ;;
+        -out)
+            ((index += 1))
+            plan_output="${arguments[$index]:-}"
+            ;;
+    esac
+done
+if [[ "$command" == "plan" ]]; then
+    [[ -n "$chdir" && -n "$plan_output" ]] || exit 64
+    if [[ "$plan_output" != /* ]]; then
+        plan_output="$chdir/$plan_output"
+    fi
+    : > "$plan_output"
+fi
+if [[ "$command" == "apply" ]]; then
+    apply_inputs=()
+    found_apply="false"
+    for argument in "${arguments[@]}"; do
+        if [[ "$found_apply" == "true" && "$argument" != -* ]]; then
+            apply_inputs+=("$argument")
+        fi
+        if [[ "$argument" == "apply" ]]; then
+            found_apply="true"
+        fi
+    done
+    [[ ${#apply_inputs[@]} -eq 1 ]] || exit 65
+    [[ "${apply_inputs[0]}" == "$MOCK_EXPECTED_PLAN_NAME" ]] || exit 65
+    [[ -f "$chdir/${apply_inputs[0]}" ]] || exit 66
+    [[ ! -e "$MOCK_GENERATED_TFVARS" ]] || exit 67
+fi
+if [[ "$command" == "${MOCK_TERRAFORM_FAIL_COMMAND:-}" ]]; then
     exit 42
 fi
 exit 0
@@ -307,11 +338,6 @@ exec "$REAL_JQ" "$@"
         self.write_valid_principals()
 
     def tearDown(self):
-        for path, content in self.saved_files.items():
-            if content is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.write_bytes(content)
         self.temp_dir.cleanup()
 
     def _write_mock(self, name, content):
@@ -327,7 +353,7 @@ exec "$REAL_JQ" "$@"
         )
 
     def write_valid_principals(self):
-        PRINCIPAL_INPUT.write_text(json.dumps({
+        self.principal_input.write_text(json.dumps({
             "infra_admin_role_arn": self.role_arn("UATInfraAdminEA", "111111"),
             "application_developer_role_arn": self.role_arn(
                 "UATApplicationDeveloper", "222222"
@@ -342,27 +368,37 @@ exec "$REAL_JQ" "$@"
         self,
         *arguments,
         account="672172129937",
-        terraform_fail_plan=False,
+        stdin="yes\nyes\n",
+        backend_fail=False,
+        valid_kubernetes_context=True,
+        terraform_fail_command="",
     ):
         canonical_context = (
             "arn:aws:eks:ap-east-1:672172129937:cluster/"
             "EKS-boomi-runtime-cluster"
         )
+        kubernetes_context = canonical_context if valid_kubernetes_context else "wrong-context"
         env = os.environ.copy()
         env.update({
             "PATH": f"{self.mock_bin}:{env['PATH']}",
             "MOCK_AWS_ACCOUNT_ID": account,
-            "MOCK_KUBE_CONTEXT": canonical_context,
-            "MOCK_KUBE_CLUSTER_REFERENCE": canonical_context,
+            "MOCK_KUBE_CONTEXT": kubernetes_context,
+            "MOCK_KUBE_CLUSTER_REFERENCE": kubernetes_context,
             "MOCK_COMMAND_LOG": str(self.command_log),
-            "MOCK_TERRAFORM_FAIL_PLAN": str(terraform_fail_plan).lower(),
+            "MOCK_BACKEND_FAIL": str(backend_fail).lower(),
+            "MOCK_TERRAFORM_FAIL_COMMAND": terraform_fail_command,
+            "MOCK_EXPECTED_PLAN_NAME": "uat-access.tfplan",
+            "MOCK_GENERATED_TFVARS": str(self.generated_tfvars),
             "REAL_JQ": self.real_jq,
+            "UAT_WORKFORCE_PRINCIPALS_INPUT": str(self.principal_input),
+            "UAT_EKS_TFVARS_OUTPUT": str(self.generated_tfvars),
         })
         return subprocess.run(
             ["bash", str(PROVISION_UAT_ACCESS), *arguments],
             cwd=REPO_ROOT,
             env=env,
             text=True,
+            input=stdin,
             capture_output=True,
         )
 
@@ -407,13 +443,17 @@ exec "$REAL_JQ" "$@"
             " plan -input=false -out=uat-access.tfplan",
             " apply -input=false uat-access.tfplan",
         ])
+        self.assertIn("Apply saved Terraform plan for access-governance", result.stdout)
+        self.assertFalse(
+            (REPO_ROOT / "platform-prerequisites" / "terraform" / "access-governance" / "uat-access.tfplan").exists()
+        )
         self.assert_no_forbidden_invocations()
 
     def test_eks_access_orders_all_preflight_before_backend_and_terraform(self):
         result = self.run_provision("eks-access")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(GENERATED_TFVARS.exists())
+        self.assertFalse(self.generated_tfvars.exists())
         self.assert_ordered_fragments([
             "aws sts get-caller-identity --query Account --output text",
             "kubectl config current-context",
@@ -425,6 +465,10 @@ exec "$REAL_JQ" "$@"
             " plan -input=false -out=uat-access.tfplan",
             " apply -input=false uat-access.tfplan",
         ])
+        self.assertIn("Apply saved Terraform plan for eks-access", result.stdout)
+        self.assertFalse(
+            (REPO_ROOT / "platform-prerequisites" / "terraform" / "eks-access" / "uat-access.tfplan").exists()
+        )
         self.assert_no_forbidden_invocations()
 
     def test_all_completes_governance_before_eks_access(self):
@@ -448,23 +492,67 @@ exec "$REAL_JQ" "$@"
         self.assertLess(eks_identity, eks_apply)
 
     def test_auto_approve_applies_saved_plans_without_invalid_flag(self):
-        result = self.run_provision("all", "--auto-approve")
+        result = self.run_provision("all", "--auto-approve", stdin="")
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Type 'yes'", result.stdout)
         apply_lines = [line for line in self.command_lines() if " apply " in line]
         self.assertEqual(len(apply_lines), 2, apply_lines)
         self.assertTrue(all(line.endswith("apply -input=false uat-access.tfplan") for line in apply_lines))
         self.assertTrue(all("auto-approve" not in line for line in apply_lines))
 
-    def test_failed_plan_is_never_applied(self):
-        result = self.run_provision("governance", terraform_fail_plan=True)
+    def test_approval_rejection_and_eof_never_apply_saved_plan(self):
+        for stdin in ("no\n", ""):
+            with self.subTest(stdin=stdin):
+                self.command_log.unlink(missing_ok=True)
+                result = self.run_provision("governance", stdin=stdin)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(" plan ", "\n".join(self.command_lines()))
+                self.assertFalse(any(" apply " in line for line in self.command_lines()))
+
+    def test_failed_plan_is_never_applied_and_cleans_generated_output(self):
+        result = self.run_provision(
+            "eks-access",
+            terraform_fail_command="plan",
+        )
 
         self.assertEqual(result.returncode, 42)
         self.assertTrue(any(" plan " in line for line in self.command_lines()))
         self.assertFalse(any(" apply " in line for line in self.command_lines()))
+        self.assertFalse(self.generated_tfvars.exists())
+        self.assertFalse(
+            (REPO_ROOT / "platform-prerequisites" / "terraform" / "eks-access" / "uat-access.tfplan").exists()
+        )
+
+    def test_failed_apply_cleans_saved_plan_and_generated_output(self):
+        result = self.run_provision(
+            "eks-access",
+            terraform_fail_command="apply",
+        )
+
+        self.assertEqual(result.returncode, 42)
+        self.assertTrue(any(" apply " in line for line in self.command_lines()))
+        self.assertFalse(self.generated_tfvars.exists())
+        self.assertFalse(
+            (REPO_ROOT / "platform-prerequisites" / "terraform" / "eks-access" / "uat-access.tfplan").exists()
+        )
+
+    def test_generated_output_is_cleaned_for_pre_apply_failures(self):
+        for failure, kwargs in (
+            ("backend", {"backend_fail": True}),
+            ("fmt", {"terraform_fail_command": "fmt"}),
+            ("validate", {"terraform_fail_command": "validate"}),
+        ):
+            with self.subTest(failure=failure):
+                self.command_log.unlink(missing_ok=True)
+                result = self.run_provision("eks-access", **kwargs)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.generated_tfvars.exists())
 
     def test_wrong_account_causes_no_backend_terraform_or_generated_output(self):
-        GENERATED_TFVARS.write_text("stale output")
+        self.generated_tfvars.write_text("stale output")
 
         result = self.run_provision("eks-access", account="815402439714")
 
@@ -474,27 +562,41 @@ exec "$REAL_JQ" "$@"
             self.command_lines(),
             ["aws sts get-caller-identity --query Account --output text"],
         )
-        self.assertEqual(GENERATED_TFVARS.read_text(), "stale output")
+        self.assertEqual(self.generated_tfvars.read_text(), "stale output")
+
+    def test_wrong_context_causes_no_generated_output_mutation(self):
+        self.generated_tfvars.write_text("stale output")
+
+        result = self.run_provision(
+            "eks-access",
+            valid_kubernetes_context=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.generated_tfvars.read_text(), "stale output")
+        self.assertFalse(any("jq " in line for line in self.command_lines()))
+        self.assertFalse(any("s3api" in line for line in self.command_lines()))
+        self.assertFalse(any(line.startswith("terraform ") for line in self.command_lines()))
 
     def test_missing_principals_removes_stale_output_and_stops_before_backend(self):
-        PRINCIPAL_INPUT.unlink()
-        GENERATED_TFVARS.write_text("stale output")
+        self.principal_input.unlink()
+        self.generated_tfvars.write_text("stale output")
 
         result = self.run_provision("eks-access")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(GENERATED_TFVARS.exists())
+        self.assertFalse(self.generated_tfvars.exists())
         self.assertFalse(any("s3api" in line for line in self.command_lines()))
         self.assertFalse(any(line.startswith("terraform ") for line in self.command_lines()))
 
     def test_invalid_principals_remove_stale_output_and_stop_before_backend(self):
-        PRINCIPAL_INPUT.write_text("{}")
-        GENERATED_TFVARS.write_text("stale output")
+        self.principal_input.write_text("{}")
+        self.generated_tfvars.write_text("stale output")
 
         result = self.run_provision("eks-access")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(GENERATED_TFVARS.exists())
+        self.assertFalse(self.generated_tfvars.exists())
         self.assertFalse(any("s3api" in line for line in self.command_lines()))
         self.assertFalse(any(line.startswith("terraform ") for line in self.command_lines()))
 

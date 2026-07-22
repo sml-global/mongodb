@@ -11,8 +11,8 @@ Scopes:
   eks-access  Apply UAT EKS workforce access after offline principal validation.
   all         Apply governance, then EKS access.
 
-The optional --auto-approve flag is accepted for CLI consistency. Terraform
-applies the previously saved plan, which requires no additional approval flag.
+Without --auto-approve, each saved plan requires an exact 'yes' confirmation.
+Terraform applies the saved plan without an additional approval flag.
 EOF
 }
 
@@ -40,18 +40,27 @@ if [[ $# -eq 2 && "$2" != "--auto-approve" ]]; then
   fail "unknown argument: $2"
 fi
 
+AUTO_APPROVE="false"
+if [[ $# -eq 2 ]]; then
+  AUTO_APPROVE="true"
+fi
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLATFORM_ENV_LIBRARY="$ROOT_DIR/scripts/lib/platform-env.sh"
 BACKEND_BOOTSTRAP="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
 PRINCIPAL_VALIDATOR="$ROOT_DIR/scripts/validate-uat-workforce-principals.sh"
-PRINCIPAL_INPUT="$ROOT_DIR/config/environments/uat-workforce-principals.json"
-EKS_TFVARS="$ROOT_DIR/platform-prerequisites/terraform/eks-access/generated.auto.tfvars.json"
+PRINCIPAL_INPUT="${UAT_WORKFORCE_PRINCIPALS_INPUT:-$ROOT_DIR/config/environments/uat-workforce-principals.json}"
+EKS_TFVARS="${UAT_EKS_TFVARS_OUTPUT:-$ROOT_DIR/platform-prerequisites/terraform/eks-access/generated.auto.tfvars.json}"
 PLAN_NAME="uat-access.tfplan"
 ACTIVE_PLAN=""
+ACTIVE_GENERATED_TFVARS=""
 
 cleanup() {
   if [[ -n "$ACTIVE_PLAN" ]]; then
     rm -f "$ACTIVE_PLAN"
+  fi
+  if [[ -n "$ACTIVE_GENERATED_TFVARS" ]]; then
+    rm -f "$ACTIVE_GENERATED_TFVARS"
   fi
 }
 trap cleanup EXIT
@@ -73,8 +82,30 @@ bootstrap_backend() {
     --key "$state_key"
 }
 
+remove_generated_tfvars() {
+  if [[ -n "$ACTIVE_GENERATED_TFVARS" ]]; then
+    rm -f "$ACTIVE_GENERATED_TFVARS"
+    ACTIVE_GENERATED_TFVARS=""
+  fi
+}
+
+confirm_apply() {
+  local root_name="$1"
+  local response=""
+
+  if [[ "$AUTO_APPROVE" == "true" ]]; then
+    return 0
+  fi
+
+  printf "Apply saved Terraform plan for %s? Type 'yes' to continue: " "$root_name"
+  if ! IFS= read -r response || [[ "$response" != "yes" ]]; then
+    fail "apply aborted for Terraform root: $root_name"
+  fi
+}
+
 run_terraform() {
   local tf_dir="$1"
+  local root_name="${tf_dir##*/}"
   local plan_path="$tf_dir/$PLAN_NAME"
 
   ACTIVE_PLAN="$plan_path"
@@ -82,6 +113,8 @@ run_terraform() {
   terraform -chdir="$tf_dir" fmt -check -recursive
   terraform -chdir="$tf_dir" validate
   terraform -chdir="$tf_dir" plan -input=false -out="$PLAN_NAME" -var-file=uat.tfvars
+  remove_generated_tfvars
+  confirm_apply "$root_name"
   terraform -chdir="$tf_dir" apply -input=false "$PLAN_NAME"
   rm -f "$plan_path"
   ACTIVE_PLAN=""
@@ -101,6 +134,7 @@ provision_eks_access() {
   verify_aws_identity
   verify_kubernetes_context
 
+  ACTIVE_GENERATED_TFVARS="$EKS_TFVARS"
   rm -f "$EKS_TFVARS"
   [[ -r "$PRINCIPAL_INPUT" ]] || fail "UAT workforce principal input is not readable: $PRINCIPAL_INPUT"
   [[ -x "$PRINCIPAL_VALIDATOR" ]] || fail "principal validator is not executable: $PRINCIPAL_VALIDATOR"
