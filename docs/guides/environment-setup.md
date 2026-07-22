@@ -398,6 +398,55 @@ aws configure list-profiles
 Get-Content "$env:USERPROFILE\.aws\config"
 ```
 
+## UAT Workforce Access Prerequisite
+
+This section is the workstation handoff for the UAT access foundation. It does
+not replace the existing dev setup above or authorize changes to dev.
+
+The workflow may mutate only UAT account `672172129937` in `ap-east-1`, for
+cluster `EKS-boomi-runtime-cluster` and namespace `boomi-uat`. Dev account
+`815402439714` is evidence/read-only and must not be mutated by this workflow.
+No other AWS account may be accessed.
+
+AWS IAM Identity Center is an external prerequisite owned by the authorized
+identity owner. This repository neither manages nor inspects Identity Center.
+There is no SAML-role or IAM-user fallback. Before an operator runs the UAT
+workflow, the identity owner must create and assign exactly this initial
+contract:
+
+| Permission set | Initial members | EKS access created by this foundation |
+|---|---|---|
+| `UATInfraAdminEA` | `frankcheong` | Cluster administrator |
+| `UATApplicationDeveloper` | `yczhang`, `xavierlee`, `jiaweima` | Cluster administrator |
+| `UATBoomiAdmin` | `JesusRosario`, `jacklee` | Administrator in `boomi-uat` only |
+| `UATBoomiProcessOwner` | None | No EKS access entry |
+
+After those assignments produce IAM roles, the identity owner supplies the
+four role ARNs in the gitignored file
+`config/environments/uat-workforce-principals.json`. The offline validator
+requires exactly the following four keys. The values below are deliberately
+non-runnable placeholders; replace each `<...>` segment with the corresponding
+value supplied by the identity owner, including the actual generated suffix.
+
+```json
+{
+  "infra_admin_role_arn": "arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/<identity-center-region>/AWSReservedSSO_UATInfraAdminEA_<generated-suffix>",
+  "application_developer_role_arn": "arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/<identity-center-region>/AWSReservedSSO_UATApplicationDeveloper_<generated-suffix>",
+  "boomi_admin_role_arn": "arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/<identity-center-region>/AWSReservedSSO_UATBoomiAdmin_<generated-suffix>",
+  "process_owner_role_arn": "arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/<identity-center-region>/AWSReservedSSO_UATBoomiProcessOwner_<generated-suffix>"
+}
+```
+
+Do not commit this input or invent role ARN suffixes. The validator checks the
+exact keys, UAT account, permission-set prefixes, role shape, and uniqueness
+without calling AWS. Continue with the
+[UAT Access Foundation Procedure](operator-runbook.md#uat-access-foundation-procedure)
+only after the identity owner has supplied all four ARNs and deployment
+authorization exists. The approved boundaries are defined in the
+[UAT Workforce Access Design](../superpowers/specs/2026-07-21-uat-workforce-access-design.md)
+and implemented by the
+[UAT Access Foundation Plan](../superpowers/plans/2026-07-21-uat-access-foundation.md).
+
 ## Configure Kubernetes Access
 
 ### Update Kubeconfig

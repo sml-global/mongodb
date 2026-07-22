@@ -26,6 +26,9 @@ Boomi-facing guides deliberately contain none of it.
 | Full reprovision sequence (new cluster/day-1) | [Operator Runbook](guides/operator-runbook.md#standard-operator-procedure) | Exact order: all -> signoz -> signoz-observability -> smoke verification |
 | First-time workstation setup | [Environment Setup](guides/environment-setup.md) | Tools, AWS SSO, Kubernetes access, preflight checks |
 | Provisioning commands and troubleshooting | [Operator Runbook](guides/operator-runbook.md) | Step-by-step, safety gates, runbook commands, error resolution |
+| UAT workforce access handoff | [Environment Setup § UAT Workforce Access Prerequisite](guides/environment-setup.md#uat-workforce-access-prerequisite) | External Identity Center contract, exact ARN input, UAT-only account boundary |
+| UAT access orchestration | [Operator Runbook § UAT Access Foundation Procedure](guides/operator-runbook.md#uat-access-foundation-procedure) | Authorized Access Analyzer and EKS access order, approvals, and generated-file lifecycle |
+| UAT access verification status | [Verification Commands § UAT Access Foundation Verification](references/verification-commands.md#uat-access-foundation-verification) | Static implementation status and future authorized execution checklist |
 | SigNoz first-login actions | [Operator Runbook § SigNoz First-Login Checklist](guides/operator-runbook.md#step-7a1-signoz-first-login-checklist-do-this-in-order) | What to click (and skip) in the SigNoz dashboard after signup |
 | Ongoing day-2 operations | [Operator Runbook](guides/operator-runbook.md#day-2-operations-ongoing-maintenance) | Recurring health checks, routine maintenance, trigger-based actions |
 | Component inventory (what/why/how) | [Component Catalog](references/component-catalog.md) | Every platform component: purpose, value, dependencies |
@@ -37,6 +40,17 @@ Boomi-facing guides deliberately contain none of it.
 | Rollback, recovery, credential rotation | [Recovery Procedures](references/recovery-procedures.md) | What to do when things go wrong |
 | Embedded defaults and constants | [Configuration Catalog](operations/dev-configuration-catalog.md) | Source of truth for hardcoded values |
 | Infrastructure/MongoDB/PostgreSQL monitoring | [Architect Reference § Infrastructure And Database Monitoring](guides/architect-reference.md#infrastructure-and-database-monitoring) | What SigNoz monitors today across K8s, MongoDB, and PostgreSQL/Aurora (CloudWatch import), with coverage and verification notes |
+
+## Approved UAT Access Package
+
+- [UAT Workforce Access Design](superpowers/specs/2026-07-21-uat-workforce-access-design.md)
+  defines the approved workforce, EKS, and deferred authorization boundaries.
+- [UAT Access Foundation Implementation Plan](superpowers/plans/2026-07-21-uat-access-foundation.md)
+  defines the account-guarded implementation and external identity handoff.
+
+Use the operational links above for execution. The approved documents are the
+decision record and implementation scope, not substitutes for the setup,
+runbook, or verification procedures.
 
 ## Why Provisioning Is Split
 

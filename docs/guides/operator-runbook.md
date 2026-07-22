@@ -39,6 +39,78 @@ This shortcut does not replace plan review. Stop before apply if the generated p
 
 ---
 
+## UAT Access Foundation Procedure
+
+This procedure is separate from, and does not replace, the existing dev data
+layer procedures in this runbook. It is limited to UAT account `672172129937`,
+region `ap-east-1`, cluster `EKS-boomi-runtime-cluster`, and namespace
+`boomi-uat`. Dev account `815402439714` is read-only evidence for this work and
+must not be mutated; no other AWS account may be accessed.
+
+Before starting:
+
+1. Obtain deployment authorization and authenticate directly to UAT.
+2. Confirm the external Identity Center owner has completed the permission-set
+  and membership handoff in
+  [Environment Setup](environment-setup.md#uat-workforce-access-prerequisite).
+  Repository automation does not manage or inspect Identity Center, and SAML
+  roles or IAM users must not be substituted.
+3. Save all four owner-supplied role ARNs at the documented gitignored JSON
+  path. Do not fabricate ARN suffixes.
+4. For EKS access, select a Kubernetes context for the exact UAT account and
+  cluster. The entrypoint verifies both AWS identity and context before it
+  initializes the backend.
+
+The offline check may be run before any authorized AWS operation:
+
+```bash
+bash scripts/validate-uat-workforce-principals.sh \
+  --input config/environments/uat-workforce-principals.json \
+  --output platform-prerequisites/terraform/eks-access/generated.auto.tfvars.json
+```
+
+The generated tfvars contains only the three roles that receive EKS entries:
+Infra Admin / EA and Application Developer receive cluster administration;
+Boomi Admin receives administrator access only in `boomi-uat`. Process Owner
+is validated as part of the external role contract but receives no EKS entry.
+The file is local and gitignored. Remove it after a standalone validation; the
+orchestration entrypoint regenerates it for EKS planning and removes it after
+the plan is saved or whenever the command exits.
+
+After reviewing the approved
+[UAT Access Foundation Plan](../superpowers/plans/2026-07-21-uat-access-foundation.md),
+run governance before EKS access:
+
+```bash
+bash scripts/provision-uat-access.sh governance
+bash scripts/provision-uat-access.sh eks-access
+```
+
+`governance` verifies the UAT identity before backend initialization, then
+plans the UAT account Access Analyzer. `eks-access` additionally verifies the
+UAT Kubernetes context and validates the external principal file before
+backend initialization, then plans exactly three EKS access entries and policy
+associations. Use these repository entrypoints only; do not run raw Terraform
+or reuse existing dev provisioning scripts for this UAT workflow.
+
+By default, each saved plan is applied only after the operator reviews it and
+types the exact response `yes`. Stop instead of approving if the plan differs
+from the authorized UAT scope. The optional `--auto-approve` flag skips that
+explicit repository prompt and is appropriate only for a separately reviewed,
+known-good rerun under deployment authorization; it does not relax account,
+context, validation, or ordering gates. To run both authorized scopes in the
+same order, use `bash scripts/provision-uat-access.sh all` with the same
+approval rules.
+
+This foundation provisions only UAT Access Analyzer governance and the stated
+EKS workforce entries. Database authorization, workload and CSI identity,
+cross-account S3 access, and Boomi Platform authorization are deferred to later
+work packages. It does not provision or imply any of those capabilities. See
+[UAT Access Foundation Verification](../references/verification-commands.md#uat-access-foundation-verification)
+for the current evidence status and future authorized checks.
+
+---
+
 ## Provisioning Choices
 
 | Goal | When To Use It | Command |

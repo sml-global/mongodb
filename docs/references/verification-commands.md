@@ -45,6 +45,54 @@ scripts/verify-platform-health.sh
 
 ---
 
+## UAT Access Foundation Verification
+
+**Current status:** development/static implementation only. The repository
+defines offline principal validation, UAT account guards, Access Analyzer, and
+three EKS access entries. This documentation does not claim that any UAT
+validation, plan, apply, or live access check has been run.
+
+The commands below are a future authorized execution checklist, not evidence
+of current deployment. Operators may run them only after the external Identity
+Center owner supplies all four role ARNs at the JSON path documented in
+[Environment Setup](../guides/environment-setup.md#uat-workforce-access-prerequisite)
+and explicit deployment authorization exists. The workflow may mutate only
+UAT account `672172129937`; dev account `815402439714` is evidence/read-only,
+and no other AWS account may be accessed.
+
+First, validate the owner-supplied contract offline. This command does not call
+AWS:
+
+```bash
+bash scripts/validate-uat-workforce-principals.sh \
+  --input config/environments/uat-workforce-principals.json \
+  --output platform-prerequisites/terraform/eks-access/generated.auto.tfvars.json
+```
+
+After direct UAT authentication, deployment authorization, and plan review,
+operators may use the guarded entrypoint in the required order:
+
+```bash
+bash scripts/provision-uat-access.sh governance
+bash scripts/provision-uat-access.sh eks-access
+```
+
+The expected authorized result is one UAT account Access Analyzer plus exactly
+three EKS entries: cluster administration for Infra Admin / EA and Application
+Developer, and namespace administration in `boomi-uat` for Boomi Admin. Boomi
+Process Owner must have no EKS entry. Record the UAT account ID, validated
+principal ARNs, plan summaries, allowed and denied boundary results, and
+timestamps as execution evidence; do not commit principal input, generated
+tfvars, or saved plans.
+
+These checks do not verify database access, workload or CSI identity,
+cross-account S3 access, or Boomi Platform authorization. Those controls are
+deferred to later work packages. Follow the full ordering, approval, and
+generated-file lifecycle in the
+[UAT Access Foundation Procedure](../guides/operator-runbook.md#uat-access-foundation-procedure).
+
+---
+
 ## Preflight (Environment Readiness)
 
 ```bash
