@@ -117,22 +117,6 @@ context, validation, or ordering gates. To run both authorized scopes in the
 same order, use `bash scripts/provision-uat-access.sh all` with the same
 approval rules.
 
-The entrypoint records its PID and script name in `.uat-access.lock/owner` while
-it holds the local orchestration lock. Abrupt termination can leave this lock
-directory behind. Never remove it during an active run. For stale-lock
-recovery, first ensure no `provision-uat-access.sh` process is running and no
-authorized operator is actively provisioning UAT access. Then inspect the
-owner metadata before removing the lock:
-
-```bash
-cat .uat-access.lock/owner
-rm -rf .uat-access.lock
-```
-
-Run `rm -rf .uat-access.lock` only after both checks confirm the lock is stale.
-Normal completion and handled failures remove the owned lock automatically;
-lock contention reports readable owner metadata but never deletes the lock.
-
 This foundation provisions only UAT Access Analyzer governance and the stated
 EKS workforce entries. Database authorization, workload and CSI identity,
 cross-account S3 access, and Boomi Platform authorization are deferred to later

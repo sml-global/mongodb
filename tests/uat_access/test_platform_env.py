@@ -236,7 +236,6 @@ class UATAccessProvisioningTests(unittest.TestCase):
         self.mock_bin = self.temp_path / "bin"
         self.mock_bin.mkdir()
         self.command_log = self.temp_path / "commands.log"
-        self.lock_owner_snapshot = self.temp_path / "lock-owner.snapshot"
         self.provision_uat_access = (
             self.test_root / "scripts" / "provision-uat-access.sh"
         )
@@ -294,11 +293,6 @@ if [[ "$1 $2" == "eks describe-cluster" ]]; then
     fi
     printf '%s\n' "$MOCK_EKS_AUTH_MODE"
     exit 0
-fi
-if [[ "$1 $2" == "s3api head-bucket" && -r "$MOCK_LOCK_OWNER" ]]; then
-    while IFS= read -r owner_line; do
-        printf '%s\n' "$owner_line"
-    done < "$MOCK_LOCK_OWNER" > "$MOCK_LOCK_OWNER_SNAPSHOT"
 fi
 if [[ "$1 $2" == "s3api head-bucket" && "${MOCK_BACKEND_FAIL:-false}" == "true" ]]; then
     exit 42
@@ -475,8 +469,6 @@ exec "$REAL_JQ" "$@"
             "MOCK_RM_CALL_FILE": str(rm_call_file),
             "MOCK_RM_FAIL_ON_CALL": str(rm_fail_on_call),
             "MOCK_GENERATED_TFVARS": str(self.generated_tfvars),
-            "MOCK_LOCK_OWNER": str(self.lock_dir / "owner"),
-            "MOCK_LOCK_OWNER_SNAPSHOT": str(self.lock_owner_snapshot),
             "REAL_JQ": self.real_jq,
             "REAL_RM": shutil.which("rm"),
         })
@@ -644,10 +636,9 @@ exec "$REAL_JQ" "$@"
 
         self.assertEqual(result.returncode, 42)
         rm_lines = [line for line in self.command_lines() if line.startswith("rm ")]
-        self.assertEqual(len(rm_lines), 5, rm_lines)
-        self.assertRegex(rm_lines[-3], re.escape(str(self.eks_root)) + r"/uat-access\.\d+\.tfplan")
-        self.assertIn(str(self.generated_tfvars), rm_lines[-2])
-        self.assertEqual(rm_lines[-1], f"rm -f {self.lock_dir / 'owner'}")
+        self.assertEqual(len(rm_lines), 4, rm_lines)
+        self.assertRegex(rm_lines[-2], re.escape(str(self.eks_root)) + r"/uat-access\.\d+\.tfplan")
+        self.assertIn(str(self.generated_tfvars), rm_lines[-1])
         self.assertFalse(self.generated_tfvars.exists())
 
     def test_successful_run_fails_when_cleanup_fails_and_attempts_all_cleanup(self):
@@ -659,10 +650,9 @@ exec "$REAL_JQ" "$@"
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(any(" apply " in line for line in self.command_lines()))
         rm_lines = [line for line in self.command_lines() if line.startswith("rm ")]
-        self.assertEqual(len(rm_lines), 7, rm_lines)
-        self.assertRegex(rm_lines[-3], re.escape(str(self.eks_root)) + r"/uat-access\.\d+\.tfplan")
-        self.assertIn(str(self.generated_tfvars), rm_lines[-2])
-        self.assertEqual(rm_lines[-1], f"rm -f {self.lock_dir / 'owner'}")
+        self.assertEqual(len(rm_lines), 6, rm_lines)
+        self.assertRegex(rm_lines[-2], re.escape(str(self.eks_root)) + r"/uat-access\.\d+\.tfplan")
+        self.assertIn(str(self.generated_tfvars), rm_lines[-1])
         self.assertEqual(list(self.eks_root.glob("*.tfplan")), [])
         self.assertFalse(self.generated_tfvars.exists())
         self.assertFalse(self.lock_dir.exists())
@@ -837,34 +827,21 @@ exec "$REAL_JQ" "$@"
 
     def test_lock_contention_stops_before_backend_or_mutation(self):
         self.lock_dir.mkdir()
-        owner = self.lock_dir / "owner"
-        owner.write_text("pid=12345\nscript=provision-uat-access.sh\n")
         self.generated_tfvars.write_text("stale output")
 
         result = self.run_provision("eks-access")
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("another UAT access orchestration is running", result.stderr)
-        self.assertIn("lock owner metadata:", result.stderr)
-        self.assertIn("pid=12345", result.stderr)
-        self.assertIn("script=provision-uat-access.sh", result.stderr)
         self.assertEqual(self.generated_tfvars.read_text(), "stale output")
         self.assertFalse(any("jq " in line for line in self.command_lines()))
         self.assertFalse(any("s3api" in line for line in self.command_lines()))
         self.assertTrue(self.lock_dir.exists())
-        self.assertEqual(
-            owner.read_text(),
-            "pid=12345\nscript=provision-uat-access.sh\n",
-        )
 
-    def test_owned_lock_metadata_is_written_then_removed_after_backend_failure(self):
+    def test_lock_is_removed_after_backend_failure(self):
         result = self.run_provision("governance", backend_fail=True)
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertRegex(
-            self.lock_owner_snapshot.read_text(),
-            r"^pid=\d+\nscript=provision-uat-access\.sh\n$",
-        )
         self.assertFalse(self.lock_dir.exists())
 
     def test_missing_principals_removes_stale_output_and_stops_before_backend(self):
