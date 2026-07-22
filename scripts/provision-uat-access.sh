@@ -69,6 +69,7 @@ EKS_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/eks-access"
 EKS_TFVARS="$EKS_TF_DIR/generated.auto.tfvars.json"
 [[ "$PRINCIPAL_INPUT" != "$EKS_TFVARS" ]] || fail "principal input and generated Terraform output must be distinct"
 LOCK_DIR="$ROOT_DIR/.uat-access.lock"
+LOCK_OWNER_FILE="$LOCK_DIR/owner"
 LOCK_HELD="false"
 ACTIVE_PLAN=""
 ACTIVE_GENERATED_TFVARS=""
@@ -88,6 +89,8 @@ cleanup() {
     [[ $? -eq 0 ]] || cleanup_status=1
   fi
   if [[ "$LOCK_HELD" == "true" ]]; then
+    rm -f "$LOCK_OWNER_FILE"
+    [[ $? -eq 0 ]] || cleanup_status=1
     rmdir "$LOCK_DIR"
     [[ $? -eq 0 ]] || cleanup_status=1
   fi
@@ -104,11 +107,26 @@ trap cleanup EXIT
 source "$PLATFORM_ENV_LIBRARY"
 load_platform_env uat
 
+report_lock_owner() {
+  local owner_line=""
+
+  if [[ -r "$LOCK_OWNER_FILE" ]]; then
+    printf 'lock owner metadata:\n' >&2
+    while IFS= read -r owner_line || [[ -n "$owner_line" ]]; do
+      printf '  %s\n' "$owner_line" >&2
+    done < "$LOCK_OWNER_FILE"
+  fi
+}
+
 acquire_lock() {
   if ! mkdir "$LOCK_DIR"; then
+    report_lock_owner
     fail "another UAT access orchestration is running: $LOCK_DIR"
   fi
   LOCK_HELD="true"
+  if ! printf 'pid=%s\nscript=%s\n' "$$" "${0##*/}" > "$LOCK_OWNER_FILE"; then
+    fail "could not write UAT access lock owner metadata: $LOCK_OWNER_FILE"
+  fi
 }
 
 bootstrap_backend() {
