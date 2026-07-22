@@ -49,17 +49,21 @@ must not be mutated; no other AWS account may be accessed.
 
 Before starting:
 
-1. Obtain deployment authorization and authenticate directly to UAT.
-2. Confirm the external Identity Center owner has completed the permission-set
+1. Obtain deployment authorization.
+2. Complete the exact
+  [Authorized UAT Workstation Setup](environment-setup.md#authorized-uat-workstation-setup).
+  Before proceeding, `AWS_PROFILE` must be `oms-uat`, `AWS_REGION` must be
+  `ap-east-1`, STS must report account `672172129937`, and the selected
+  Kubernetes context must resolve to the canonical UAT cluster ARN. The
+  entrypoint verifies both AWS identity and context before backend
+  initialization.
+3. Confirm the external Identity Center owner has completed the permission-set
   and membership handoff in
   [Environment Setup](environment-setup.md#uat-workforce-access-prerequisite).
-  Repository automation does not manage or inspect Identity Center, and SAML
-  roles or IAM users must not be substituted.
-3. Save all four owner-supplied role ARNs at the documented gitignored JSON
+  Repository automation does not manage or inspect Identity Center. There is
+  no SAML or IAM-user fallback.
+4. Save all four owner-supplied role ARNs at the documented gitignored JSON
   path. Do not fabricate ARN suffixes.
-4. For EKS access, select a Kubernetes context for the exact UAT account and
-  cluster. The entrypoint verifies both AWS identity and context before it
-  initializes the backend.
 
 The offline check may be run before any authorized AWS operation:
 

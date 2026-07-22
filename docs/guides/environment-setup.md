@@ -421,6 +421,45 @@ contract:
 | `UATBoomiAdmin` | `JesusRosario`, `jacklee` | Administrator in `boomi-uat` only |
 | `UATBoomiProcessOwner` | None | No EKS access entry |
 
+### Authorized UAT Workstation Setup
+
+On an authorized UAT workstation, create a clearly separated UAT profile:
+
+```bash
+aws configure sso --profile oms-uat
+```
+
+The authorized Identity Center owner supplies the portal start URL, Identity
+Center session region, UAT account assignment, and approved permission set.
+Do not invent these values. At the account prompt, choose UAT account
+`672172129937`; at the role prompt, choose the approved role for the operator.
+Set the default workload region to `ap-east-1`.
+
+Authenticate and make that profile and workload region active:
+
+```bash
+aws sso login --profile oms-uat
+export AWS_PROFILE=oms-uat
+export AWS_REGION=ap-east-1
+aws sts get-caller-identity --query Account --output text
+```
+
+The final command must print exactly `672172129937`. Stop immediately if it
+prints another account or fails; do not continue with UAT setup or
+provisioning.
+
+Create or select the UAT kubeconfig context, then display the selected context:
+
+```bash
+aws eks update-kubeconfig --region ap-east-1 --name EKS-boomi-runtime-cluster --profile oms-uat
+kubectl config current-context
+```
+
+Do not run mutating `kubectl` commands during access setup. A context alias is
+acceptable, but the platform environment helper resolves the selected
+context's cluster reference and requires the canonical value
+`arn:aws:eks:ap-east-1:672172129937:cluster/EKS-boomi-runtime-cluster`.
+
 After those assignments produce IAM roles, the identity owner supplies the
 four role ARNs in the gitignored file
 `config/environments/uat-workforce-principals.json`. The offline validator
@@ -509,7 +548,12 @@ Test-Path platform-prerequisites/terraform/mongodb
 
 ## Run Preflight Verification
 
-After completing setup, run the unified preflight check:
+**DEV ONLY:** The unified preflight below belongs to the existing dev workflow.
+Do not use it as UAT access-foundation verification. For UAT, continue to the
+[UAT Access Foundation Procedure](operator-runbook.md#uat-access-foundation-procedure)
+and its linked UAT verification section.
+
+After completing dev setup, run the unified preflight check:
 
 ```bash
 scripts/verify-platform-health.sh --preflight
