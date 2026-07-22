@@ -18,49 +18,15 @@ ACCESS_ANALYZER_RESOURCE_PATTERN = re.compile(
     r'^\s*resource\s+"aws_accessanalyzer_analyzer"\s+"[^"]+"\s*\{',
     re.MULTILINE,
 )
-EKS_ACCESS_ENTRY_RESOURCE_PATTERN = re.compile(
-    r'^resource\s+"aws_eks_access_entry"\s+"workforce"\s*\{'
-    r'(?:(?!^\}).)*?^\s*for_each\s*=\s*local\.principals\s*$'
-    r'(?:(?!^\}).)*?^\s*cluster_name\s*=\s*var\.eks_cluster_name\s*$'
-    r'(?:(?!^\}).)*?^\s*principal_arn\s*=\s*each\.value\s*$'
-    r'(?:(?!^\}).)*?^\}',
-    re.MULTILINE | re.DOTALL,
-)
-EKS_CLUSTER_POLICY_RESOURCE_PATTERN = re.compile(
-    r'^resource\s+"aws_eks_access_policy_association"\s+"cluster_admin"\s*\{'
-    r'(?:(?!^\}).)*?^\s*for_each\s*=\s*toset\(\['
-    r'\s*"infra_admin",\s*"application_developer",?\s*\]\)\s*$'
-    r'(?:(?!^\}).)*?^\s*policy_arn\s*=\s*'
-    r'"arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"\s*$'
-    r'(?:(?!^\}).)*?^\s*type\s*=\s*"cluster"\s*$'
-    r'(?:(?!^\}).)*?^\}',
-    re.MULTILINE | re.DOTALL,
-)
-EKS_BOOMI_POLICY_RESOURCE_PATTERN = re.compile(
-    r'^resource\s+"aws_eks_access_policy_association"\s+"boomi_admin"\s*\{'
-    r'(?:(?!^\}).)*?^\s*principal_arn\s*=\s*'
-    r'aws_eks_access_entry\.workforce\["boomi_admin"\]\.principal_arn\s*$'
-    r'(?:(?!^\}).)*?^\s*policy_arn\s*=\s*'
-    r'"arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy"\s*$'
-    r'(?:(?!^\}).)*?^\s*type\s*=\s*"namespace"\s*$'
-    r'(?:(?!^\}).)*?^\s*namespaces\s*=\s*\[var\.boomi_namespace\]\s*$'
-    r'(?:(?!^\}).)*?^\}',
-    re.MULTILINE | re.DOTALL,
-)
-PRINCIPAL_MAP_PATTERN = re.compile(
-    r'^\s*principals\s*=\s*\{(?P<body>.*?)^\s*\}',
-    re.MULTILINE | re.DOTALL,
-)
-PRINCIPAL_KEY_PATTERN = re.compile(r'^\s*([a-z][a-z0-9_]*)\s*=', re.MULTILINE)
 EKS_ACCESS_ENTRY_DECLARATION_PATTERN = re.compile(
-    r'^resource\s+"aws_eks_access_entry"\s+"[^"]+"\s*\{', re.MULTILINE
+    r'^\s*resource\s+"aws_eks_access_entry"\s+"[^"]+"\s*\{', re.MULTILINE
 )
 EKS_POLICY_ASSOCIATION_DECLARATION_PATTERN = re.compile(
-    r'^resource\s+"aws_eks_access_policy_association"\s+"[^"]+"\s*\{',
+    r'^\s*resource\s+"aws_eks_access_policy_association"\s+"[^"]+"\s*\{',
     re.MULTILINE,
 )
 OUTPUT_DECLARATION_PATTERN = re.compile(
-    r'^output\s+"(?P<name>[a-z][a-z0-9_]*)"\s*\{', re.MULTILINE
+    r'^\s*output\s+"(?P<name>[a-z][a-z0-9_]*)"\s*\{', re.MULTILINE
 )
 TOP_LEVEL_ASSIGNMENT_PATTERN = re.compile(
     r'^[ \t]*(?P<name>[a-z][a-z0-9_]*)[ \t]*=', re.MULTILINE
@@ -73,6 +39,12 @@ EXPECTED_PERMISSION_SET_PREFIXES = {
     "application_developer_role_arn": "AWSReservedSSO_UATApplicationDeveloper_",
     "boomi_admin_role_arn": "AWSReservedSSO_UATBoomiAdmin_",
 }
+CLUSTER_ADMIN_POLICY_ARN = (
+    '"arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"'
+)
+BOOMI_ADMIN_POLICY_ARN = (
+    '"arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy"'
+)
 
 
 def terraform_text(root_name):
@@ -87,18 +59,58 @@ def terraform_text(root_name):
     )
 
 
-def output_blocks(contents):
-    declarations = list(OUTPUT_DECLARATION_PATTERN.finditer(contents))
-    return {
-        declaration.group("name"): contents[
-            declaration.start() : (
-                declarations[index + 1].start()
-                if index + 1 < len(declarations)
-                else len(contents)
-            )
-        ]
-        for index, declaration in enumerate(declarations)
-    }
+def terraform_block(contents, declaration_pattern):
+    declaration = re.search(declaration_pattern, contents, re.MULTILINE)
+    if declaration is None:
+        return None
+
+    opening_brace = contents.find("{", declaration.start(), declaration.end())
+    depth = 0
+    for index in range(opening_brace, len(contents)):
+        if contents[index] == "{":
+            depth += 1
+        elif contents[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return contents[declaration.start() : index + 1]
+
+    return None
+
+
+def block_body(block):
+    return block[block.index("{") + 1 : block.rindex("}")]
+
+
+def normalized_expression(expression):
+    return re.sub(r"\s+", "", expression)
+
+
+def simple_map_assignments(expression):
+    expression = expression.strip()
+    if not expression.startswith("{") or not expression.endswith("}"):
+        return None
+
+    assignments = {}
+    for line in expression[1:-1].splitlines():
+        if not line.strip():
+            continue
+        match = re.fullmatch(
+            r"\s*([a-z][a-z0-9_]*)\s*=\s*(\S(?:.*\S)?)\s*", line
+        )
+        if match is None or match.group(1) in assignments:
+            return None
+        assignments[match.group(1)] = normalized_expression(match.group(2))
+    return assignments
+
+
+def assert_exact_line_assignment(test_case, block, name, expected_expression):
+    matches = re.findall(
+        rf"^\s*{re.escape(name)}\s*=\s*(\S(?:.*\S)?)\s*$", block, re.MULTILINE
+    )
+    test_case.assertEqual(
+        [normalized_expression(match) for match in matches],
+        [normalized_expression(expected_expression)],
+    )
 
 
 class StaticContractTests(unittest.TestCase):
@@ -113,12 +125,16 @@ class StaticContractTests(unittest.TestCase):
         main_tf = (TERRAFORM_ROOT / "eks-access" / "main.tf").read_text(
             encoding="utf-8"
         )
-        principal_map = PRINCIPAL_MAP_PATTERN.search(main_tf)
+        principal_map = terraform_block(main_tf, r"^\s*principals\s*=\s*\{")
 
         self.assertIsNotNone(principal_map)
         self.assertEqual(
-            set(PRINCIPAL_KEY_PATTERN.findall(principal_map.group("body"))),
-            {"infra_admin", "application_developer", "boomi_admin"},
+            simple_map_assignments("{" + block_body(principal_map) + "}"),
+            {
+                "infra_admin": "var.infra_admin_role_arn",
+                "application_developer": "var.application_developer_role_arn",
+                "boomi_admin": "var.boomi_admin_role_arn",
+            },
         )
         self.assertNotIn("process_owner", terraform_text("eks-access"))
 
@@ -131,9 +147,110 @@ class StaticContractTests(unittest.TestCase):
         self.assertEqual(
             len(EKS_POLICY_ASSOCIATION_DECLARATION_PATTERN.findall(main_tf)), 2
         )
-        self.assertRegex(main_tf, EKS_ACCESS_ENTRY_RESOURCE_PATTERN)
-        self.assertRegex(main_tf, EKS_CLUSTER_POLICY_RESOURCE_PATTERN)
-        self.assertRegex(main_tf, EKS_BOOMI_POLICY_RESOURCE_PATTERN)
+
+        access_entry = terraform_block(
+            main_tf,
+            r'^\s*resource\s+"aws_eks_access_entry"\s+"workforce"\s*\{',
+        )
+        cluster_admin = terraform_block(
+            main_tf,
+            r'^\s*resource\s+"aws_eks_access_policy_association"\s+'
+            r'"cluster_admin"\s*\{',
+        )
+        boomi_admin = terraform_block(
+            main_tf,
+            r'^\s*resource\s+"aws_eks_access_policy_association"\s+'
+            r'"boomi_admin"\s*\{',
+        )
+        self.assertIsNotNone(access_entry)
+        self.assertIsNotNone(cluster_admin)
+        self.assertIsNotNone(boomi_admin)
+
+        assert_exact_line_assignment(self, access_entry, "for_each", "local.principals")
+        assert_exact_line_assignment(
+            self, access_entry, "cluster_name", "var.eks_cluster_name"
+        )
+        assert_exact_line_assignment(self, access_entry, "principal_arn", "each.value")
+
+        cluster_for_each = re.search(
+            r"^\s*for_each\s*=\s*toset\(\[(?P<keys>.*?)\]\)\s*$",
+            cluster_admin,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(cluster_for_each)
+        self.assertEqual(
+            set(re.findall(r'"([a-z][a-z0-9_]*)"', cluster_for_each.group("keys"))),
+            {"infra_admin", "application_developer"},
+        )
+        self.assertEqual(
+            re.sub(r'"[a-z][a-z0-9_]*"', "", cluster_for_each.group("keys"))
+            .replace(",", "")
+            .strip(),
+            "",
+        )
+        assert_exact_line_assignment(
+            self,
+            cluster_admin,
+            "principal_arn",
+            "aws_eks_access_entry.workforce[each.key].principal_arn",
+        )
+        assert_exact_line_assignment(
+            self, cluster_admin, "policy_arn", CLUSTER_ADMIN_POLICY_ARN
+        )
+        cluster_scope = terraform_block(cluster_admin, r"^\s*access_scope\s*\{")
+        self.assertIsNotNone(cluster_scope)
+        assert_exact_line_assignment(self, cluster_scope, "type", '"cluster"')
+
+        assert_exact_line_assignment(
+            self,
+            boomi_admin,
+            "principal_arn",
+            'aws_eks_access_entry.workforce["boomi_admin"].principal_arn',
+        )
+        assert_exact_line_assignment(
+            self, boomi_admin, "policy_arn", BOOMI_ADMIN_POLICY_ARN
+        )
+        boomi_scope = terraform_block(boomi_admin, r"^\s*access_scope\s*\{")
+        self.assertIsNotNone(boomi_scope)
+        assert_exact_line_assignment(self, boomi_scope, "type", '"namespace"')
+        assert_exact_line_assignment(
+            self, boomi_scope, "namespaces", "[var.boomi_namespace]"
+        )
+
+    def test_eks_access_provider_and_account_validation_are_pinned_to_uat(self):
+        versions_tf = (TERRAFORM_ROOT / "eks-access" / "versions.tf").read_text(
+            encoding="utf-8"
+        )
+        variables_tf = (TERRAFORM_ROOT / "eks-access" / "variables.tf").read_text(
+            encoding="utf-8"
+        )
+        provider = terraform_block(versions_tf, r'^\s*provider\s+"aws"\s*\{')
+        account_variable = terraform_block(
+            variables_tf, r'^\s*variable\s+"expected_account_id"\s*\{'
+        )
+
+        self.assertIsNotNone(provider)
+        assert_exact_line_assignment(
+            self, provider, "allowed_account_ids", "[var.expected_account_id]"
+        )
+        self.assertIsNotNone(account_variable)
+        validations = re.findall(
+            r"^\s*validation\s*\{", account_variable, re.MULTILINE
+        )
+        self.assertEqual(len(validations), 1)
+        validation = terraform_block(account_variable, r"^\s*validation\s*\{")
+        assert_exact_line_assignment(
+            self,
+            validation,
+            "condition",
+            f'var.expected_account_id == "{APPROVED_ACCOUNT_ID}"',
+        )
+        assert_exact_line_assignment(
+            self,
+            validation,
+            "error_message",
+            f'"expected_account_id must be {APPROVED_ACCOUNT_ID}."',
+        )
 
     def test_eks_access_defines_exact_role_arn_inputs(self):
         variables_tf = (TERRAFORM_ROOT / "eks-access" / "variables.tf").read_text(
@@ -195,19 +312,57 @@ class StaticContractTests(unittest.TestCase):
         outputs_tf = (TERRAFORM_ROOT / "eks-access" / "outputs.tf").read_text(
             encoding="utf-8"
         )
-        output_names = [
+        output_names = {
             match.group("name")
             for match in OUTPUT_DECLARATION_PATTERN.finditer(outputs_tf)
-        ]
-        outputs = output_blocks(outputs_tf)
+        }
 
         self.assertEqual(
-            output_names, ["access_entry_arns", "associated_policy_arns"]
+            output_names, {"access_entry_arns", "associated_policy_arns"}
         )
-        self.assertRegex(outputs["access_entry_arns"], r"\.access_entry_arn\b")
-        self.assertNotRegex(outputs["access_entry_arns"], r"\.association_arn\b")
-        self.assertRegex(outputs["associated_policy_arns"], r"\.policy_arn\b")
-        self.assertNotRegex(outputs["associated_policy_arns"], r"\.association_arn\b")
+        access_entries = terraform_block(
+            outputs_tf, r'^\s*output\s+"access_entry_arns"\s*\{'
+        )
+        associated_policies = terraform_block(
+            outputs_tf, r'^\s*output\s+"associated_policy_arns"\s*\{'
+        )
+        self.assertIsNotNone(access_entries)
+        self.assertIsNotNone(associated_policies)
+        access_entry_value = re.fullmatch(
+            r"\s*value\s*=\s*(?P<value>.*?)\s*",
+            block_body(access_entries),
+            re.DOTALL,
+        )
+        associated_policy_value = re.fullmatch(
+            r"\s*value\s*=\s*(?P<value>.*?)\s*",
+            block_body(associated_policies),
+            re.DOTALL,
+        )
+
+        self.assertIsNotNone(access_entry_value)
+        self.assertEqual(
+            normalized_expression(access_entry_value.group("value")),
+            normalized_expression(
+                "{ for principal, entry in aws_eks_access_entry.workforce : "
+                "principal => entry.access_entry_arn }"
+            ),
+        )
+        self.assertIsNotNone(associated_policy_value)
+        self.assertEqual(
+            simple_map_assignments(associated_policy_value.group("value")),
+            {
+                "infra_admin": normalized_expression(
+                    'aws_eks_access_policy_association.cluster_admin["infra_admin"].policy_arn'
+                ),
+                "application_developer": normalized_expression(
+                    "aws_eks_access_policy_association.cluster_admin"
+                    '["application_developer"].policy_arn'
+                ),
+                "boomi_admin": (
+                    "aws_eks_access_policy_association.boomi_admin.policy_arn"
+                ),
+            },
+        )
 
     def test_access_roots_exclude_identity_center_and_iam_users(self):
         for root_name in ("access-governance", "eks-access"):
@@ -224,15 +379,10 @@ class StaticContractTests(unittest.TestCase):
                 self.assertNotIn("aws-auth", contents)
                 self.assertNotIn("saml", contents.lower())
 
-    def test_access_roots_use_only_approved_account_id(self):
-        for root_name in ("access-governance", "eks-access"):
-            root = TERRAFORM_ROOT / root_name
-            if not root.exists():
-                continue
+    def test_eks_access_root_uses_exactly_the_approved_account_id(self):
+        account_ids = set(ACCOUNT_ID_PATTERN.findall(terraform_text("eks-access")))
 
-            account_ids = set(ACCOUNT_ID_PATTERN.findall(terraform_text(root_name)))
-            with self.subTest(root=root_name):
-                self.assertLessEqual(account_ids, {APPROVED_ACCOUNT_ID})
+        self.assertEqual(account_ids, {APPROVED_ACCOUNT_ID})
 
 
 if __name__ == "__main__":
