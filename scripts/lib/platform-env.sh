@@ -123,3 +123,27 @@ verify_kubernetes_context() {
     return 1
   fi
 }
+
+verify_eks_authentication_mode() {
+  local authentication_mode
+
+  _validate_required_platform_env || return 1
+  _validate_uat_contract || return 1
+
+  if ! authentication_mode="$(aws eks describe-cluster \
+    --name "$EKS_CLUSTER_NAME" \
+    --region "$AWS_REGION" \
+    --query 'cluster.accessConfig.authenticationMode' \
+    --output text)"; then
+    _platform_env_error "unable to read EKS authentication mode for cluster '${EKS_CLUSTER_NAME}'"
+    return 1
+  fi
+
+  case "$authentication_mode" in
+    API|API_AND_CONFIG_MAP) ;;
+    *)
+      _platform_env_error "EKS cluster '${EKS_CLUSTER_NAME}' authentication mode is '${authentication_mode:-empty}'; expected API or API_AND_CONFIG_MAP"
+      return 1
+      ;;
+  esac
+}

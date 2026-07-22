@@ -114,6 +114,26 @@ def assert_exact_line_assignment(test_case, block, name, expected_expression):
 
 
 class StaticContractTests(unittest.TestCase):
+    def test_access_roots_require_native_s3_lockfiles(self):
+        for root_name in ("access-governance", "eks-access"):
+            with self.subTest(root=root_name):
+                versions_tf = (
+                    TERRAFORM_ROOT / root_name / "versions.tf"
+                ).read_text(encoding="utf-8")
+                terraform = terraform_block(versions_tf, r"^\s*terraform\s*\{")
+                backend = terraform_block(
+                    versions_tf, r'^\s*backend\s+"s3"\s*\{'
+                )
+
+                self.assertIsNotNone(terraform)
+                assert_exact_line_assignment(
+                    self, terraform, "required_version", '">= 1.10.0"'
+                )
+                self.assertIsNotNone(backend)
+                assert_exact_line_assignment(
+                    self, backend, "use_lockfile", "true"
+                )
+
     def test_access_governance_defines_account_access_analyzer(self):
         main_tf = (
             TERRAFORM_ROOT / "access-governance" / "main.tf"

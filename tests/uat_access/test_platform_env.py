@@ -231,10 +231,13 @@ class UATAccessProvisioningTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
-        self.test_root = self.temp_path / "uat-access-test-root"
+        self.test_root = self.temp_path / "repository"
         self.mock_bin = self.temp_path / "bin"
         self.mock_bin.mkdir()
         self.command_log = self.temp_path / "commands.log"
+        self.provision_uat_access = (
+            self.test_root / "scripts" / "provision-uat-access.sh"
+        )
         self.principal_input = (
             self.test_root / "config" / "environments" /
             "uat-workforce-principals.json"
@@ -248,13 +251,30 @@ class UATAccessProvisioningTests(unittest.TestCase):
             "eks-access"
         )
         self.generated_tfvars = self.eks_root / "generated.auto.tfvars.json"
-        self.governance_root.mkdir(parents=True)
-        self.eks_root.mkdir(parents=True)
-        self.principal_input.parent.mkdir(parents=True)
-        (self.governance_root / "main.tf").write_text('terraform { backend "s3" {} }\n')
-        (self.governance_root / "uat.tfvars").write_text("")
-        (self.eks_root / "main.tf").write_text('terraform { backend "s3" {} }\n')
-        (self.eks_root / "uat.tfvars").write_text("")
+        self.lock_dir = self.test_root / ".uat-access.lock"
+        for relative_path in (
+            "scripts/provision-uat-access.sh",
+            "scripts/lib/platform-env.sh",
+            "scripts/bootstrap-terraform-s3-backend.sh",
+            "scripts/validate-uat-workforce-principals.sh",
+            "config/environments/uat.env",
+        ):
+            source = REPO_ROOT / relative_path
+            destination = self.test_root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+        for root_name in ("access-governance", "eks-access"):
+            shutil.copytree(
+                REPO_ROOT / "platform-prerequisites" / "terraform" / root_name,
+                self.test_root / "platform-prerequisites" / "terraform" / root_name,
+                ignore=shutil.ignore_patterns(
+                    ".terraform",
+                    "*.tfplan",
+                    "*.tfstate*",
+                    "generated.auto.tfvars.json",
+                ),
+            )
+        self.principal_input.parent.mkdir(parents=True, exist_ok=True)
         self.real_jq = shutil.which("jq")
         if self.real_jq is None:
             self.skipTest("jq is required by the offline principal validator")
@@ -265,6 +285,13 @@ printf 'aws %s\n' "$*" >> "$MOCK_COMMAND_LOG"
 if [[ "$1 $2" == "sts get-caller-identity" ]]; then
   printf '%s\n' "$MOCK_AWS_ACCOUNT_ID"
   exit 0
+fi
+if [[ "$1 $2" == "eks describe-cluster" ]]; then
+    if [[ "${MOCK_EKS_AUTH_MODE_ERROR:-false}" == "true" ]]; then
+        exit 43
+    fi
+    printf '%s\n' "$MOCK_EKS_AUTH_MODE"
+    exit 0
 fi
 if [[ "$1 $2" == "s3api head-bucket" && "${MOCK_BACKEND_FAIL:-false}" == "true" ]]; then
     exit 42
@@ -330,7 +357,7 @@ if [[ "$command" == "apply" ]]; then
         fi
     done
     [[ ${#apply_inputs[@]} -eq 1 ]] || exit 65
-    [[ "${apply_inputs[0]}" == "$MOCK_EXPECTED_PLAN_NAME" ]] || exit 65
+    [[ "${apply_inputs[0]}" == uat-access.*.tfplan ]] || exit 65
     [[ -f "$chdir/${apply_inputs[0]}" ]] || exit 66
     [[ ! -e "$MOCK_GENERATED_TFVARS" ]] || exit 67
 fi
@@ -406,10 +433,10 @@ exec "$REAL_JQ" "$@"
         stdin="yes\nyes\n",
         backend_fail=False,
         valid_kubernetes_context=True,
+        authentication_mode="API",
+        authentication_mode_error=False,
         terraform_fail_command="",
         rm_fail_on_call=0,
-        test_mode="1",
-        test_root=None,
         extra_env=None,
     ):
         canonical_context = (
@@ -430,27 +457,25 @@ exec "$REAL_JQ" "$@"
                 env.pop(name)
         env.update({
             "PATH": f"{self.mock_bin}:{env['PATH']}",
-            "TMPDIR": tempfile.gettempdir(),
             "MOCK_AWS_ACCOUNT_ID": account,
             "MOCK_KUBE_CONTEXT": kubernetes_context,
             "MOCK_KUBE_CLUSTER_REFERENCE": kubernetes_context,
+            "MOCK_EKS_AUTH_MODE": authentication_mode,
+            "MOCK_EKS_AUTH_MODE_ERROR": str(authentication_mode_error).lower(),
             "MOCK_COMMAND_LOG": str(self.command_log),
             "MOCK_BACKEND_FAIL": str(backend_fail).lower(),
             "MOCK_TERRAFORM_FAIL_COMMAND": terraform_fail_command,
             "MOCK_RM_CALL_FILE": str(rm_call_file),
             "MOCK_RM_FAIL_ON_CALL": str(rm_fail_on_call),
-            "MOCK_EXPECTED_PLAN_NAME": "uat-access.tfplan",
             "MOCK_GENERATED_TFVARS": str(self.generated_tfvars),
             "REAL_JQ": self.real_jq,
             "REAL_RM": shutil.which("rm"),
-            "UAT_ACCESS_TEST_MODE": test_mode,
-            "UAT_ACCESS_TEST_ROOT": str(test_root or self.test_root),
         })
         if extra_env:
             env.update(extra_env)
         return subprocess.run(
-            ["bash", str(PROVISION_UAT_ACCESS), *arguments],
-            cwd=REPO_ROOT,
+            ["bash", str(self.provision_uat_access), *arguments],
+            cwd=self.test_root,
             env=env,
             text=True,
             input=stdin,
@@ -495,11 +520,12 @@ exec "$REAL_JQ" "$@"
             "terraform -chdir=",
             " fmt -check -recursive",
             " validate",
-            " plan -input=false -out=uat-access.tfplan",
-            " apply -input=false uat-access.tfplan",
+            " plan -input=false -out=uat-access.",
+            " apply -input=false uat-access.",
         ])
         self.assertIn("Apply saved Terraform plan for access-governance", result.stdout)
-        self.assertFalse((self.governance_root / "uat-access.tfplan").exists())
+        self.assertEqual(list(self.governance_root.glob("*.tfplan")), [])
+        self.assertFalse(self.lock_dir.exists())
         self.assert_no_forbidden_invocations()
 
     def test_eks_access_orders_all_preflight_before_backend_and_terraform(self):
@@ -511,15 +537,19 @@ exec "$REAL_JQ" "$@"
             "aws sts get-caller-identity --query Account --output text",
             "kubectl config current-context",
             "kubectl config view --minify",
+            "aws eks describe-cluster --name EKS-boomi-runtime-cluster "
+            "--region ap-east-1 --query cluster.accessConfig.authenticationMode "
+            "--output text",
             "jq -e",
             "aws s3api head-bucket --bucket sml-oms-uat-tfstate-672172129937",
             " fmt -check -recursive",
             " validate",
-            " plan -input=false -out=uat-access.tfplan",
-            " apply -input=false uat-access.tfplan",
+            " plan -input=false -out=uat-access.",
+            " apply -input=false uat-access.",
         ])
         self.assertIn("Apply saved Terraform plan for eks-access", result.stdout)
-        self.assertFalse((self.eks_root / "uat-access.tfplan").exists())
+        self.assertEqual(list(self.eks_root.glob("*.tfplan")), [])
+        self.assertFalse(self.lock_dir.exists())
         self.assert_no_forbidden_invocations()
 
     def test_all_completes_governance_before_eks_access(self):
@@ -527,20 +557,29 @@ exec "$REAL_JQ" "$@"
 
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = self.command_lines()
+        authentication_mode = next(
+            index for index, line in enumerate(lines)
+            if "aws eks describe-cluster" in line
+        )
         governance_apply = next(
             index for index, line in enumerate(lines)
-            if "access-governance apply -input=false uat-access.tfplan" in line
+            if "access-governance apply -input=false uat-access." in line
         )
-        eks_identity = next(
-            index for index, line in enumerate(lines[governance_apply + 1 :], governance_apply + 1)
-            if "aws sts get-caller-identity" in line
+        eks_generated_output = next(
+            index for index, line in enumerate(lines)
+            if line.startswith("jq ")
         )
         eks_apply = next(
             index for index, line in enumerate(lines)
-            if "eks-access apply -input=false uat-access.tfplan" in line
+            if "eks-access apply -input=false uat-access." in line
         )
-        self.assertLess(governance_apply, eks_identity)
-        self.assertLess(eks_identity, eks_apply)
+        self.assertLess(authentication_mode, governance_apply)
+        self.assertLess(governance_apply, eks_generated_output)
+        self.assertLess(eks_generated_output, eks_apply)
+        self.assertEqual(
+            sum("aws sts get-caller-identity" in line for line in lines), 1
+        )
+        self.assertFalse(self.lock_dir.exists())
 
     def test_auto_approve_applies_saved_plans_without_invalid_flag(self):
         result = self.run_provision("all", "--auto-approve", stdin="")
@@ -549,7 +588,7 @@ exec "$REAL_JQ" "$@"
         self.assertNotIn("Type 'yes'", result.stdout)
         apply_lines = [line for line in self.command_lines() if " apply " in line]
         self.assertEqual(len(apply_lines), 2, apply_lines)
-        self.assertTrue(all(line.endswith("apply -input=false uat-access.tfplan") for line in apply_lines))
+        self.assertTrue(all(re.search(r"apply -input=false uat-access\.\d+\.tfplan$", line) for line in apply_lines))
         self.assertTrue(all("auto-approve" not in line for line in apply_lines))
 
     def test_approval_rejection_and_eof_never_apply_saved_plan(self):
@@ -572,7 +611,8 @@ exec "$REAL_JQ" "$@"
         self.assertTrue(any(" plan " in line for line in self.command_lines()))
         self.assertFalse(any(" apply " in line for line in self.command_lines()))
         self.assertFalse(self.generated_tfvars.exists())
-        self.assertFalse((self.eks_root / "uat-access.tfplan").exists())
+        self.assertEqual(list(self.eks_root.glob("*.tfplan")), [])
+        self.assertFalse(self.lock_dir.exists())
 
     def test_failed_apply_cleans_saved_plan_and_generated_output(self):
         result = self.run_provision(
@@ -583,7 +623,8 @@ exec "$REAL_JQ" "$@"
         self.assertEqual(result.returncode, 42)
         self.assertTrue(any(" apply " in line for line in self.command_lines()))
         self.assertFalse(self.generated_tfvars.exists())
-        self.assertFalse((self.eks_root / "uat-access.tfplan").exists())
+        self.assertEqual(list(self.eks_root.glob("*.tfplan")), [])
+        self.assertFalse(self.lock_dir.exists())
 
     def test_cleanup_attempts_generated_removal_after_plan_removal_fails(self):
         result = self.run_provision(
@@ -595,7 +636,7 @@ exec "$REAL_JQ" "$@"
         self.assertEqual(result.returncode, 42)
         rm_lines = [line for line in self.command_lines() if line.startswith("rm ")]
         self.assertEqual(len(rm_lines), 4, rm_lines)
-        self.assertIn(str(self.eks_root / "uat-access.tfplan"), rm_lines[-2])
+        self.assertRegex(rm_lines[-2], re.escape(str(self.eks_root)) + r"/uat-access\.\d+\.tfplan")
         self.assertIn(str(self.generated_tfvars), rm_lines[-1])
         self.assertFalse(self.generated_tfvars.exists())
 
@@ -609,160 +650,30 @@ exec "$REAL_JQ" "$@"
         self.assertTrue(any(" apply " in line for line in self.command_lines()))
         rm_lines = [line for line in self.command_lines() if line.startswith("rm ")]
         self.assertEqual(len(rm_lines), 6, rm_lines)
-        self.assertIn(str(self.eks_root / "uat-access.tfplan"), rm_lines[-2])
+        self.assertRegex(rm_lines[-2], re.escape(str(self.eks_root)) + r"/uat-access\.\d+\.tfplan")
         self.assertIn(str(self.generated_tfvars), rm_lines[-1])
-        self.assertFalse((self.eks_root / "uat-access.tfplan").exists())
+        self.assertEqual(list(self.eks_root.glob("*.tfplan")), [])
         self.assertFalse(self.generated_tfvars.exists())
+        self.assertFalse(self.lock_dir.exists())
 
-    def test_test_root_without_explicit_test_mode_is_rejected(self):
-        result = self.run_provision("governance", test_mode="")
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("UAT_ACCESS_TEST_MODE=1", result.stderr)
-        self.assertEqual(self.command_lines(), [])
-
-    def test_test_mode_rejects_unsafe_roots(self):
-        for unsafe_root in ("/", REPO_ROOT, Path(tempfile.gettempdir())):
-            with self.subTest(unsafe_root=unsafe_root):
-                self.command_log.unlink(missing_ok=True)
-                result = self.run_provision(
-                    "governance",
-                    test_root=unsafe_root,
-                )
-
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("safe temporary directory", result.stderr)
-                self.assertEqual(self.command_lines(), [])
-
-    def test_test_mode_accepts_root_below_canonical_tmpdir_symlink(self):
-        tmpdir_link = self.temp_path / "tmpdir-link"
-        tmpdir_link.symlink_to(self.temp_path, target_is_directory=True)
+    def test_environment_cannot_redirect_repository_paths(self):
+        external_root = self.temp_path / "external-root"
+        external_root.mkdir()
+        sentinel = external_root / "sentinel"
+        sentinel.write_text("unchanged")
 
         result = self.run_provision(
             "governance",
-            extra_env={"TMPDIR": str(tmpdir_link)},
+            extra_env={
+                "UAT_ACCESS_TEST_MODE": "1",
+                "UAT_ACCESS_TEST_ROOT": str(external_root),
+                "TMPDIR": str(external_root),
+            },
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_test_mode_rejects_tmpdir_prefix_lookalike_root(self):
-        approved_tmpdir = self.temp_path / "approved"
-        approved_tmpdir.mkdir()
-        lookalike_root = self.temp_path / "approved-lookalike" / "uat-access-test-root"
-        shutil.copytree(self.test_root, lookalike_root)
-
-        result = self.run_provision(
-            "governance",
-            test_root=lookalike_root,
-            extra_env={"TMPDIR": str(approved_tmpdir)},
-        )
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("safe temporary directory", result.stderr)
-        self.assertEqual(self.command_lines(), [])
-
-    def test_nested_config_symlink_escape_is_rejected_before_invocation_or_mutation(self):
-        escaped_environments = self.temp_path / "escaped-environments"
-        escaped_environments.mkdir()
-        escaped_input = escaped_environments / "uat-workforce-principals.json"
-        escaped_input.write_text(self.principal_input.read_text())
-        self.principal_input.unlink()
-        self.principal_input.parent.rmdir()
-        self.principal_input.parent.symlink_to(
-            escaped_environments,
-            target_is_directory=True,
-        )
-        self.generated_tfvars.write_text("stale generated output")
-
-        result = self.run_provision("eks-access")
-
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("outside UAT_ACCESS_TEST_ROOT", result.stderr)
-        self.assertEqual(self.command_lines(), [])
-        self.assertEqual(self.generated_tfvars.read_text(), "stale generated output")
-
-    def test_terraform_root_symlink_escapes_are_rejected_before_invocation_or_mutation(self):
-        for scope, root in (
-            ("governance", self.governance_root),
-            ("eks-access", self.eks_root),
-        ):
-            with self.subTest(scope=scope):
-                escaped_root = self.temp_path / f"escaped-{scope}"
-                shutil.copytree(root, escaped_root)
-                shutil.rmtree(root)
-                root.symlink_to(escaped_root, target_is_directory=True)
-                stale_artifact = escaped_root / (
-                    "generated.auto.tfvars.json"
-                    if scope == "eks-access"
-                    else "uat-access.tfplan"
-                )
-                stale_artifact.write_text("stale artifact")
-
-                result = self.run_provision(scope)
-
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("outside UAT_ACCESS_TEST_ROOT", result.stderr)
-                self.assertEqual(self.command_lines(), [])
-                self.assertEqual(stale_artifact.read_text(), "stale artifact")
-
-                root.unlink()
-                shutil.copytree(escaped_root, root)
-                shutil.rmtree(escaped_root)
-
-    def test_terraform_root_symlink_descendants_are_rejected_before_invocation_or_mutation(self):
-        cases = (
-            (".terraform", True),
-            ("terraform.tfstate", False),
-            (".terraform.lock.hcl", False),
-            ("main.tf", False),
-            ("modules/nested", True),
-        )
-        for scope, root in (
-            ("governance", self.governance_root),
-            ("eks-access", self.eks_root),
-        ):
-            for relative_path, is_directory in cases:
-                with self.subTest(
-                    scope=scope,
-                    relative_path=relative_path,
-                ):
-                    self.command_log.unlink(missing_ok=True)
-                    link_path = root / relative_path
-                    if link_path.exists() or link_path.is_symlink():
-                        if link_path.is_dir() and not link_path.is_symlink():
-                            shutil.rmtree(link_path)
-                        else:
-                            link_path.unlink()
-                    link_path.parent.mkdir(parents=True, exist_ok=True)
-
-                    external_path = self.temp_path / (
-                        f"external-{scope}-{relative_path.replace('/', '-')}"
-                    )
-                    sentinel = external_path / "sentinel" if is_directory else external_path
-                    if is_directory:
-                        external_path.mkdir()
-                    sentinel.write_text("external sentinel")
-                    link_path.symlink_to(
-                        external_path,
-                        target_is_directory=is_directory,
-                    )
-
-                    result = self.run_provision(scope)
-
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("contains a symbolic link", result.stderr)
-                    self.assertEqual(self.command_lines(), [])
-                    self.assertEqual(sentinel.read_text(), "external sentinel")
-
-                    link_path.unlink()
-                    if relative_path == "main.tf":
-                        link_path.write_text('terraform { backend "s3" {} }\n')
-                    if link_path.parent != root:
-                        link_path.parent.rmdir()
-                    if is_directory:
-                        shutil.rmtree(external_path)
-                    else:
-                        external_path.unlink()
+        self.assertEqual(sentinel.read_text(), "unchanged")
+        self.assertTrue(all(str(self.test_root) in line or not line.startswith("terraform ") for line in self.command_lines()))
 
     def test_terraform_environment_injection_is_rejected_before_invocation_or_mutation(self):
         cases = (
@@ -775,7 +686,7 @@ exec "$REAL_JQ" "$@"
         for variable_name, variable_value in cases:
             with self.subTest(variable_name=variable_name):
                 self.command_log.unlink(missing_ok=True)
-                governance_plan = self.governance_root / "uat-access.tfplan"
+                governance_plan = self.governance_root / "stale.tfplan"
                 governance_plan.write_text("stale plan")
                 self.generated_tfvars.write_text("stale generated output")
 
@@ -805,19 +716,23 @@ exec "$REAL_JQ" "$@"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(alias_path.read_text(), "do not mutate")
 
-    def test_test_mode_does_not_touch_repository_artifacts(self):
+    def test_private_fixture_does_not_touch_source_repository_artifacts(self):
         repository_paths = (
             REPO_ROOT / "config" / "environments" /
             "uat-workforce-principals.json",
             REPO_ROOT / "platform-prerequisites" / "terraform" /
-            "access-governance" / "uat-access.tfplan",
+            "access-governance",
             REPO_ROOT / "platform-prerequisites" / "terraform" /
             "eks-access" / "generated.auto.tfvars.json",
             REPO_ROOT / "platform-prerequisites" / "terraform" /
-            "eks-access" / "uat-access.tfplan",
+            "eks-access",
         )
         before = {
-            path: (path.exists(), path.read_bytes() if path.is_file() else None)
+            path: (
+                tuple(sorted(child.name for child in path.glob("*.tfplan")))
+                if path.is_dir()
+                else (path.exists(), path.read_bytes() if path.is_file() else None)
+            )
             for path in repository_paths
         }
 
@@ -825,7 +740,11 @@ exec "$REAL_JQ" "$@"
 
         self.assertEqual(result.returncode, 0, result.stderr)
         after = {
-            path: (path.exists(), path.read_bytes() if path.is_file() else None)
+            path: (
+                tuple(sorted(child.name for child in path.glob("*.tfplan")))
+                if path.is_dir()
+                else (path.exists(), path.read_bytes() if path.is_file() else None)
+            )
             for path in repository_paths
         }
         self.assertEqual(after, before)
@@ -869,6 +788,60 @@ exec "$REAL_JQ" "$@"
         self.assertFalse(any("jq " in line for line in self.command_lines()))
         self.assertFalse(any("s3api" in line for line in self.command_lines()))
         self.assertFalse(any(line.startswith("terraform ") for line in self.command_lines()))
+
+    def test_supported_eks_authentication_modes_continue_to_validation(self):
+        for authentication_mode in ("API", "API_AND_CONFIG_MAP"):
+            with self.subTest(authentication_mode=authentication_mode):
+                self.command_log.unlink(missing_ok=True)
+                result = self.run_provision(
+                    "eks-access", authentication_mode=authentication_mode
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(any("jq -e" in line for line in self.command_lines()))
+
+    def test_unsupported_or_unreadable_authentication_mode_stops_before_mutation(self):
+        for authentication_mode, authentication_mode_error in (
+            ("CONFIG_MAP", False),
+            ("", False),
+            ("API", True),
+        ):
+            with self.subTest(
+                authentication_mode=authentication_mode,
+                authentication_mode_error=authentication_mode_error,
+            ):
+                self.command_log.unlink(missing_ok=True)
+                self.generated_tfvars.write_text("stale output")
+                result = self.run_provision(
+                    "eks-access",
+                    authentication_mode=authentication_mode,
+                    authentication_mode_error=authentication_mode_error,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.generated_tfvars.read_text(), "stale output")
+                self.assertFalse(any("jq " in line for line in self.command_lines()))
+                self.assertFalse(any("s3api" in line for line in self.command_lines()))
+                self.assertFalse(any(line.startswith("terraform ") for line in self.command_lines()))
+
+    def test_lock_contention_stops_before_backend_or_mutation(self):
+        self.lock_dir.mkdir()
+        self.generated_tfvars.write_text("stale output")
+
+        result = self.run_provision("eks-access")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("another UAT access orchestration is running", result.stderr)
+        self.assertEqual(self.generated_tfvars.read_text(), "stale output")
+        self.assertFalse(any("jq " in line for line in self.command_lines()))
+        self.assertFalse(any("s3api" in line for line in self.command_lines()))
+        self.assertTrue(self.lock_dir.exists())
+
+    def test_lock_is_removed_after_backend_failure(self):
+        result = self.run_provision("governance", backend_fail=True)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.lock_dir.exists())
 
     def test_missing_principals_removes_stale_output_and_stops_before_backend(self):
         self.principal_input.unlink()
