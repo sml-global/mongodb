@@ -283,6 +283,7 @@ class UATAccessProvisioningTests(unittest.TestCase):
             "aws",
             """#!/usr/bin/env bash
 printf 'aws %s\n' "$*" >> "$MOCK_COMMAND_LOG"
+printf 'aws %s\n' "${AWS_IGNORE_CONFIGURED_ENDPOINT_URLS:-}" >> "$MOCK_ENV_LOG"
 if [[ "$1 $2" == "sts get-caller-identity" ]]; then
   printf '%s\n' "$MOCK_AWS_ACCOUNT_ID"
   exit 0
@@ -339,6 +340,7 @@ exit 64
             "terraform",
             """#!/usr/bin/env bash
 printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
+printf 'terraform %s\n' "${AWS_IGNORE_CONFIGURED_ENDPOINT_URLS:-}" >> "$MOCK_ENV_LOG"
 chdir=""
 command=""
 plan_output=""
@@ -462,12 +464,15 @@ exec "$REAL_JQ" "$@"
         )
         kubernetes_context = canonical_context if valid_kubernetes_context else "wrong-context"
         rm_call_file = self.temp_path / "rm-calls"
+        env_log = self.temp_path / "child-env.log"
         rm_call_file.unlink(missing_ok=True)
+        env_log.unlink(missing_ok=True)
         env = os.environ.copy()
         for name in tuple(env):
             if (
                 name == "AWS_ENDPOINT_URL"
                 or name.startswith("AWS_ENDPOINT_URL_")
+                or name in ("AWS_S3_ENDPOINT", "AWS_STS_ENDPOINT")
                 or name == "AWS_CA_BUNDLE"
                 or name in (
                     "TF_CLI_CONFIG_FILE",
@@ -487,6 +492,7 @@ exec "$REAL_JQ" "$@"
             "MOCK_EKS_AUTH_MODE": authentication_mode,
             "MOCK_EKS_AUTH_MODE_ERROR": str(authentication_mode_error).lower(),
             "MOCK_COMMAND_LOG": str(self.command_log),
+            "MOCK_ENV_LOG": str(env_log),
             "MOCK_BACKEND_FAIL": str(backend_fail).lower(),
             "MOCK_TERRAFORM_FAIL_COMMAND": terraform_fail_command,
             "MOCK_RM_CALL_FILE": str(rm_call_file),
@@ -556,6 +562,18 @@ exec "$REAL_JQ" "$@"
         self.assertEqual(list(self.governance_root.glob("*.tfplan")), [])
         self.assertFalse(self.lock_dir.exists())
         self.assert_no_forbidden_invocations()
+
+    def test_forces_configured_endpoint_ignoring_for_aws_and_terraform(self):
+        result = self.run_provision(
+            "governance",
+            extra_env={"AWS_IGNORE_CONFIGURED_ENDPOINT_URLS": "false"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        env_lines = (self.temp_path / "child-env.log").read_text().splitlines()
+        self.assertTrue(any(line.startswith("aws ") for line in env_lines))
+        self.assertTrue(any(line.startswith("terraform ") for line in env_lines))
+        self.assertTrue(all(line.endswith(" true") for line in env_lines), env_lines)
 
     def test_eks_access_orders_all_preflight_before_backend_and_terraform(self):
         result = self.run_provision("eks-access")
@@ -708,6 +726,8 @@ exec "$REAL_JQ" "$@"
         cases = (
             ("AWS_ENDPOINT_URL", ""),
             ("AWS_ENDPOINT_URL_S3", "https://attacker.invalid"),
+            ("AWS_S3_ENDPOINT", "https://attacker.invalid"),
+            ("AWS_STS_ENDPOINT", "https://attacker.invalid"),
             ("AWS_CA_BUNDLE", str(self.temp_path / "attacker-ca.pem")),
             ("TF_CLI_CONFIG_FILE", str(self.temp_path / "attacker.tfrc")),
             ("TF_PLUGIN_CACHE_DIR", str(self.temp_path / "plugins")),

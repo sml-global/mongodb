@@ -39,16 +39,30 @@ bucket_exists() {
   aws s3api head-bucket --bucket "$bucket" "${owner_args[@]}" >/dev/null 2>&1
 }
 
-remote_state_exists() {
+inspect_remote_state() {
   local bucket="$1"
   local key="$2"
   local expected_owner="$3"
   local owner_args=()
+  local error_output=""
   if [[ -n "$expected_owner" ]]; then
     owner_args=(--expected-bucket-owner "$expected_owner")
   fi
 
-  aws s3api head-object --bucket "$bucket" --key "$key" "${owner_args[@]}" >/dev/null 2>&1
+  if error_output="$(aws s3api head-object \
+    --bucket "$bucket" \
+    --key "$key" \
+    "${owner_args[@]}" 2>&1 >/dev/null)"; then
+    return 0
+  fi
+
+  case "$error_output" in
+    *"(404)"*|*"Not Found"*|*"NoSuchKey"*) return 1 ;;
+    *)
+      echo "Error: Unable to determine whether remote state exists at s3://$bucket/$key" >&2
+      return 2
+      ;;
+  esac
 }
 
 create_bucket_if_missing() {
@@ -68,11 +82,23 @@ create_bucket_if_missing() {
   echo "S3 bucket missing. Creating: $bucket (region: $region)"
   # AWS S3 create-bucket is a special case: us-east-1 must not send LocationConstraint.
   if [[ "$region" == "us-east-1" ]]; then
-    aws s3api create-bucket --bucket "$bucket" >/dev/null
+    if ! aws s3api create-bucket --bucket "$bucket" >/dev/null 2>&1; then
+      if [[ -z "$expected_owner" ]] || ! bucket_exists "$bucket" "$expected_owner"; then
+        echo "Error: S3 bucket creation failed and ownership could not be confirmed: $bucket" >&2
+        return 1
+      fi
+      echo "S3 bucket was created concurrently by the expected account: $bucket"
+    fi
   else
-    aws s3api create-bucket \
+    if ! aws s3api create-bucket \
       --bucket "$bucket" \
-      --create-bucket-configuration LocationConstraint="$region" >/dev/null
+      --create-bucket-configuration LocationConstraint="$region" >/dev/null 2>&1; then
+      if [[ -z "$expected_owner" ]] || ! bucket_exists "$bucket" "$expected_owner"; then
+        echo "Error: S3 bucket creation failed and ownership could not be confirmed: $bucket" >&2
+        return 1
+      fi
+      echo "S3 bucket was created concurrently by the expected account: $bucket"
+    fi
   fi
 
   echo "Applying bucket baseline controls"
@@ -117,6 +143,8 @@ verify_bucket_controls() {
     --output text)"
   if [[ "$actual_region" == "None" || "$actual_region" == "null" ]]; then
     actual_region="us-east-1"
+  elif [[ "$actual_region" == "EU" ]]; then
+    actual_region="eu-west-1"
   fi
   if [[ "$actual_region" != "$requested_region" ]]; then
     echo "Error: S3 bucket region does not match requested region: $bucket" >&2
@@ -248,17 +276,28 @@ main() {
     backend_owner_config=(-backend-config="expected_bucket_owner=$expected_owner")
   fi
 
-  if remote_state_exists "$bucket" "$key" "$expected_owner"; then
-    echo "Remote state exists at s3://$bucket/$key"
-    terraform -chdir="$tf_dir" init -reconfigure -input=false \
-      -backend-config="bucket=$bucket" \
-      -backend-config="key=$key" \
-      -backend-config="region=$region" \
-      -backend-config="encrypt=true" \
-      "${backend_owner_config[@]}"
-    echo "Backend configured to existing remote state"
-    return 0
+  local remote_state_status=0
+  if inspect_remote_state "$bucket" "$key" "$expected_owner"; then
+    remote_state_status=0
+  else
+    remote_state_status=$?
   fi
+
+  case "$remote_state_status" in
+    0)
+      echo "Remote state exists at s3://$bucket/$key"
+      terraform -chdir="$tf_dir" init -reconfigure -input=false \
+        -backend-config="bucket=$bucket" \
+        -backend-config="key=$key" \
+        -backend-config="region=$region" \
+        -backend-config="encrypt=true" \
+        "${backend_owner_config[@]}"
+      echo "Backend configured to existing remote state"
+      return 0
+      ;;
+    1) ;;
+    *) return "$remote_state_status" ;;
+  esac
 
   if [[ -f "$tf_dir/terraform.tfstate" ]]; then
     echo "Remote state missing but local terraform.tfstate found. Migrating local state once."

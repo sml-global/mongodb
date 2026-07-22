@@ -19,6 +19,7 @@ class TerraformS3BackendTests(unittest.TestCase):
         self.mock_bin.mkdir()
         self.command_log = self.temp_path / "commands.log"
         self.created_marker = self.temp_path / "bucket-created"
+        self.create_attempted_marker = self.temp_path / "bucket-create-attempted"
         self.tf_dir = self.temp_path / "terraform"
         self.tf_dir.mkdir()
         (self.tf_dir / "main.tf").write_text('terraform { backend "s3" {} }\n')
@@ -29,6 +30,10 @@ printf 'aws %s\n' "$*" >> "$MOCK_COMMAND_LOG"
 operation="${1:-} ${2:-}"
 case "$operation" in
   "s3api head-bucket")
+        if [[ "$MOCK_CREATE_RACE" != "none" && -f "$MOCK_CREATE_ATTEMPTED_MARKER" ]]; then
+            [[ "$MOCK_CREATE_RACE" == "same-owner" ]] && exit 0
+            exit 42
+        fi
     if [[ "$MOCK_BUCKET_STATE" == "wrong-owner" ]]; then
       exit 42
     fi
@@ -37,6 +42,11 @@ case "$operation" in
     fi
     ;;
   "s3api create-bucket")
+        if [[ "$MOCK_CREATE_RACE" != "none" ]]; then
+            : > "$MOCK_CREATE_ATTEMPTED_MARKER"
+            printf 'create failed\n' >&2
+            exit 43
+        fi
     if [[ "$MOCK_BUCKET_STATE" == "wrong-owner" ]]; then
       exit 43
     fi
@@ -56,7 +66,25 @@ case "$operation" in
     printf '%s\n' "$MOCK_PUBLIC_ACCESS_BLOCK"
     ;;
     "s3api head-object")
-        [[ "$MOCK_REMOTE_STATE_EXISTS" == "true" ]] || exit 42
+        case "$MOCK_REMOTE_STATE_STATUS" in
+            exists) ;;
+            absent)
+                printf 'An error occurred (404) when calling the HeadObject operation: Not Found\n' >&2
+                exit 42
+                ;;
+            forbidden)
+                printf 'An error occurred (403) when calling the HeadObject operation: Forbidden\n' >&2
+                exit 42
+                ;;
+            bad-request)
+                printf 'An error occurred (400) when calling the HeadObject operation: Bad Request\n' >&2
+                exit 42
+                ;;
+            network)
+                printf 'Could not connect to the endpoint URL: https://s3.invalid\n' >&2
+                exit 42
+                ;;
+        esac
         ;;
     "s3api put-bucket-versioning"|"s3api put-bucket-encryption"|\
     "s3api put-public-access-block")
@@ -94,19 +122,22 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
         encryption="AES256",
         public_access_block="True\tTrue\tTrue\tTrue",
         expected_owner=EXPECTED_OWNER,
-        remote_state_exists=True,
+        remote_state_status="exists",
+        create_race="none",
     ):
         env = os.environ.copy()
         env.update({
             "PATH": f"{self.mock_bin}:{env['PATH']}",
             "MOCK_COMMAND_LOG": str(self.command_log),
             "MOCK_CREATED_MARKER": str(self.created_marker),
+            "MOCK_CREATE_ATTEMPTED_MARKER": str(self.create_attempted_marker),
+            "MOCK_CREATE_RACE": create_race,
             "MOCK_BUCKET_STATE": bucket_state,
             "MOCK_BUCKET_REGION": bucket_region,
             "MOCK_VERSIONING_STATUS": versioning,
             "MOCK_ENCRYPTION": encryption,
             "MOCK_PUBLIC_ACCESS_BLOCK": public_access_block,
-            "MOCK_REMOTE_STATE_EXISTS": str(remote_state_exists).lower(),
+            "MOCK_REMOTE_STATE_STATUS": remote_state_status,
         })
         arguments = [
             "bash", str(BACKEND_BOOTSTRAP),
@@ -166,6 +197,14 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
 
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_eu_location_is_normalized_to_eu_west_1(self):
+        result = self.run_backend(
+            requested_region="eu-west-1",
+            bucket_region="EU",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_disabled_versioning_stops_before_terraform(self):
         result = self.run_backend(versioning="Suspended")
 
@@ -215,6 +254,41 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
             line = next(line for line in lines if operation in line)
             self.assertIn(owner_flag, line)
 
+    def test_same_owner_create_race_is_baselined_and_verified(self):
+        result = self.run_backend(
+            bucket_state="missing",
+            create_race="same-owner",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = "\n".join(self.command_lines())
+        self.assertIn("s3api create-bucket", commands)
+        self.assertIn("s3api put-bucket-versioning", commands)
+        self.assertTrue(any(line.startswith("terraform ") for line in self.command_lines()))
+
+    def test_unresolved_create_race_stops_before_baseline_or_terraform(self):
+        result = self.run_backend(
+            bucket_state="missing",
+            create_race="unresolved",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        commands = "\n".join(self.command_lines())
+        self.assertNotIn("put-bucket-", commands)
+        self.assertNotIn("put-public-access-block", commands)
+        self.assertNotIn("terraform ", commands)
+
+    def test_legacy_create_failure_is_not_recovered_without_expected_owner(self):
+        result = self.run_backend(
+            bucket_state="missing",
+            create_race="same-owner",
+            expected_owner=None,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("put-bucket-", "\n".join(self.command_lines()))
+        self.assertFalse(any(line.startswith("terraform ") for line in self.command_lines()))
+
     def test_legacy_call_omits_owner_assertions_and_backend_config(self):
         result = self.run_backend(expected_owner=None)
 
@@ -226,7 +300,7 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
     def test_local_state_migration_includes_owner_backend_config(self):
         (self.tf_dir / "terraform.tfstate").write_text("{}\n")
 
-        result = self.run_backend(remote_state_exists=False)
+        result = self.run_backend(remote_state_status="absent")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         terraform_init = next(
@@ -239,7 +313,7 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
         )
 
     def test_fresh_init_includes_owner_backend_config(self):
-        result = self.run_backend(remote_state_exists=False)
+        result = self.run_backend(remote_state_status="absent")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         terraform_init = next(
@@ -250,6 +324,22 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
             f"-backend-config=expected_bucket_owner={EXPECTED_OWNER}",
             terraform_init,
         )
+
+    def test_ambiguous_remote_state_failures_stop_before_terraform(self):
+        (self.tf_dir / "terraform.tfstate").write_text("{}\n")
+        for remote_state_status in ("forbidden", "bad-request", "network"):
+            with self.subTest(remote_state_status=remote_state_status):
+                self.command_log.unlink(missing_ok=True)
+                result = self.run_backend(remote_state_status=remote_state_status)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "Unable to determine whether remote state exists",
+                    result.stderr,
+                )
+                self.assertFalse(any(
+                    line.startswith("terraform ") for line in self.command_lines()
+                ))
 
 
 if __name__ == "__main__":
