@@ -49,19 +49,59 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLATFORM_ENV_LIBRARY="$ROOT_DIR/scripts/lib/platform-env.sh"
 BACKEND_BOOTSTRAP="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
 PRINCIPAL_VALIDATOR="$ROOT_DIR/scripts/validate-uat-workforce-principals.sh"
-PRINCIPAL_INPUT="${UAT_WORKFORCE_PRINCIPALS_INPUT:-$ROOT_DIR/config/environments/uat-workforce-principals.json}"
-EKS_TFVARS="${UAT_EKS_TFVARS_OUTPUT:-$ROOT_DIR/platform-prerequisites/terraform/eks-access/generated.auto.tfvars.json}"
+ACCESS_ROOT="$ROOT_DIR"
+
+configure_access_root() {
+  local requested_root="${UAT_ACCESS_TEST_ROOT:-}"
+  local temp_root=""
+
+  if [[ -z "$requested_root" ]]; then
+    [[ "${UAT_ACCESS_TEST_MODE:-}" != "1" ]] || fail "UAT_ACCESS_TEST_MODE=1 requires UAT_ACCESS_TEST_ROOT"
+    return 0
+  fi
+
+  [[ "${UAT_ACCESS_TEST_MODE:-}" == "1" ]] || fail "UAT_ACCESS_TEST_ROOT requires UAT_ACCESS_TEST_MODE=1"
+  [[ "$requested_root" == /* ]] || fail "UAT_ACCESS_TEST_ROOT must be an absolute existing directory"
+  [[ -d "$requested_root" ]] || fail "UAT_ACCESS_TEST_ROOT must be an absolute existing directory"
+
+  requested_root="$(cd -- "$requested_root" && pwd -P)"
+  temp_root="$(cd -- "${TMPDIR:-/tmp}" && pwd -P)"
+  if [[ "$requested_root" == "/" || "$requested_root" == "$ROOT_DIR" ||
+        "$requested_root" == "$temp_root" || "$requested_root" != "$temp_root"/* ]]; then
+    fail "UAT_ACCESS_TEST_ROOT must be a safe temporary directory below $temp_root"
+  fi
+
+  ACCESS_ROOT="$requested_root"
+}
+
+configure_access_root
+PRINCIPAL_INPUT="$ACCESS_ROOT/config/environments/uat-workforce-principals.json"
+GOVERNANCE_TF_DIR="$ACCESS_ROOT/platform-prerequisites/terraform/access-governance"
+EKS_TF_DIR="$ACCESS_ROOT/platform-prerequisites/terraform/eks-access"
+EKS_TFVARS="$EKS_TF_DIR/generated.auto.tfvars.json"
 PLAN_NAME="uat-access.tfplan"
 ACTIVE_PLAN=""
 ACTIVE_GENERATED_TFVARS=""
 
 cleanup() {
+  local original_status=$?
+  local cleanup_status=0
+
+  trap - EXIT
+  set +e
   if [[ -n "$ACTIVE_PLAN" ]]; then
     rm -f "$ACTIVE_PLAN"
+    [[ $? -eq 0 ]] || cleanup_status=1
   fi
   if [[ -n "$ACTIVE_GENERATED_TFVARS" ]]; then
     rm -f "$ACTIVE_GENERATED_TFVARS"
+    [[ $? -eq 0 ]] || cleanup_status=1
   fi
+
+  if [[ $original_status -ne 0 ]]; then
+    exit "$original_status"
+  fi
+  exit "$cleanup_status"
 }
 trap cleanup EXIT
 
@@ -121,16 +161,12 @@ run_terraform() {
 }
 
 provision_governance() {
-  local tf_dir="$ROOT_DIR/platform-prerequisites/terraform/access-governance"
-
   verify_aws_identity
-  bootstrap_backend "$tf_dir" "$ACCESS_GOVERNANCE_STATE_KEY"
-  run_terraform "$tf_dir"
+  bootstrap_backend "$GOVERNANCE_TF_DIR" "$ACCESS_GOVERNANCE_STATE_KEY"
+  run_terraform "$GOVERNANCE_TF_DIR"
 }
 
 provision_eks_access() {
-  local tf_dir="$ROOT_DIR/platform-prerequisites/terraform/eks-access"
-
   verify_aws_identity
   verify_kubernetes_context
 
@@ -140,8 +176,8 @@ provision_eks_access() {
   [[ -x "$PRINCIPAL_VALIDATOR" ]] || fail "principal validator is not executable: $PRINCIPAL_VALIDATOR"
   "$PRINCIPAL_VALIDATOR" --input "$PRINCIPAL_INPUT" --output "$EKS_TFVARS"
 
-  bootstrap_backend "$tf_dir" "$EKS_ACCESS_STATE_KEY"
-  run_terraform "$tf_dir"
+  bootstrap_backend "$EKS_TF_DIR" "$EKS_ACCESS_STATE_KEY"
+  run_terraform "$EKS_TF_DIR"
 }
 
 case "$SCOPE" in
