@@ -420,6 +420,14 @@ exec "$REAL_JQ" "$@"
         rm_call_file = self.temp_path / "rm-calls"
         rm_call_file.unlink(missing_ok=True)
         env = os.environ.copy()
+        for name in tuple(env):
+            if (
+                name == "TF_CLI_ARGS"
+                or name.startswith("TF_CLI_ARGS_")
+                or name.startswith("TF_VAR_")
+                or name in ("TF_WORKSPACE", "TF_DATA_DIR")
+            ):
+                env.pop(name)
         env.update({
             "PATH": f"{self.mock_bin}:{env['PATH']}",
             "TMPDIR": tempfile.gettempdir(),
@@ -591,6 +599,21 @@ exec "$REAL_JQ" "$@"
         self.assertIn(str(self.generated_tfvars), rm_lines[-1])
         self.assertFalse(self.generated_tfvars.exists())
 
+    def test_successful_run_fails_when_cleanup_fails_and_attempts_all_cleanup(self):
+        result = self.run_provision(
+            "eks-access",
+            rm_fail_on_call=4,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(any(" apply " in line for line in self.command_lines()))
+        rm_lines = [line for line in self.command_lines() if line.startswith("rm ")]
+        self.assertEqual(len(rm_lines), 6, rm_lines)
+        self.assertIn(str(self.eks_root / "uat-access.tfplan"), rm_lines[-2])
+        self.assertIn(str(self.generated_tfvars), rm_lines[-1])
+        self.assertFalse((self.eks_root / "uat-access.tfplan").exists())
+        self.assertFalse(self.generated_tfvars.exists())
+
     def test_test_root_without_explicit_test_mode_is_rejected(self):
         result = self.run_provision("governance", test_mode="")
 
@@ -610,6 +633,107 @@ exec "$REAL_JQ" "$@"
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("safe temporary directory", result.stderr)
                 self.assertEqual(self.command_lines(), [])
+
+    def test_test_mode_accepts_root_below_canonical_tmpdir_symlink(self):
+        tmpdir_link = self.temp_path / "tmpdir-link"
+        tmpdir_link.symlink_to(self.temp_path, target_is_directory=True)
+
+        result = self.run_provision(
+            "governance",
+            extra_env={"TMPDIR": str(tmpdir_link)},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_test_mode_rejects_tmpdir_prefix_lookalike_root(self):
+        approved_tmpdir = self.temp_path / "approved"
+        approved_tmpdir.mkdir()
+        lookalike_root = self.temp_path / "approved-lookalike" / "uat-access-test-root"
+        shutil.copytree(self.test_root, lookalike_root)
+
+        result = self.run_provision(
+            "governance",
+            test_root=lookalike_root,
+            extra_env={"TMPDIR": str(approved_tmpdir)},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("safe temporary directory", result.stderr)
+        self.assertEqual(self.command_lines(), [])
+
+    def test_nested_config_symlink_escape_is_rejected_before_invocation_or_mutation(self):
+        escaped_environments = self.temp_path / "escaped-environments"
+        escaped_environments.mkdir()
+        escaped_input = escaped_environments / "uat-workforce-principals.json"
+        escaped_input.write_text(self.principal_input.read_text())
+        self.principal_input.unlink()
+        self.principal_input.parent.rmdir()
+        self.principal_input.parent.symlink_to(
+            escaped_environments,
+            target_is_directory=True,
+        )
+        self.generated_tfvars.write_text("stale generated output")
+
+        result = self.run_provision("eks-access")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside UAT_ACCESS_TEST_ROOT", result.stderr)
+        self.assertEqual(self.command_lines(), [])
+        self.assertEqual(self.generated_tfvars.read_text(), "stale generated output")
+
+    def test_terraform_root_symlink_escapes_are_rejected_before_invocation_or_mutation(self):
+        for scope, root in (
+            ("governance", self.governance_root),
+            ("eks-access", self.eks_root),
+        ):
+            with self.subTest(scope=scope):
+                escaped_root = self.temp_path / f"escaped-{scope}"
+                shutil.copytree(root, escaped_root)
+                shutil.rmtree(root)
+                root.symlink_to(escaped_root, target_is_directory=True)
+                stale_artifact = escaped_root / (
+                    "generated.auto.tfvars.json"
+                    if scope == "eks-access"
+                    else "uat-access.tfplan"
+                )
+                stale_artifact.write_text("stale artifact")
+
+                result = self.run_provision(scope)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("outside UAT_ACCESS_TEST_ROOT", result.stderr)
+                self.assertEqual(self.command_lines(), [])
+                self.assertEqual(stale_artifact.read_text(), "stale artifact")
+
+                root.unlink()
+                shutil.copytree(escaped_root, root)
+                shutil.rmtree(escaped_root)
+
+    def test_terraform_environment_injection_is_rejected_before_invocation_or_mutation(self):
+        cases = (
+            ("TF_CLI_ARGS", ""),
+            ("TF_CLI_ARGS_plan", "-destroy"),
+            ("TF_VAR_expected_account_id", "815402439714"),
+            ("TF_WORKSPACE", "attacker"),
+            ("TF_DATA_DIR", str(self.temp_path / "attacker-data")),
+        )
+        for variable_name, variable_value in cases:
+            with self.subTest(variable_name=variable_name):
+                self.command_log.unlink(missing_ok=True)
+                governance_plan = self.governance_root / "uat-access.tfplan"
+                governance_plan.write_text("stale plan")
+                self.generated_tfvars.write_text("stale generated output")
+
+                result = self.run_provision(
+                    "governance",
+                    extra_env={variable_name: variable_value},
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(variable_name, result.stderr)
+                self.assertEqual(self.command_lines(), [])
+                self.assertEqual(governance_plan.read_text(), "stale plan")
+                self.assertEqual(self.generated_tfvars.read_text(), "stale generated output")
 
     def test_legacy_path_overrides_cannot_redirect_input_or_output(self):
         alias_path = self.temp_path / "alias.json"

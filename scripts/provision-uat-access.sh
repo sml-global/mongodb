@@ -45,11 +45,42 @@ if [[ $# -eq 2 ]]; then
   AUTO_APPROVE="true"
 fi
 
+reject_terraform_environment_overrides() {
+  local variable_name=""
+
+  while IFS= read -r variable_name; do
+    case "$variable_name" in
+      TF_CLI_ARGS|TF_CLI_ARGS_*|TF_VAR_*|TF_WORKSPACE|TF_DATA_DIR)
+        fail "Terraform environment override is not allowed: $variable_name"
+        ;;
+    esac
+  done < <(compgen -e)
+}
+
+reject_terraform_environment_overrides
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLATFORM_ENV_LIBRARY="$ROOT_DIR/scripts/lib/platform-env.sh"
 BACKEND_BOOTSTRAP="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
 PRINCIPAL_VALIDATOR="$ROOT_DIR/scripts/validate-uat-workforce-principals.sh"
 ACCESS_ROOT="$ROOT_DIR"
+
+is_path_within() {
+  local candidate="$1"
+  local root="$2"
+
+  [[ "$candidate" == "$root" || "$candidate" == "$root"/* ]]
+}
+
+canonicalize_contained_directory() {
+  local directory="$1"
+  local description="$2"
+
+  [[ -d "$directory" ]] || fail "$description directory does not exist: $directory"
+  CANONICAL_DIRECTORY="$(cd -- "$directory" && pwd -P)"
+  is_path_within "$CANONICAL_DIRECTORY" "$ACCESS_ROOT" ||
+    fail "$description directory resolves outside UAT_ACCESS_TEST_ROOT: $directory"
+}
 
 configure_access_root() {
   local requested_root="${UAT_ACCESS_TEST_ROOT:-}"
@@ -67,7 +98,7 @@ configure_access_root() {
   requested_root="$(cd -- "$requested_root" && pwd -P)"
   temp_root="$(cd -- "${TMPDIR:-/tmp}" && pwd -P)"
   if [[ "$requested_root" == "/" || "$requested_root" == "$ROOT_DIR" ||
-        "$requested_root" == "$temp_root" || "$requested_root" != "$temp_root"/* ]]; then
+        "$requested_root" == "$temp_root" ]] || ! is_path_within "$requested_root" "$temp_root"; then
     fail "UAT_ACCESS_TEST_ROOT must be a safe temporary directory below $temp_root"
   fi
 
@@ -75,10 +106,28 @@ configure_access_root() {
 }
 
 configure_access_root
-PRINCIPAL_INPUT="$ACCESS_ROOT/config/environments/uat-workforce-principals.json"
-GOVERNANCE_TF_DIR="$ACCESS_ROOT/platform-prerequisites/terraform/access-governance"
-EKS_TF_DIR="$ACCESS_ROOT/platform-prerequisites/terraform/eks-access"
+
+if [[ "${UAT_ACCESS_TEST_MODE:-}" == "1" ]]; then
+  canonicalize_contained_directory "$ACCESS_ROOT/config" "UAT config"
+  CONFIG_DIR="$CANONICAL_DIRECTORY"
+  canonicalize_contained_directory "$CONFIG_DIR/environments" "UAT environment config"
+  ENVIRONMENT_CONFIG_DIR="$CANONICAL_DIRECTORY"
+  canonicalize_contained_directory \
+    "$ACCESS_ROOT/platform-prerequisites/terraform/access-governance" \
+    "access-governance Terraform root"
+  GOVERNANCE_TF_DIR="$CANONICAL_DIRECTORY"
+  canonicalize_contained_directory \
+    "$ACCESS_ROOT/platform-prerequisites/terraform/eks-access" \
+    "eks-access Terraform root"
+  EKS_TF_DIR="$CANONICAL_DIRECTORY"
+  PRINCIPAL_INPUT="$ENVIRONMENT_CONFIG_DIR/uat-workforce-principals.json"
+else
+  PRINCIPAL_INPUT="$ROOT_DIR/config/environments/uat-workforce-principals.json"
+  GOVERNANCE_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/access-governance"
+  EKS_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/eks-access"
+fi
 EKS_TFVARS="$EKS_TF_DIR/generated.auto.tfvars.json"
+[[ "$PRINCIPAL_INPUT" != "$EKS_TFVARS" ]] || fail "principal input and generated Terraform output must be distinct"
 PLAN_NAME="uat-access.tfplan"
 ACTIVE_PLAN=""
 ACTIVE_GENERATED_TFVARS=""
@@ -125,7 +174,6 @@ bootstrap_backend() {
 remove_generated_tfvars() {
   if [[ -n "$ACTIVE_GENERATED_TFVARS" ]]; then
     rm -f "$ACTIVE_GENERATED_TFVARS"
-    ACTIVE_GENERATED_TFVARS=""
   fi
 }
 
