@@ -45,19 +45,19 @@ if [[ $# -eq 2 ]]; then
   AUTO_APPROVE="true"
 fi
 
-reject_terraform_environment_overrides() {
+reject_execution_environment_overrides() {
   local variable_name=""
 
   while IFS= read -r variable_name; do
     case "$variable_name" in
-      TF_CLI_ARGS|TF_CLI_ARGS_*|TF_VAR_*|TF_WORKSPACE|TF_DATA_DIR)
-        fail "Terraform environment override is not allowed: $variable_name"
+      AWS_ENDPOINT_URL|AWS_ENDPOINT_URL_*|AWS_CA_BUNDLE|TF_CLI_CONFIG_FILE|TF_PLUGIN_CACHE_DIR|TF_REATTACH_PROVIDERS|TF_CLI_ARGS*|TF_VAR*|TF_WORKSPACE|TF_DATA_DIR)
+        fail "Execution environment override is not allowed: $variable_name"
         ;;
     esac
   done < <(compgen -e)
 }
 
-reject_terraform_environment_overrides
+reject_execution_environment_overrides
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLATFORM_ENV_LIBRARY="$ROOT_DIR/scripts/lib/platform-env.sh"
@@ -120,7 +120,8 @@ bootstrap_backend() {
     --tf-dir "$tf_dir" \
     --bucket "$TF_STATE_BUCKET" \
     --region "$TF_STATE_REGION" \
-    --key "$state_key"
+    --key "$state_key" \
+    --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID"
 }
 
 remove_generated_tfvars() {

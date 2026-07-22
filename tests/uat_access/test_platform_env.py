@@ -300,6 +300,22 @@ fi
 if [[ "$1 $2" == "s3api head-bucket" || "$1 $2" == "s3api head-object" ]]; then
   exit 0
 fi
+if [[ "$1 $2" == "s3api get-bucket-location" ]]; then
+    printf 'ap-east-1\n'
+    exit 0
+fi
+if [[ "$1 $2" == "s3api get-bucket-versioning" ]]; then
+    printf 'Enabled\n'
+    exit 0
+fi
+if [[ "$1 $2" == "s3api get-bucket-encryption" ]]; then
+    printf 'AES256\n'
+    exit 0
+fi
+if [[ "$1 $2" == "s3api get-public-access-block" ]]; then
+    printf 'True\tTrue\tTrue\tTrue\n'
+    exit 0
+fi
 printf 'unsupported mock aws invocation: %s\n' "$*" >&2
 exit 64
 """,
@@ -450,9 +466,16 @@ exec "$REAL_JQ" "$@"
         env = os.environ.copy()
         for name in tuple(env):
             if (
-                name == "TF_CLI_ARGS"
-                or name.startswith("TF_CLI_ARGS_")
-                or name.startswith("TF_VAR_")
+                name == "AWS_ENDPOINT_URL"
+                or name.startswith("AWS_ENDPOINT_URL_")
+                or name == "AWS_CA_BUNDLE"
+                or name in (
+                    "TF_CLI_CONFIG_FILE",
+                    "TF_PLUGIN_CACHE_DIR",
+                    "TF_REATTACH_PROVIDERS",
+                )
+                or name.startswith("TF_CLI_ARGS")
+                or name.startswith("TF_VAR")
                 or name in ("TF_WORKSPACE", "TF_DATA_DIR")
             ):
                 env.pop(name)
@@ -517,7 +540,8 @@ exec "$REAL_JQ" "$@"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_ordered_fragments([
             "aws sts get-caller-identity --query Account --output text",
-            "aws s3api head-bucket --bucket sml-oms-uat-tfstate-672172129937",
+            "aws s3api head-bucket --bucket sml-oms-uat-tfstate-672172129937 "
+            "--expected-bucket-owner 672172129937",
             "terraform -chdir=",
             " fmt -check -recursive",
             " validate",
@@ -525,6 +549,10 @@ exec "$REAL_JQ" "$@"
             " apply -input=false uat-access.",
         ])
         self.assertIn("Apply saved Terraform plan for access-governance", result.stdout)
+        self.assertTrue(any(
+            "-backend-config=expected_bucket_owner=672172129937" in line
+            for line in self.command_lines()
+        ))
         self.assertEqual(list(self.governance_root.glob("*.tfplan")), [])
         self.assertFalse(self.lock_dir.exists())
         self.assert_no_forbidden_invocations()
@@ -676,10 +704,18 @@ exec "$REAL_JQ" "$@"
         self.assertEqual(sentinel.read_text(), "unchanged")
         self.assertTrue(all(str(self.test_root) in line or not line.startswith("terraform ") for line in self.command_lines()))
 
-    def test_terraform_environment_injection_is_rejected_before_invocation_or_mutation(self):
+    def test_execution_environment_injection_is_rejected_before_invocation_or_mutation(self):
         cases = (
+            ("AWS_ENDPOINT_URL", ""),
+            ("AWS_ENDPOINT_URL_S3", "https://attacker.invalid"),
+            ("AWS_CA_BUNDLE", str(self.temp_path / "attacker-ca.pem")),
+            ("TF_CLI_CONFIG_FILE", str(self.temp_path / "attacker.tfrc")),
+            ("TF_PLUGIN_CACHE_DIR", str(self.temp_path / "plugins")),
+            ("TF_REATTACH_PROVIDERS", '{"registry.terraform.io/hashicorp/aws":{}}'),
             ("TF_CLI_ARGS", ""),
+            ("TF_CLI_ARGSplan", "-destroy"),
             ("TF_CLI_ARGS_plan", "-destroy"),
+            ("TF_VARexpected_account_id", "815402439714"),
             ("TF_VAR_expected_account_id", "815402439714"),
             ("TF_WORKSPACE", "attacker"),
             ("TF_DATA_DIR", str(self.temp_path / "attacker-data")),
@@ -697,10 +733,15 @@ exec "$REAL_JQ" "$@"
                 )
 
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn(variable_name, result.stderr)
+                self.assertEqual(
+                    result.stderr,
+                    "ERROR: Execution environment override is not allowed: "
+                    f"{variable_name}\n",
+                )
                 self.assertEqual(self.command_lines(), [])
                 self.assertEqual(governance_plan.read_text(), "stale plan")
                 self.assertEqual(self.generated_tfvars.read_text(), "stale generated output")
+                self.assertFalse(self.lock_dir.exists())
 
     def test_legacy_path_overrides_cannot_redirect_input_or_output(self):
         alias_path = self.temp_path / "alias.json"
