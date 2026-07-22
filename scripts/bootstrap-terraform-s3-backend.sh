@@ -57,7 +57,7 @@ inspect_remote_state() {
   fi
 
   case "$error_output" in
-    *"(404)"*|*"Not Found"*|*"NoSuchKey"*) return 1 ;;
+    *"An error occurred (404) when calling the HeadObject operation:"*) return 1 ;;
     *)
       echo "Error: Unable to determine whether remote state exists at s3://$bucket/$key" >&2
       return 2

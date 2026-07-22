@@ -76,12 +76,24 @@ case "$operation" in
                 printf 'An error occurred (403) when calling the HeadObject operation: Forbidden\n' >&2
                 exit 42
                 ;;
+            forbidden-not-found)
+                printf 'An error occurred (403) when calling the HeadObject operation: Forbidden: Not Found\n' >&2
+                exit 42
+                ;;
             bad-request)
                 printf 'An error occurred (400) when calling the HeadObject operation: Bad Request\n' >&2
                 exit 42
                 ;;
+            bad-request-not-found)
+                printf 'An error occurred (400) when calling the HeadObject operation: Bad Request: Not Found\n' >&2
+                exit 42
+                ;;
             network)
                 printf 'Could not connect to the endpoint URL: https://s3.invalid\n' >&2
+                exit 42
+                ;;
+            proxy-nosuchkey)
+                printf 'Proxy error while requesting https://s3.invalid: NoSuchKey\n' >&2
                 exit 42
                 ;;
         esac
@@ -324,6 +336,28 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
             f"-backend-config=expected_bucket_owner={EXPECTED_OWNER}",
             terraform_init,
         )
+
+    def assert_remote_state_inspection_aborts(self, remote_state_status):
+        (self.tf_dir / "terraform.tfstate").write_text("{}\n")
+        result = self.run_backend(remote_state_status=remote_state_status)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Unable to determine whether remote state exists",
+            result.stderr,
+        )
+        self.assertFalse(any(
+            line.startswith("terraform ") for line in self.command_lines()
+        ))
+
+    def test_403_forbidden_not_found_stops_before_terraform(self):
+        self.assert_remote_state_inspection_aborts("forbidden-not-found")
+
+    def test_proxy_nosuchkey_stops_before_terraform(self):
+        self.assert_remote_state_inspection_aborts("proxy-nosuchkey")
+
+    def test_400_not_found_stops_before_terraform(self):
+        self.assert_remote_state_inspection_aborts("bad-request-not-found")
 
     def test_ambiguous_remote_state_failures_stop_before_terraform(self):
         (self.tf_dir / "terraform.tfstate").write_text("{}\n")
