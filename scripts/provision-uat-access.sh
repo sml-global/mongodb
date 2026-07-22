@@ -50,7 +50,7 @@ reject_execution_environment_overrides() {
 
   while IFS= read -r variable_name; do
     case "$variable_name" in
-      AWS_ENDPOINT_URL|AWS_ENDPOINT_URL_*|AWS_CA_BUNDLE|TF_CLI_CONFIG_FILE|TF_PLUGIN_CACHE_DIR|TF_REATTACH_PROVIDERS|TF_CLI_ARGS*|TF_VAR*|TF_WORKSPACE|TF_DATA_DIR)
+      AWS_ENDPOINT_URL|AWS_ENDPOINT_URL_*|AWS_S3_ENDPOINT|AWS_STS_ENDPOINT|AWS_CA_BUNDLE|TF_CLI_CONFIG_FILE|TF_PLUGIN_CACHE_DIR|TF_REATTACH_PROVIDERS|TF_CLI_ARGS*|TF_VAR*|TF_WORKSPACE|TF_DATA_DIR)
         fail "Execution environment override is not allowed: $variable_name"
         ;;
     esac
@@ -58,6 +58,8 @@ reject_execution_environment_overrides() {
 }
 
 reject_execution_environment_overrides
+# Ignore endpoint_url and services settings from otherwise authorized shared AWS profiles.
+export AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLATFORM_ENV_LIBRARY="$ROOT_DIR/scripts/lib/platform-env.sh"
