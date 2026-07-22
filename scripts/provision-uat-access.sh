@@ -63,83 +63,13 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PLATFORM_ENV_LIBRARY="$ROOT_DIR/scripts/lib/platform-env.sh"
 BACKEND_BOOTSTRAP="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
 PRINCIPAL_VALIDATOR="$ROOT_DIR/scripts/validate-uat-workforce-principals.sh"
-ACCESS_ROOT="$ROOT_DIR"
-
-is_path_within() {
-  local candidate="$1"
-  local root="$2"
-
-  [[ "$candidate" == "$root" || "$candidate" == "$root"/* ]]
-}
-
-canonicalize_contained_directory() {
-  local directory="$1"
-  local description="$2"
-
-  [[ -d "$directory" ]] || fail "$description directory does not exist: $directory"
-  CANONICAL_DIRECTORY="$(cd -- "$directory" && pwd -P)"
-  is_path_within "$CANONICAL_DIRECTORY" "$ACCESS_ROOT" ||
-    fail "$description directory resolves outside UAT_ACCESS_TEST_ROOT: $directory"
-}
-
-reject_symbolic_links_beneath() {
-  local directory="$1"
-  local symbolic_link=""
-
-  if ! symbolic_link="$(find "$directory" -type l -print -quit)"; then
-    fail "unable to inspect UAT test fixture for symbolic links: $directory"
-  fi
-  [[ -z "$symbolic_link" ]] || fail "UAT test fixture contains a symbolic link: $symbolic_link"
-}
-
-configure_access_root() {
-  local requested_root="${UAT_ACCESS_TEST_ROOT:-}"
-  local temp_root=""
-
-  if [[ -z "$requested_root" ]]; then
-    [[ "${UAT_ACCESS_TEST_MODE:-}" != "1" ]] || fail "UAT_ACCESS_TEST_MODE=1 requires UAT_ACCESS_TEST_ROOT"
-    return 0
-  fi
-
-  [[ "${UAT_ACCESS_TEST_MODE:-}" == "1" ]] || fail "UAT_ACCESS_TEST_ROOT requires UAT_ACCESS_TEST_MODE=1"
-  [[ "$requested_root" == /* ]] || fail "UAT_ACCESS_TEST_ROOT must be an absolute existing directory"
-  [[ -d "$requested_root" ]] || fail "UAT_ACCESS_TEST_ROOT must be an absolute existing directory"
-
-  requested_root="$(cd -- "$requested_root" && pwd -P)"
-  temp_root="$(cd -- "${TMPDIR:-/tmp}" && pwd -P)"
-  if [[ "$requested_root" == "/" || "$requested_root" == "$ROOT_DIR" ||
-        "$requested_root" == "$temp_root" ]] || ! is_path_within "$requested_root" "$temp_root"; then
-    fail "UAT_ACCESS_TEST_ROOT must be a safe temporary directory below $temp_root"
-  fi
-
-  ACCESS_ROOT="$requested_root"
-}
-
-configure_access_root
-
-if [[ "${UAT_ACCESS_TEST_MODE:-}" == "1" ]]; then
-  canonicalize_contained_directory "$ACCESS_ROOT/config" "UAT config"
-  CONFIG_DIR="$CANONICAL_DIRECTORY"
-  canonicalize_contained_directory "$CONFIG_DIR/environments" "UAT environment config"
-  ENVIRONMENT_CONFIG_DIR="$CANONICAL_DIRECTORY"
-  canonicalize_contained_directory \
-    "$ACCESS_ROOT/platform-prerequisites/terraform/access-governance" \
-    "access-governance Terraform root"
-  GOVERNANCE_TF_DIR="$CANONICAL_DIRECTORY"
-  canonicalize_contained_directory \
-    "$ACCESS_ROOT/platform-prerequisites/terraform/eks-access" \
-    "eks-access Terraform root"
-  EKS_TF_DIR="$CANONICAL_DIRECTORY"
-  reject_symbolic_links_beneath "$ACCESS_ROOT"
-  PRINCIPAL_INPUT="$ENVIRONMENT_CONFIG_DIR/uat-workforce-principals.json"
-else
-  PRINCIPAL_INPUT="$ROOT_DIR/config/environments/uat-workforce-principals.json"
-  GOVERNANCE_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/access-governance"
-  EKS_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/eks-access"
-fi
+PRINCIPAL_INPUT="$ROOT_DIR/config/environments/uat-workforce-principals.json"
+GOVERNANCE_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/access-governance"
+EKS_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/eks-access"
 EKS_TFVARS="$EKS_TF_DIR/generated.auto.tfvars.json"
 [[ "$PRINCIPAL_INPUT" != "$EKS_TFVARS" ]] || fail "principal input and generated Terraform output must be distinct"
-PLAN_NAME="uat-access.tfplan"
+LOCK_DIR="$ROOT_DIR/.uat-access.lock"
+LOCK_HELD="false"
 ACTIVE_PLAN=""
 ACTIVE_GENERATED_TFVARS=""
 
@@ -157,6 +87,10 @@ cleanup() {
     rm -f "$ACTIVE_GENERATED_TFVARS"
     [[ $? -eq 0 ]] || cleanup_status=1
   fi
+  if [[ "$LOCK_HELD" == "true" ]]; then
+    rmdir "$LOCK_DIR"
+    [[ $? -eq 0 ]] || cleanup_status=1
+  fi
 
   if [[ $original_status -ne 0 ]]; then
     exit "$original_status"
@@ -169,6 +103,13 @@ trap cleanup EXIT
 # shellcheck disable=SC1090
 source "$PLATFORM_ENV_LIBRARY"
 load_platform_env uat
+
+acquire_lock() {
+  if ! mkdir "$LOCK_DIR"; then
+    fail "another UAT access orchestration is running: $LOCK_DIR"
+  fi
+  LOCK_HELD="true"
+}
 
 bootstrap_backend() {
   local tf_dir="$1"
@@ -205,30 +146,27 @@ confirm_apply() {
 run_terraform() {
   local tf_dir="$1"
   local root_name="${tf_dir##*/}"
-  local plan_path="$tf_dir/$PLAN_NAME"
+  local plan_name="uat-access.$$.tfplan"
+  local plan_path="$tf_dir/$plan_name"
 
   ACTIVE_PLAN="$plan_path"
   rm -f "$plan_path"
   terraform -chdir="$tf_dir" fmt -check -recursive
   terraform -chdir="$tf_dir" validate
-  terraform -chdir="$tf_dir" plan -input=false -out="$PLAN_NAME" -var-file=uat.tfvars
+  terraform -chdir="$tf_dir" plan -input=false -out="$plan_name" -var-file=uat.tfvars
   remove_generated_tfvars
   confirm_apply "$root_name"
-  terraform -chdir="$tf_dir" apply -input=false "$PLAN_NAME"
+  terraform -chdir="$tf_dir" apply -input=false "$plan_name"
   rm -f "$plan_path"
   ACTIVE_PLAN=""
 }
 
 provision_governance() {
-  verify_aws_identity
   bootstrap_backend "$GOVERNANCE_TF_DIR" "$ACCESS_GOVERNANCE_STATE_KEY"
   run_terraform "$GOVERNANCE_TF_DIR"
 }
 
 provision_eks_access() {
-  verify_aws_identity
-  verify_kubernetes_context
-
   ACTIVE_GENERATED_TFVARS="$EKS_TFVARS"
   rm -f "$EKS_TFVARS"
   [[ -r "$PRINCIPAL_INPUT" ]] || fail "UAT workforce principal input is not readable: $PRINCIPAL_INPUT"
@@ -241,12 +179,22 @@ provision_eks_access() {
 
 case "$SCOPE" in
   governance)
+    verify_aws_identity
+    acquire_lock
     provision_governance
     ;;
   eks-access)
+    verify_aws_identity
+    verify_kubernetes_context
+    verify_eks_authentication_mode
+    acquire_lock
     provision_eks_access
     ;;
   all)
+    verify_aws_identity
+    verify_kubernetes_context
+    verify_eks_authentication_mode
+    acquire_lock
     provision_governance
     provision_eks_access
     ;;

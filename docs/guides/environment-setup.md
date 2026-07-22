@@ -408,6 +408,11 @@ cluster `EKS-boomi-runtime-cluster` and namespace `boomi-uat`. Dev account
 `815402439714` is evidence/read-only and must not be mutated by this workflow.
 No other AWS account may be accessed.
 
+The UAT access-foundation roots require Terraform `>= 1.10.0`. They use the
+S3 backend's native lockfile support in addition to the repository entrypoint's
+local orchestration lock. This UAT-specific requirement does not change the
+existing dev workflow or its Terraform roots.
+
 AWS IAM Identity Center is an external prerequisite owned by the authorized
 identity owner. This repository neither manages nor inspects Identity Center.
 There is no SAML-role or IAM-user fallback. Before an operator runs the UAT
@@ -459,6 +464,23 @@ Do not run mutating `kubectl` commands during access setup. A context alias is
 acceptable, but the platform environment helper resolves the selected
 context's cluster reference and requires the canonical value
 `arn:aws:eks:ap-east-1:672172129937:cluster/EKS-boomi-runtime-cluster`.
+
+The external EKS cluster must already use authentication mode `API` or
+`API_AND_CONFIG_MAP`. An authorized operator can check this read-only
+prerequisite with:
+
+```bash
+aws eks describe-cluster \
+  --name EKS-boomi-runtime-cluster \
+  --region ap-east-1 \
+  --query 'cluster.accessConfig.authenticationMode' \
+  --output text
+```
+
+Stop if the result is `CONFIG_MAP`, empty, or the command fails. The UAT
+entrypoint performs the same check before principal validation, generated
+output, backend initialization, or Terraform; it does not change the cluster's
+authentication mode.
 
 After those assignments produce IAM roles, the identity owner supplies the
 four role ARNs in the gitignored file

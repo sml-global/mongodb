@@ -60,6 +60,27 @@ and explicit deployment authorization exists. The workflow may mutate only
 UAT account `672172129937`; dev account `815402439714` is evidence/read-only,
 and no other AWS account may be accessed.
 
+The UAT access-foundation roots require Terraform `>= 1.10.0` and use native
+S3 backend lockfiles. This requirement is scoped to these new roots and does
+not alter the dev workflow.
+
+Before EKS access planning, verify the external cluster already supports EKS
+access entries. This is a read-only future authorized check; it does not claim
+the command has been run:
+
+```bash
+aws eks describe-cluster \
+  --name EKS-boomi-runtime-cluster \
+  --region ap-east-1 \
+  --query 'cluster.accessConfig.authenticationMode' \
+  --output text
+```
+
+Only `API` and `API_AND_CONFIG_MAP` are accepted. `CONFIG_MAP`, empty output,
+or an AWS error is a stop condition. The repository entrypoint enforces this
+after exact account and kube-context checks and before generated output,
+backend initialization, or Terraform; it never changes the cluster mode.
+
 First, validate the owner-supplied contract offline. This command does not call
 AWS:
 
