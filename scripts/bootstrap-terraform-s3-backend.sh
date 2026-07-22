@@ -8,7 +8,8 @@ Usage:
     --tf-dir <terraform-root-dir> \
     --bucket <s3-bucket-name> \
     --region <aws-region> \
-    --key <state-object-key>
+    --key <state-object-key> \
+    [--expected-bucket-owner <12-digit-aws-account-id>]
 
 Behavior:
 - Creates the S3 bucket if it does not exist.
@@ -28,18 +29,38 @@ require_cmd() {
 }
 
 bucket_exists() {
-  aws s3api head-bucket --bucket "$1" >/dev/null 2>&1
+  local bucket="$1"
+  local expected_owner="$2"
+  local owner_args=()
+  if [[ -n "$expected_owner" ]]; then
+    owner_args=(--expected-bucket-owner "$expected_owner")
+  fi
+
+  aws s3api head-bucket --bucket "$bucket" "${owner_args[@]}" >/dev/null 2>&1
 }
 
 remote_state_exists() {
-  aws s3api head-object --bucket "$1" --key "$2" >/dev/null 2>&1
+  local bucket="$1"
+  local key="$2"
+  local expected_owner="$3"
+  local owner_args=()
+  if [[ -n "$expected_owner" ]]; then
+    owner_args=(--expected-bucket-owner "$expected_owner")
+  fi
+
+  aws s3api head-object --bucket "$bucket" --key "$key" "${owner_args[@]}" >/dev/null 2>&1
 }
 
 create_bucket_if_missing() {
   local bucket="$1"
   local region="$2"
+  local expected_owner="$3"
+  local owner_args=()
+  if [[ -n "$expected_owner" ]]; then
+    owner_args=(--expected-bucket-owner "$expected_owner")
+  fi
 
-  if bucket_exists "$bucket"; then
+  if bucket_exists "$bucket" "$expected_owner"; then
     echo "S3 bucket exists: $bucket"
     return 0
   fi
@@ -57,17 +78,91 @@ create_bucket_if_missing() {
   echo "Applying bucket baseline controls"
   aws s3api put-bucket-versioning \
     --bucket "$bucket" \
+    "${owner_args[@]}" \
     --versioning-configuration Status=Enabled >/dev/null
 
   aws s3api put-bucket-encryption \
     --bucket "$bucket" \
+    "${owner_args[@]}" \
     --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' >/dev/null
 
   aws s3api put-public-access-block \
     --bucket "$bucket" \
+    "${owner_args[@]}" \
     --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
 
   echo "S3 bucket created and baseline controls applied: $bucket"
+}
+
+verify_bucket_controls() {
+  local bucket="$1"
+  local requested_region="$2"
+  local expected_owner="$3"
+  local actual_region=""
+  local versioning_status=""
+  local encryption_algorithms=""
+  local encryption_algorithm=""
+  local public_access_block=""
+  local owner_args=(--expected-bucket-owner "$expected_owner")
+
+  if ! bucket_exists "$bucket" "$expected_owner"; then
+    echo "Error: S3 bucket is inaccessible or is not owned by expected account: $bucket" >&2
+    exit 1
+  fi
+
+  actual_region="$(aws s3api get-bucket-location \
+    --bucket "$bucket" \
+    "${owner_args[@]}" \
+    --query LocationConstraint \
+    --output text)"
+  if [[ "$actual_region" == "None" || "$actual_region" == "null" ]]; then
+    actual_region="us-east-1"
+  fi
+  if [[ "$actual_region" != "$requested_region" ]]; then
+    echo "Error: S3 bucket region does not match requested region: $bucket" >&2
+    exit 1
+  fi
+
+  versioning_status="$(aws s3api get-bucket-versioning \
+    --bucket "$bucket" \
+    "${owner_args[@]}" \
+    --query Status \
+    --output text)"
+  if [[ "$versioning_status" != "Enabled" ]]; then
+    echo "Error: S3 bucket versioning is not enabled: $bucket" >&2
+    exit 1
+  fi
+
+  encryption_algorithms="$(aws s3api get-bucket-encryption \
+    --bucket "$bucket" \
+    "${owner_args[@]}" \
+    --query 'ServerSideEncryptionConfiguration.Rules[].ApplyServerSideEncryptionByDefault.SSEAlgorithm' \
+    --output text)"
+  [[ -n "$encryption_algorithms" && "$encryption_algorithms" != "None" ]] || {
+    echo "Error: S3 bucket encryption is not configured: $bucket" >&2
+    exit 1
+  }
+  for encryption_algorithm in $encryption_algorithms; do
+    case "$encryption_algorithm" in
+      AES256) ;;
+      *)
+        echo "Error: S3 bucket encryption is not approved: $bucket" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  public_access_block="$(aws s3api get-public-access-block \
+    --bucket "$bucket" \
+    "${owner_args[@]}" \
+    --query '[PublicAccessBlockConfiguration.BlockPublicAcls,PublicAccessBlockConfiguration.IgnorePublicAcls,PublicAccessBlockConfiguration.BlockPublicPolicy,PublicAccessBlockConfiguration.RestrictPublicBuckets]' \
+    --output text)"
+  if [[ "$public_access_block" != $'True\tTrue\tTrue\tTrue' ]]; then
+    echo "Error: S3 bucket public access block is incomplete: $bucket" >&2
+    exit 1
+  fi
+
+  echo "S3 bucket ownership and baseline controls verified: $bucket"
 }
 
 ensure_backend_block_exists() {
@@ -85,6 +180,7 @@ main() {
   local bucket=""
   local region=""
   local key=""
+  local expected_owner=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -104,6 +200,10 @@ main() {
         key="$2"
         shift 2
         ;;
+      --expected-bucket-owner)
+        expected_owner="$2"
+        shift 2
+        ;;
       -h|--help)
         usage
         exit 0
@@ -121,6 +221,10 @@ main() {
     usage
     exit 1
   fi
+  if [[ -n "$expected_owner" && ! "$expected_owner" =~ ^[0-9]{12}$ ]]; then
+    echo "Error: --expected-bucket-owner must be a 12-digit AWS account ID" >&2
+    exit 1
+  fi
 
   require_cmd aws
   require_cmd terraform
@@ -132,17 +236,26 @@ main() {
   fi
 
   ensure_backend_block_exists "$tf_dir"
-  create_bucket_if_missing "$bucket" "$region"
+  create_bucket_if_missing "$bucket" "$region" "$expected_owner"
+  if [[ -n "$expected_owner" ]]; then
+    verify_bucket_controls "$bucket" "$region" "$expected_owner"
+  fi
 
   echo "Preparing Terraform backend in: $tf_dir"
 
-  if remote_state_exists "$bucket" "$key"; then
+  local backend_owner_config=()
+  if [[ -n "$expected_owner" ]]; then
+    backend_owner_config=(-backend-config="expected_bucket_owner=$expected_owner")
+  fi
+
+  if remote_state_exists "$bucket" "$key" "$expected_owner"; then
     echo "Remote state exists at s3://$bucket/$key"
     terraform -chdir="$tf_dir" init -reconfigure -input=false \
       -backend-config="bucket=$bucket" \
       -backend-config="key=$key" \
       -backend-config="region=$region" \
-      -backend-config="encrypt=true"
+      -backend-config="encrypt=true" \
+      "${backend_owner_config[@]}"
     echo "Backend configured to existing remote state"
     return 0
   fi
@@ -153,7 +266,8 @@ main() {
       -backend-config="bucket=$bucket" \
       -backend-config="key=$key" \
       -backend-config="region=$region" \
-      -backend-config="encrypt=true"
+      -backend-config="encrypt=true" \
+      "${backend_owner_config[@]}"
     echo "Local state migrated to s3://$bucket/$key"
     return 0
   fi
@@ -163,7 +277,8 @@ main() {
     -backend-config="bucket=$bucket" \
     -backend-config="key=$key" \
     -backend-config="region=$region" \
-    -backend-config="encrypt=true"
+    -backend-config="encrypt=true" \
+    "${backend_owner_config[@]}"
   echo "Fresh S3 backend configured at s3://$bucket/$key"
 }
 

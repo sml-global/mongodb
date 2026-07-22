@@ -104,9 +104,13 @@ principal file before backend initialization and plans exactly three EKS access
 entries and policy associations. `all` acquires one lock after all required
 identity/context prerequisites and holds it through governance and EKS, with
 governance apply completing before EKS generated output or backend work. The
-two UAT roots also use native S3 lockfiles. Use these repository entrypoints
-only; do not run raw Terraform or reuse existing dev provisioning scripts for
-this UAT workflow.
+two UAT roots also use native S3 lockfiles. Their state bucket must be owned by
+the configured UAT AWS account. Before every Terraform initialization, the
+backend bootstrap asserts that ownership through S3, verifies the requested
+region, enabled versioning, approved server-side encryption, and all four
+public-access-block controls, and fails closed on any inaccessible, missing, or
+mismatched control. Use these repository entrypoints only; do not run raw
+Terraform or reuse existing dev provisioning scripts for this UAT workflow.
 
 By default, each saved plan is applied only after the operator reviews it and
 types the exact response `yes`. Stop instead of approving if the plan differs
