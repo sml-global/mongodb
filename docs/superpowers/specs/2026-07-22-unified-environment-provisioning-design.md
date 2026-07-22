@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-22
 
-**Status:** Proposed Phase 2 design
+**Status:** Approved design
 
 ## Purpose
 
