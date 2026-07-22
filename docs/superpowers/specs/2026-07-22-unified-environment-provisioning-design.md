@@ -95,10 +95,13 @@ passes its promotion gate.
 | `platform-controllers` | cert-manager, Kyverno, and Flux where still required | Kubernetes/Helm with environment overlays |
 | `boomi-runtime` | Standard private Boomi runtime cluster, bootstrap Secret lifecycle, shared EFS, services and disruption controls | Versioned Kubernetes manifests and guarded scripts |
 | `mongodb` | PBM storage/IAM, namespace identity, Percona operator, MongoDB cluster, policies, secrets and collectors | Terraform and Kubernetes |
-| `postgresql` | Aurora PostgreSQL, subnet/security configuration and collector identity | Terraform |
+| `postgresql-core` | Core OMS Aurora PostgreSQL cluster, subnet/security configuration, backup, logging, and lifecycle controls | Terraform |
+| `postgresql-brand` | Brand-specific Aurora PostgreSQL cluster, subnet/security configuration, backup, logging, and lifecycle controls | Terraform |
 | `signoz` | SigNoz platform and Kubernetes telemetry collectors | Kubernetes |
 | `signoz-observability` | Dashboards and alerts as code | Terraform using the SigNoz API |
-| `database-access` | Approved MongoDB and PostgreSQL workforce/database roles, grants, and audit settings | Guarded database configuration after databases are ready |
+| `database-access-core` | Approved core OMS PostgreSQL workforce/database roles, grants, and audit settings | Guarded database configuration after core PostgreSQL is ready |
+| `database-access-brand` | Approved brand PostgreSQL workforce/database roles, grants, and audit settings | Guarded database configuration after brand PostgreSQL is ready |
+| `mongodb-access` | Approved MongoDB workforce/database roles, grants, and audit settings | Guarded database configuration after MongoDB is ready |
 | `workload-identity` | Approved application and collector Pod Identity roles and associations not owned by a component root | Terraform |
 | `verification` | Component readiness, account/context checks and environment smoke tests | Guarded verification scripts |
 
@@ -138,8 +141,9 @@ Mandatory audit and alert ownership is explicit:
 | CloudTrail management events and governance-change event rules | `access-governance` |
 | EKS access-entry change alerts | `access-governance` |
 | Kubernetes RBAC/admission audit signals | `platform-controllers`, exported to the approved telemetry sink |
-| MongoDB authentication, role, DDL, and administrative audit configuration | `database-access` |
-| PostgreSQL connection, role, DDL, and administrative statement logging | `database-access` |
+| MongoDB authentication, role, DDL, and administrative audit configuration | `mongodb-access` |
+| Core PostgreSQL connection, role, DDL, and administrative statement logging | `database-access-core` |
+| Brand PostgreSQL connection, role, DDL, and administrative statement logging | `database-access-brand` |
 | Database and workload alert rules in SigNoz | `signoz-observability` |
 | Identity Center assignment alerts | External identity owner; repository documentation and verification evidence only |
 | S3 data events for approved cross-account application prefixes | Future cross-account S3 scope, enabled only with bucket-owner approval |
@@ -169,8 +173,11 @@ eks-access
 platform-controllers
 boomi-runtime
 mongodb
-postgresql
-database-access
+postgresql-core
+postgresql-brand
+mongodb-access
+database-access-core
+database-access-brand
 workload-identity
 signoz
 signoz-observability
@@ -235,6 +242,9 @@ The schema is identical across environments and includes:
   stability.
 - Node-group capacity, database sizing, storage sizing, retention, backup, and
   deletion-protection settings.
+- Independent core OMS and brand PostgreSQL identifiers, database names,
+  engine versions, instance classes, writer placement, ingress sources,
+  retention, logging, deletion protection, and final-snapshot policy.
 - Boomi runtime name, image selector, replica policy, resources, probes, and
   graceful-shutdown settings.
 - Environment tags and feature/promotion gates.
@@ -343,7 +353,8 @@ oms/<env>/access-governance.tfstate
 oms/<env>/eks-access.tfstate
 oms/<env>/workload-identity.tfstate
 oms/<env>/mongo.tfstate
-oms/<env>/pg.tfstate
+oms/<env>/postgresql-core.tfstate
+oms/<env>/postgresql-brand.tfstate
 oms/<env>/signoz-observability.tfstate
 ```
 
@@ -372,13 +383,14 @@ platform-prerequisites/terraform/
     efs/
     backup/
     mongodb-prerequisites/
-    postgresql/
+    postgresql-cluster/
   eks-platform/
   access-governance/
   eks-access/
   workload-identity/
   mongodb/
-  postgresql/
+  postgresql-core/
+  postgresql-brand/
   signoz-observability/
   environments/
     dev/
@@ -395,6 +407,65 @@ The `workload-identity` root owns cross-component application and collector
 Pod Identity roles/associations. Component-specific identities remain in their
 component roots to avoid split ownership. Shared IAM policy/trust construction
 belongs in reusable modules called by the owning root.
+
+The two PostgreSQL roots call one reusable `postgresql-cluster` module. They do
+not copy Aurora resources. Each root has its own backend state, input file,
+provider guard, outputs, saved plan, approval, and lifecycle controls. Shared
+CloudWatch collector IAM/Pod Identity is owned by `workload-identity`, not
+duplicated in either database root.
+
+`database-access-core` and `database-access-brand` call one reusable
+PostgreSQL-access implementation with different closed role matrices and
+connection inputs. They maintain separate generated inputs, locks, evidence,
+verification, and cleanup. Neither scope initializes, connects to, or requires
+the other cluster. `mongodb-access` remains independently callable for the same
+reason.
+
+The core OMS and brand clusters are independent failure and change domains.
+Operators can plan, scale, retain, restore, or destroy one without initializing
+or changing the other's state. Environment configuration must give them unique
+cluster identifiers, subnet/security-group names, database names, Secrets
+Manager references, monitoring dimensions, and final-snapshot identifiers.
+
+### PostgreSQL Authorization And Operations
+
+The two clusters implement different authorization boundaries from the
+approved workforce design:
+
+| Role | Core OMS cluster | Brand cluster |
+|---|---|---|
+| Infra Admin / EA | AWS owner and documented DB break-glass | AWS owner and documented DB break-glass |
+| Application Developer | Database administrator | Database administrator |
+| Boomi Admin | No login or network/database grant | Database administrator |
+| Boomi Process Owner | No login or network/database grant | Database administrator |
+
+Database administration permits database/schema/table/application-role
+management and DDL/DML. It does not grant RDS control-plane, networking, KMS,
+backup, or IAM administration.
+
+Each cluster has distinct master-secret references and distinct named human and
+workload roles. Credentials, RDS Proxy/workload Secrets, connection strings,
+security-group ingress, parameter groups, and database audit settings are not
+shared between clusters. A credential or grant for the brand cluster must not
+authenticate to or reach the core OMS cluster.
+
+Both clusters enable connection, role-change, DDL, and approved administrative
+statement logging. Monitoring queries and dashboards carry a cluster-role
+dimension (`core` or `brand`) and an environment dimension so health and alerts
+cannot aggregate the two clusters into one ambiguous signal.
+
+The current single dev PostgreSQL state is a legacy compatibility object. The
+UAT-first implementation creates two new UAT states. Dev promotion must decide,
+with evidence, whether the existing dev cluster maps to `postgresql-core` or
+`postgresql-brand`, adopt it into exactly that state, and create/adopt the
+missing cluster through a separate reviewed plan. It must not duplicate the
+existing cluster or split one state implicitly.
+
+If business migration requires temporary retention of a third legacy cluster,
+that cluster is outside the final repository-managed dev topology. It requires
+a named owner, read/write status, data-migration plan, retirement deadline, and
+explicit gate blocking declaration of dev completion until it is retired or
+formally transferred outside this project.
 
 Kubernetes/Helm-owned `platform-controllers` has no Terraform state. Its
 rendered inventory and release names are environment-qualified and recorded as
@@ -480,15 +551,19 @@ flowchart TD
   C --> R[Boomi runtime]
   W --> R
   C --> M[MongoDB]
-  X --> D[PostgreSQL]
-  M --> DA[Database access]
-  D --> DA
+  X --> PC[Core OMS PostgreSQL]
+  X --> PB[Brand PostgreSQL]
+  M --> MA[MongoDB access]
+  PC --> CA[Core DB access]
+  PB --> BA[Brand DB access]
   C --> S[SigNoz]
   S --> O[SigNoz observability]
   A --> V[Environment verification]
   R --> V
   M --> V
-  DA --> V
+  MA --> V
+  CA --> V
+  BA --> V
   O --> V
 ```
 
@@ -507,11 +582,14 @@ The detailed `all` sequence is:
 10. Verify required storage drivers/controllers, then bootstrap and apply the
   Boomi runtime.
 11. Apply MongoDB prerequisites, secrets, operator, policies, and workload.
-12. Apply PostgreSQL.
-13. Apply approved database roles, grants, and audit settings.
-14. Apply SigNoz.
-15. Apply SigNoz observability.
-16. Run component verification and the environment smoke test.
+12. Apply core OMS PostgreSQL.
+13. Apply brand PostgreSQL.
+14. Verify each cluster independently, then apply `database-access-core` and
+  `database-access-brand` independently using their distinct approved role
+  matrices. Apply `mongodb-access` after MongoDB readiness.
+15. Apply SigNoz.
+16. Apply SigNoz observability.
+17. Run component verification and the environment smoke test.
 
 Independent branches may run only when their dependencies and state locks are
 proven independent. Initial implementation remains sequential for clarity and
@@ -526,14 +604,17 @@ mandatory retained governance controls:
 1. SigNoz observability.
 2. SigNoz platform.
 3. Boomi runtime after graceful shutdown and runtime-specific confirmation.
-4. Database-native workforce roles and grants, after audit evidence is retained
-  and before either database becomes unavailable.
+4. The matching database-native access scope for each selected database, after
+  audit evidence is retained and before that database becomes unavailable.
 5. MongoDB workload and prerequisites after backup/retention checks.
-6. PostgreSQL after database-specific retention and deletion confirmation.
-7. Workload-identity bindings after their consumers are absent.
-8. Platform controllers that are not required by remaining workloads.
-9. EKS access entries where approved.
-10. EKS platform only after all dependents are absent and data-retention evidence
+6. Brand PostgreSQL after its own backup, final-snapshot, deletion-protection,
+  and typed-confirmation checks.
+7. Core OMS PostgreSQL after a separate, stronger production-data retention
+  review, final snapshot, deletion-protection decision, and typed confirmation.
+8. Workload-identity bindings after their consumers are absent.
+9. Platform controllers that are not required by remaining workloads.
+10. EKS access entries where approved.
+11. EKS platform only after all dependents are absent and data-retention evidence
    is recorded.
 
 Persistent-data scopes require stronger typed confirmation that includes
@@ -554,8 +635,9 @@ Every narrow destroy scope has dependency preconditions:
 - `mongodb` separates workload removal, backup/retention verification, retained
   storage, and prerequisite destruction; partial completion is reported and
   resumable.
-- `postgresql` requires backup/final-snapshot and deletion-protection decisions
-  before Terraform destroy.
+- `postgresql-core` and `postgresql-brand` each require their own
+  backup/final-snapshot and deletion-protection decisions before Terraform
+  destroy. Approval for one cluster never authorizes destruction of the other.
 - `eks-access` fails while its removal would eliminate the only approved
   recovery principal.
 
@@ -643,6 +725,10 @@ A canonical guide explains:
 - Field-by-field configuration ownership and selection guidance.
 - Safe `.example` files for each local configuration shape.
 - Full and narrow quick starts for both environments.
+- PostgreSQL quick starts showing how to provision, verify, grant access to,
+  back up, restore, and destroy `postgresql-core` and `postgresql-brand`
+  independently, including the separate confirmation and retention evidence
+  required for each cluster.
 - Plan review, apply approval, verification, destroy, and recovery workflows.
 - How to add a new component or environment without copying implementation.
 - The exact completeness boundary, including externally owned Identity Center
@@ -654,6 +740,11 @@ The Terraform README inventories every root, environment, dependency, state
 key, inputs, outputs, and approved entrypoint. `docs/index.md` links the unified
 guide, current environment status, Phase 2 design, and future implementation
 plan.
+
+The migration guide maps the legacy `pg` command and `oms/dev/pg.tfstate` to
+the evidence-selected core or brand destination. It documents the separate
+plan for the missing second cluster and prohibits treating one legacy state as
+ownership of both clusters.
 
 ## Validation Strategy
 
@@ -678,6 +769,21 @@ plan.
 - Tests proving unified commands without `--env` fail before AWS, backend,
   Terraform, Kubernetes, or local generated-file mutation, and proving UAT
   commands never dispatch legacy dev compatibility scripts.
+- PostgreSQL isolation tests proving core and brand use distinct cluster and
+  writer identifiers, endpoints, secret ARNs, security groups, parameter
+  groups, state keys, plan paths, locks, and final-snapshot names.
+- Authorization tests proving Application Developers administer both clusters,
+  Boomi Admins and Process Owners administer only brand, and Infra database
+  access is an attributed break-glass workflow.
+- Negative connectivity/authentication tests proving brand credentials and
+  network paths cannot reach or authenticate to core OMS PostgreSQL.
+- Audit tests proving connection, role, DDL, and administrative events identify
+  both the named principal and `cluster_role` (`core` or `brand`).
+- Observability tests proving PostgreSQL dashboards and alerts filter on both
+  `environment` and `cluster_role` rather than aggregating the clusters.
+- Lifecycle tests proving plan, change, restore, access update, and destroy of
+  one PostgreSQL cluster do not initialize, mutate, or drift the other cluster
+  or state.
 
 ### UAT Runtime Gates
 
@@ -720,8 +826,10 @@ Dev apply/destroy remains blocked until:
    - Review and implement network, EKS, IAM, EFS, backup, and add-on modules.
    - Publish the platform output contract.
 4. **Environment-aware data and telemetry**
-   - Parameterize MongoDB, PostgreSQL, SigNoz, observability, secrets, and
-     overlays without changing live dev.
+   - Parameterize MongoDB, both PostgreSQL roots, SigNoz, observability,
+     secrets, and overlays without changing live dev.
+   - Implement independent core/brand PostgreSQL access scopes and
+     cluster-qualified audit, monitoring, backup, restore, and lifecycle paths.
 5. **Boomi runtime**
    - Implement official-reference manifests, bootstrap, lifecycle controls, and
      supportability evidence.
