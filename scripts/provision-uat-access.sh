@@ -82,6 +82,16 @@ canonicalize_contained_directory() {
     fail "$description directory resolves outside UAT_ACCESS_TEST_ROOT: $directory"
 }
 
+reject_symbolic_links_beneath() {
+  local directory="$1"
+  local symbolic_link=""
+
+  if ! symbolic_link="$(find "$directory" -type l -print -quit)"; then
+    fail "unable to inspect UAT test fixture for symbolic links: $directory"
+  fi
+  [[ -z "$symbolic_link" ]] || fail "UAT test fixture contains a symbolic link: $symbolic_link"
+}
+
 configure_access_root() {
   local requested_root="${UAT_ACCESS_TEST_ROOT:-}"
   local temp_root=""
@@ -120,6 +130,7 @@ if [[ "${UAT_ACCESS_TEST_MODE:-}" == "1" ]]; then
     "$ACCESS_ROOT/platform-prerequisites/terraform/eks-access" \
     "eks-access Terraform root"
   EKS_TF_DIR="$CANONICAL_DIRECTORY"
+  reject_symbolic_links_beneath "$ACCESS_ROOT"
   PRINCIPAL_INPUT="$ENVIRONMENT_CONFIG_DIR/uat-workforce-principals.json"
 else
   PRINCIPAL_INPUT="$ROOT_DIR/config/environments/uat-workforce-principals.json"

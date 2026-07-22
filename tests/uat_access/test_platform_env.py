@@ -709,6 +709,61 @@ exec "$REAL_JQ" "$@"
                 shutil.copytree(escaped_root, root)
                 shutil.rmtree(escaped_root)
 
+    def test_terraform_root_symlink_descendants_are_rejected_before_invocation_or_mutation(self):
+        cases = (
+            (".terraform", True),
+            ("terraform.tfstate", False),
+            (".terraform.lock.hcl", False),
+            ("main.tf", False),
+            ("modules/nested", True),
+        )
+        for scope, root in (
+            ("governance", self.governance_root),
+            ("eks-access", self.eks_root),
+        ):
+            for relative_path, is_directory in cases:
+                with self.subTest(
+                    scope=scope,
+                    relative_path=relative_path,
+                ):
+                    self.command_log.unlink(missing_ok=True)
+                    link_path = root / relative_path
+                    if link_path.exists() or link_path.is_symlink():
+                        if link_path.is_dir() and not link_path.is_symlink():
+                            shutil.rmtree(link_path)
+                        else:
+                            link_path.unlink()
+                    link_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    external_path = self.temp_path / (
+                        f"external-{scope}-{relative_path.replace('/', '-')}"
+                    )
+                    sentinel = external_path / "sentinel" if is_directory else external_path
+                    if is_directory:
+                        external_path.mkdir()
+                    sentinel.write_text("external sentinel")
+                    link_path.symlink_to(
+                        external_path,
+                        target_is_directory=is_directory,
+                    )
+
+                    result = self.run_provision(scope)
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("contains a symbolic link", result.stderr)
+                    self.assertEqual(self.command_lines(), [])
+                    self.assertEqual(sentinel.read_text(), "external sentinel")
+
+                    link_path.unlink()
+                    if relative_path == "main.tf":
+                        link_path.write_text('terraform { backend "s3" {} }\n')
+                    if link_path.parent != root:
+                        link_path.parent.rmdir()
+                    if is_directory:
+                        shutil.rmtree(external_path)
+                    else:
+                        external_path.unlink()
+
     def test_terraform_environment_injection_is_rejected_before_invocation_or_mutation(self):
         cases = (
             ("TF_CLI_ARGS", ""),
