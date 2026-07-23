@@ -12,7 +12,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 class RepositoryFixture(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name) / "repository"
+        # Resolve symlinks (e.g. macOS /var -> /private/var) so self.root
+        # matches the real, canonical path any `cd ... && pwd` computation
+        # inside a bash script under test will naturally produce.
+        self.root = Path(self.temporary.name).resolve() / "repository"
         self.mock_bin = Path(self.temporary.name) / "bin"
         self.command_log = Path(self.temporary.name) / "commands.log"
         self.mock_bin.mkdir(parents=True)
