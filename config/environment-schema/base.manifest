@@ -1,0 +1,50 @@
+# Foundation base manifest for the closed dev/uat environment contract.
+#
+# Grammar (key rows):
+#   KEY|required|validator|immutable-key-or--
+#
+# Grammar (cross-key constraint rows):
+#   @constraint|predicate|KEY[,KEY...]|argument-or--
+#
+# Blank lines and lines whose first non-space character is "#" are ignored.
+# Every other line must have exactly four "|"-delimited fields.
+#
+# `validator` must be one of the built-in generic validators:
+#   environment, account-id, region, dns-label, s3-bucket, state-prefix,
+#   state-key, promotion-mode, nonempty, enum:<value,...>, fixed:<value>,
+#   integer:<min>:<max>, ipv4-cidr
+#
+# `@constraint` rows must name one of the built-in constraint predicates:
+#   integer-order, cidr-contained-by, cidr-nonoverlap
+#
+# The final field binds a key to an immutable constant looked up from
+# scripts/lib/environment-contracts.sh's `immutable_environment_value`
+# function for the requested environment. `-` means the value is
+# configurable per environment and is not compared against an immutable
+# constant.
+#
+# This file is composed with every regular, non-symlink `fragments/*.manifest`
+# file (see fragments/README.md) in bytewise lexical order. Later plans add
+# keys only through fragment files; they never edit this file or
+# scripts/lib/platform-env.sh.
+
+ENVIRONMENT|required|environment|-
+EXPECTED_AWS_ACCOUNT_ID|required|account-id|EXPECTED_AWS_ACCOUNT_ID
+AWS_REGION|required|region|AWS_REGION
+TF_STATE_BUCKET|required|s3-bucket|-
+TF_STATE_REGION|required|region|TF_STATE_REGION
+TF_STATE_PREFIX|required|state-prefix|TF_STATE_PREFIX
+EKS_CLUSTER_NAME|required|dns-label|-
+BOOMI_NAMESPACE|required|dns-label|-
+MONGODB_NAMESPACE|required|dns-label|-
+SIGNOZ_NAMESPACE|required|dns-label|-
+SUPPORT_NAMESPACE|required|dns-label|-
+ACCESS_GOVERNANCE_STATE_KEY|required|state-key|-
+EKS_PLATFORM_STATE_KEY|required|state-key|-
+EKS_ACCESS_STATE_KEY|required|state-key|-
+WORKLOAD_IDENTITY_STATE_KEY|required|state-key|-
+MONGODB_STATE_KEY|required|state-key|-
+POSTGRESQL_CORE_STATE_KEY|required|state-key|-
+POSTGRESQL_BRAND_STATE_KEY|required|state-key|-
+SIGNOZ_OBSERVABILITY_STATE_KEY|required|state-key|-
+PROMOTION_MODE|required|promotion-mode|PROMOTION_MODE
