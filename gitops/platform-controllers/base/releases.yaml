@@ -1,0 +1,114 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: cert-manager
+spec:
+  interval: 30m
+  timeout: 10m
+  chartRef:
+    kind: OCIRepository
+    name: cert-manager
+    namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  upgrade:
+    remediation:
+      retries: 3
+    crds: CreateReplace
+  values:
+    crds:
+      enabled: true
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kyverno
+  namespace: kyverno
+spec:
+  interval: 30m
+  timeout: 10m
+  chartRef:
+    kind: OCIRepository
+    name: kyverno
+    namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cluster-autoscaler
+  namespace: kube-system
+spec:
+  interval: 30m
+  timeout: 10m
+  chartRef:
+    kind: OCIRepository
+    name: cluster-autoscaler
+    namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    autoDiscovery:
+      clusterName: REPLACE_CLUSTER_NAME
+    serviceAccount:
+      create: false
+      name: REPLACE_AUTOSCALER_SERVICE_ACCOUNT
+      annotations:
+        eks.amazonaws.com/role-arn: REPLACE_CLUSTER_AUTOSCALER_ROLE_ARN
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metrics-server
+  namespace: kube-system
+spec:
+  interval: 30m
+  timeout: 10m
+  suspend: true
+  chartRef:
+    kind: OCIRepository
+    name: metrics-server
+    namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: aws-load-balancer-controller
+  namespace: kube-system
+spec:
+  interval: 30m
+  timeout: 10m
+  suspend: true
+  chartRef:
+    kind: OCIRepository
+    name: aws-load-balancer-controller
+    namespace: flux-system
+  install:
+    remediation:
+      retries: 3
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    clusterName: REPLACE_CLUSTER_NAME
+    serviceAccount:
+      create: false
+      name: aws-load-balancer-controller
