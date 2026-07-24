@@ -1,6 +1,7 @@
 # Phase 2 Environment Orchestration Foundation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Required preflight rubric before implementation:** Before any implementation command, edit, or commit for this plan, the implementing agent MUST output a fully completed markdown table from `docs/superpowers/specs/subagent-preflight-rubric.md` covering Safety, Operability, Portability, and Recoverability, with concrete evidence and pass/fail outcomes for each row.
 
 **Goal:** Build work packages 1-2 of the approved unified-environment design: extensible closed `dev`/`uat` contracts, fail-closed shared guards and environment-local artifacts, and the permanent registry-driven provision/destroy/verify foundation that later work packages extend only through declarative numbered manifests and canonical handler/pre-destroy-guard/verifier fragments.
 
@@ -1904,6 +1905,74 @@ substitution, unresolved angle-bracket examples, or secrets. Assert every
 state key begins with its own environment prefix and no UAT config value
 contains the dev account ID or `/dev/`.
 
+### CI/CD Artifact Boundary Contract (Task 6 Required Gate)
+
+This gate is mandatory before Task 6 implementation can be considered complete.
+It defines portable, fail-closed handoff of `.local/<env>/` orchestration
+artifacts between ephemeral CI jobs while preserving least-privilege and
+anti-replay controls.
+
+- [ ] **Required checklist**
+
+1. Prepare/producer job writes all orchestration artifacts only beneath
+   `.local/<env>/` and never outside repository containment checks.
+2. Producer writes a canonical manifest (mode `0600`) with: file list,
+   per-file SHA-256 digest, creation time, expiry time, operation ID,
+   environment, account ID, repository commit SHA, orchestrator version, CI run
+   ID, and CI job ID.
+3. Producer records toolchain metadata: Terraform version, provider lock digest,
+   Bash version, Python version, and script revision digest for every orchestration
+   script invoked in prepare.
+4. Producer packages artifacts into one deterministic archive whose root contains
+   the canonical manifest and no extra files.
+5. Consumer/execute job verifies canonical containment, file type, mode, and
+   per-file SHA-256 digests before any mutation command.
+6. Consumer rejects execution when producer and consumer toolchain metadata differ,
+   unless a separately approved explicit override is present and recorded.
+7. Consumer must re-evaluate all selected Assertion Scopes immediately before any
+   Mutation Scope dispatch (TOCTOU protection). A stale assertion from prepare is
+   never sufficient authorization for execute.
+8. If assertion re-evaluation fails, execution stops before backend bootstrap,
+   Terraform plan/apply, or handler dispatch, and only local cleanup may occur.
+9. Artifact transport mechanism is explicit and policy-bound:
+   - Native CI artifact storage is allowed only for non-sensitive payloads.
+   - Any payload containing secrets, principal identifiers, or confirmation/evidence
+     material must use a secure artifact vault (for example, S3 + KMS + strict OIDC IAM)
+     with immutable object versioning and access logging.
+10. Consumer enforces artifact TTL and rejects expired artifacts before dispatch.
+11. Consumer rejects missing, extra, duplicate, symlinked, non-regular, traversal,
+    or mode-unsafe artifact paths.
+12. Orchestration lock ownership must be identity-bearing in ephemeral contexts.
+    The lock payload contract is JSON with at least: `ci_run_id`, `ci_job_id`,
+    `created_at_utc`, `owner`, and `orchestrator_pid` (if local).
+13. Break-glass unlock requires deterministic fencing proof: verify lock owner liveness
+    through CI API/process checks; if owner is live/unknown, force-unlock is denied.
+14. If fencing proves lock owner is dead/stale, force-unlock is allowed only with
+    an audit record capturing checker identity, timestamp, evidence, and reason.
+15. Consumer writes an append-only consumption/status record for success/failure and
+    preserves required evidence retention.
+16. Cleanup securely purges extracted local artifacts after completion/failure and
+    never deletes unvalidated or out-of-scope paths.
+17. Runbooks must document prepare/execute artifact boundaries, storage policy,
+    re-assertion behavior, and stale-lock break-glass steps.
+
+- [ ] **Acceptance criteria**
+
+1. A two-job CI rehearsal succeeds with prepare in Job A and execute in Job B using only transferred artifacts.
+2. Hash mismatch in any artifact fails closed before any mutation command.
+3. Missing/extra artifact path fails closed before any mutation command.
+4. Toolchain mismatch fails closed unless explicit approved override is recorded.
+5. Assertion re-evaluation failure in execute fails closed before backend/Terraform/dispatch.
+6. Expired artifact fails closed with explicit expiry diagnostics.
+7. Non-regular, symlinked, traversal, or mode-unsafe artifact path fails closed.
+8. Sensitive payload routed through native CI artifacts is rejected by policy checks.
+9. Secure vault path enforces immutable versioning, KMS encryption, and access logs.
+10. Lock payload includes required identity fields and is parseable canonical JSON.
+11. Force-unlock without fencing proof is rejected.
+12. Force-unlock with validated stale-owner proof is allowed and audit-logged.
+13. Consumption/status records are append-only and bound to operation ID.
+14. Evidence bundle for rehearsal is attached to task closure notes.
+
 - [ ] **Step 3: Run only when execution is separately authorized - verify the complete mocked/static suite**
 
 ```bash
@@ -1976,6 +2045,21 @@ session summary, not in a new repository file. Check each invariant:
 Expected: all twenty-two invariants can be traced to a concrete function and a
 mocked/static test. Any failed invariant is repaired in the owning earlier task
 and reviewed again before proceeding.
+
+- [ ] **Step 1a: Add ADR follow-up backlog for post-foundation hardening**
+
+Record these follow-up ADR tasks in the implementation session summary and in
+later-plan handoff notes:
+
+1. ADR: scope taxonomy migration (`assertion`, `mutation`, `composite`) so
+   `external-existing-platform` behavior is represented declaratively in
+   registry metadata instead of operation-specific engine branching.
+2. ADR: lock payload fencing semantics replacing bare lock directories with
+   identity-bearing canonical JSON lock payloads plus deterministic liveness
+   fencing checks for break-glass unlock.
+
+Expected: both ADR tasks are explicitly queued with owner, decision deadline,
+and acceptance test strategy before Task 7 handoff completes.
 
 - [ ] **Step 2: Run only when execution is separately authorized - execute the final focused verification**
 
