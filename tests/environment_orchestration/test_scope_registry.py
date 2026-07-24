@@ -60,7 +60,6 @@ EXPECTED_DESTROY_ALL_ORDER = (
 
 # Deferred work-package mapping, exactly as specified in Task 3 Step 3.
 EXPECTED_WORK_PACKAGE_FOR_SCOPE = {
-    "eks-platform": 3,
     "platform-controllers": 3,
     "workload-identity": 3,
     "mongodb": 4,
@@ -73,6 +72,8 @@ EXPECTED_WORK_PACKAGE_FOR_SCOPE = {
     "signoz-observability": 4,
     "boomi-runtime": 5,
 }
+
+EXPECTED_EXISTING_PLATFORM_SCOPES = ("eks-platform",)
 
 # Scopes whose real implementation is pending only this plan's own Task 5
 # foundation access fragment (not an external work package). Provision
@@ -547,6 +548,13 @@ class ImplementationRequirementTests(ScopeRegistryFixture):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.strip(), f"external-work-package-{package}")
 
+    def test_existing_platform_scopes_are_distinguished_from_work_packages(self):
+        for scope in EXPECTED_EXISTING_PLATFORM_SCOPES:
+            with self.subTest(scope=scope):
+                result = self.run_registry(f"implementation_requirement_for_scope {scope}")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "external-existing-platform")
+
     def test_fragment_pending_scopes_are_distinguished_from_work_packages(self):
         for scope in FRAGMENT_PENDING_SCOPES:
             with self.subTest(scope=scope):
@@ -617,7 +625,7 @@ class VerificationModeTests(ScopeRegistryFixture):
 
 class DecisiveDispatchTests(ScopeRegistryFixture):
     """The decisive provision test: `all` reports
-    "eks-platform requires work package 3" with an empty handler command
+    "workload-identity requires work package 3" with an empty handler command
     log, and neither backend nor access-governance may run before the
     unsupported graph is rejected."""
 
@@ -625,7 +633,7 @@ class DecisiveDispatchTests(ScopeRegistryFixture):
         result = self.run_registry("dispatch_scope_handler provision all")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("eks-platform requires work package 3", result.stderr)
+        self.assertIn("workload-identity requires work package 3", result.stderr)
         self.assertNotIn("backend requires the foundation access fragment", result.stderr)
         self.assertNotIn("access-governance requires the foundation access fragment", result.stderr)
         self.assertEqual(result.stdout, "")
@@ -635,7 +643,7 @@ class DecisiveDispatchTests(ScopeRegistryFixture):
         result = self.run_registry("dispatch_scope_handler provision eks-access")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("eks-platform requires work package 3", result.stderr)
+        self.assertIn("backend requires the foundation access fragment (Task 5)", result.stderr)
         self.assertNotIn("eks-access requires", result.stderr)
         self.assertFalse(self.command_log.exists())
 

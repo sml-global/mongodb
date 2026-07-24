@@ -57,27 +57,6 @@ Judgment calls (flagged in the final report as DONE_WITH_CONCERNS items):
     marker. The governance path (no jq calls at all) is checked the same
     way for consistency, plus one exact-equality assertion where the
     full sequence is short and deterministic.
-  * `run_provision` dispatches `eks-access` through a narrower driver than
-    `access-governance`/`all`. Task 3's registry (frozen; Task 5's own
-    Files: list excludes scope-registry.sh and orchestrator.sh, and its
-    Step 4 text says "do not change registry dependencies/order/symbol
-    mappings") gives `eks-access` a real, still-external-work-package-3
-    dependency on `eks-platform`. `run_unified_command`'s whole-graph
-    pre-resolution gate therefore still blocks a narrow `eks-access`
-    request today with "eks-platform requires work package 3" -- this is
-    exact, intentional, already-committed Task 3 behavior (see
-    DecisiveDispatchTests.test_narrow_scope_cascade_also_fails_before_its_own_pending_dependency_runs
-    in test_scope_registry.py). Task 6 ("UAT provision eks-access |
-    implemented after existing-platform verification") is where the real
-    public-CLI bypass is wired in, via a distinct dependency-status
-    reclassification that only Task 6 is authorized to make. Until then,
-    this fixture composes the exact same real orchestration building
-    blocks `run_unified_command` itself calls (identity/region check,
-    package-fragment load, path init, lock, cleanup) directly around the
-    real, non-stubbed `foundation_provision_eks_access` handler, skipping
-    only the whole-graph dependency gate -- never touching
-    orchestrator.sh or scope-registry.sh, and never weakening any
-    identity/context/auth-mode/backend/cleanup guard under test.
 """
 
 import json
@@ -97,64 +76,6 @@ EKS_CLUSTER_NAME = "EKS-boomi-runtime-cluster"
 EXPECTED_CLUSTER_REF = f"arn:aws:eks:{AWS_REGION}:{UAT_ACCOUNT_ID}:cluster/{EKS_CLUSTER_NAME}"
 
 REAL_JQ = shutil.which("jq")
-
-# `eks-access` cannot yet dispatch through the real public `run_unified_command`
-# entrypoint: Task 3's frozen registry gives it a real dependency on
-# `eks-platform` (external work package 3), which still blocks
-# `run_unified_command`'s whole-graph pre-resolution gate exactly as
-# intentionally tested by test_scope_registry.py's
-# DecisiveDispatchTests.test_narrow_scope_cascade_also_fails_before_its_own_pending_dependency_runs.
-# Task 5's own Files: list excludes both scope-registry.sh and
-# orchestrator.sh, and its Step 4 text forbids changing registry
-# dependencies/order/symbol mappings or adding scope-specific dispatch
-# branches to orchestrator.sh -- so this fixture cannot fix that gate.
-# Task 6 ("UAT provision eks-access | implemented after existing-platform
-# verification") is where the real bypass is wired into the public CLI.
-# Until then, this driver composes the same real orchestration building
-# blocks `run_unified_command` itself calls -- identity/region check,
-# package-fragment load, path init, lock, cleanup -- directly around the
-# real, non-stubbed `foundation_provision_eks_access` handler, skipping only
-# the whole-graph dependency gate. `access-governance` and `all` are
-# unaffected by this and always go through the real `run_unified_command`.
-_PROVISION_DRIVER = r"""
-set -eo pipefail
-source scripts/lib/orchestrator.sh
-
-original_args=("$@")
-
-op="$1"; shift
-if [[ "$1" != "--env" ]]; then
-  echo "expected --env" >&2
-  exit 1
-fi
-shift
-env_name="$1"; shift
-scope="$1"; shift
-
-auto_approve="false"
-for arg in "$@"; do
-  if [[ "$arg" == "--auto-approve" ]]; then
-    auto_approve="true"
-  fi
-done
-
-if [[ "$op" == "provision" && "$scope" == "eks-access" ]]; then
-  reject_execution_environment_overrides
-  load_platform_env "$env_name"
-  require_environment_mutation_authorized "$env_name"
-  verify_aws_identity_and_region
-  _orchestrator_load_package_fragments provision eks-access
-  initialize_orchestration_paths "$env_name"
-  acquire_orchestration_lock
-  export UNIFIED_AUTO_APPROVE="$auto_approve"
-  status=0
-  foundation_provision_eks_access || status=$?
-  cleanup_orchestration_artifacts "$status"
-  exit "$status"
-fi
-
-run_unified_command "${original_args[@]}"
-"""
 
 _AWS_MOCK = """#!/usr/bin/env bash
 printf 'aws %s\\n' "$*" >> "$MOCK_COMMAND_LOG"
@@ -433,7 +354,8 @@ class AccessDispatchFixture(unittest.TestCase):
     def run_provision(self, args, extra_env=None, stdin_text=None):
         environment = self.base_env(**(extra_env or {}))
         argv = [
-            "bash", "-c", _PROVISION_DRIVER,
+            "bash", "-c",
+            'source scripts/lib/orchestrator.sh && run_unified_command "$@"',
             "bash", "provision", "--env", "uat", *args,
         ]
         if stdin_text is not None:
@@ -476,8 +398,9 @@ class GovernanceDispatchOrderTests(AccessDispatchFixture):
 class EksAccessDispatchOrderTests(AccessDispatchFixture):
     """Requirement 2: eks-access dispatch validates the canonical Kubernetes
     context, the EKS authentication mode, and the local principals input
-    before ever touching the access backend, in the exact order given by
-    the plan's EXPECTED_EKS_ACCESS_ORDER."""
+    before touching the eks-access backend, after any required
+    existing-platform precheck(s), in the exact order given by the plan's
+    EXPECTED_EKS_ACCESS_ORDER."""
 
     def test_eks_access_validates_context_auth_mode_and_principals_before_backend(self):
         self.write_valid_principals()
@@ -489,6 +412,7 @@ class EksAccessDispatchOrderTests(AccessDispatchFixture):
             [
                 "aws sts get-caller-identity",
                 "aws configure get region",
+                "aws s3api head-bucket",
                 "kubectl config current-context",
                 "kubectl config view --minify",
                 "aws eks describe-cluster",
@@ -500,9 +424,11 @@ class EksAccessDispatchOrderTests(AccessDispatchFixture):
                 f"terraform -chdir={self.eks_access_tf_dir} apply -input=false",
             ],
         )
-        backend_line = self.single_line_starting_with(lines, "bootstrap-terraform-s3-backend.sh")
-        self.assertIn("--key oms/uat/eks-access.tfstate", backend_line)
-        self.assertIn(f"--expected-bucket-owner {UAT_ACCOUNT_ID}", backend_line)
+        backend_lines = [line for line in lines if line.startswith("bootstrap-terraform-s3-backend.sh")]
+        self.assertGreaterEqual(len(backend_lines), 2, lines)
+        self.assertIn("--key oms/uat/access-governance.tfstate", backend_lines[0])
+        self.assertIn("--key oms/uat/eks-access.tfstate", backend_lines[-1])
+        self.assertIn(f"--expected-bucket-owner {UAT_ACCOUNT_ID}", backend_lines[-1])
 
 
 class PrincipalInputPathTests(AccessDispatchFixture):
@@ -521,6 +447,12 @@ class PrincipalInputPathTests(AccessDispatchFixture):
             [
                 "aws sts get-caller-identity --region ap-east-1 --query Account --output text",
                 "aws configure get region",
+                f"bootstrap-terraform-s3-backend.sh --tf-dir {self.governance_tf_dir} "
+                f"--bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} --region {AWS_REGION} "
+                "--key oms/uat/access-governance.tfstate "
+                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
+                f"aws s3api head-bucket --bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} "
+                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
                 "kubectl config current-context",
                 "kubectl config view --minify -o jsonpath={.contexts[0].context.cluster}",
                 "aws eks describe-cluster --name EKS-boomi-runtime-cluster --region ap-east-1 "
@@ -718,6 +650,12 @@ class FailureModeCleanupIsolationTests(AccessDispatchFixture):
             [
                 "aws sts get-caller-identity --region ap-east-1 --query Account --output text",
                 "aws configure get region",
+                f"bootstrap-terraform-s3-backend.sh --tf-dir {self.governance_tf_dir} "
+                f"--bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} --region {AWS_REGION} "
+                "--key oms/uat/access-governance.tfstate "
+                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
+                f"aws s3api head-bucket --bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} "
+                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
                 "kubectl config current-context",
                 "kubectl config view --minify -o jsonpath={.contexts[0].context.cluster}",
             ],
@@ -737,6 +675,12 @@ class FailureModeCleanupIsolationTests(AccessDispatchFixture):
             [
                 "aws sts get-caller-identity --region ap-east-1 --query Account --output text",
                 "aws configure get region",
+                f"bootstrap-terraform-s3-backend.sh --tf-dir {self.governance_tf_dir} "
+                f"--bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} --region {AWS_REGION} "
+                "--key oms/uat/access-governance.tfstate "
+                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
+                f"aws s3api head-bucket --bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} "
+                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
                 "kubectl config current-context",
                 "kubectl config view --minify -o jsonpath={.contexts[0].context.cluster}",
                 "aws eks describe-cluster --name EKS-boomi-runtime-cluster --region ap-east-1 "
@@ -755,7 +699,19 @@ class FailureModeCleanupIsolationTests(AccessDispatchFixture):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("AWSReservedSSO_UATBoomiAdmin", result.stderr)
         lines = self.command_log_lines()
-        self.assertFalse(any(line.startswith("aws s3api") for line in lines), lines)
+        self.assertEqual(
+            sum(1 for line in lines if line.startswith("aws s3api head-bucket")),
+            1,
+            lines,
+        )
+        self.assertFalse(
+            any(
+                line.startswith("bootstrap-terraform-s3-backend.sh")
+                and f"--tf-dir {self.eks_access_tf_dir}" in line
+                for line in lines
+            ),
+            lines,
+        )
         self.assertFalse(any(line.startswith("terraform") for line in lines), lines)
         self.assert_only_uat_artifacts_remain()
 
@@ -872,7 +828,7 @@ class OriginalFailureVsCleanupFailureTests(CleanupContractFixture):
 
 
 class UnifiedAllPreResolutionTests(AccessDispatchFixture):
-    """Requirement 11: `all` fails fast on the still-deferred eks-platform
+    """Requirement 11: `all` fails fast on the first still-deferred
     scope (work package 3) during whole-order pre-resolution, before any
     access-scope handler -- not even access-governance's, which is itself
     already implemented -- is ever invoked."""
@@ -880,7 +836,7 @@ class UnifiedAllPreResolutionTests(AccessDispatchFixture):
     def test_all_fails_on_deferred_eks_platform_before_any_access_handler_runs(self):
         result = self.run_provision(["all", "--auto-approve"])
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("eks-platform requires work package 3", result.stderr)
+        self.assertIn("workload-identity requires work package 3", result.stderr)
         lines = self.command_log_lines()
         for line in lines:
             self.assertFalse(line.startswith("terraform"), lines)

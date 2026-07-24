@@ -405,7 +405,10 @@ implementation_requirement_for_scope() {
     backend|access-governance|eks-access)
       printf '%s\n' "foundation-fragment-pending"
       ;;
-    eks-platform|platform-controllers|workload-identity)
+    eks-platform)
+      printf '%s\n' "external-existing-platform"
+      ;;
+    platform-controllers|workload-identity)
       printf '%s\n' "external-work-package-3"
       ;;
     mongodb|postgresql-core|postgresql-brand|mongodb-access|database-access-core|database-access-brand|signoz|signoz-observability)
@@ -710,7 +713,15 @@ dispatch_scope_handler() {
     done
 
     local symbol
+    local requirement
     for step in "${order[@]}"; do
+      requirement="$(implementation_requirement_for_scope "$step")" || {
+        _scope_registry_error "no implementation-requirement mapping for scope: ${step}"
+        return 1
+      }
+      if [[ "$requirement" == "external-existing-platform" ]]; then
+        continue
+      fi
       symbol="$(provision_handler_for_scope "$step")" || {
         _scope_registry_error "no provision handler is mapped for scope: ${step}"
         return 1

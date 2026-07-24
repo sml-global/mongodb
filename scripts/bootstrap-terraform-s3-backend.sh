@@ -36,7 +36,7 @@ bucket_exists() {
     owner_args=(--expected-bucket-owner "$expected_owner")
   fi
 
-  aws s3api head-bucket --bucket "$bucket" "${owner_args[@]}" >/dev/null 2>&1
+  aws s3api head-bucket --bucket "$bucket" "${owner_args[@]+"${owner_args[@]}"}" >/dev/null 2>&1
 }
 
 inspect_remote_state() {
@@ -52,7 +52,7 @@ inspect_remote_state() {
   if error_output="$(aws s3api head-object \
     --bucket "$bucket" \
     --key "$key" \
-    "${owner_args[@]}" 2>&1 >/dev/null)"; then
+    "${owner_args[@]+"${owner_args[@]}"}" 2>&1 >/dev/null)"; then
     return 0
   fi
 
@@ -104,17 +104,17 @@ create_bucket_if_missing() {
   echo "Applying bucket baseline controls"
   aws s3api put-bucket-versioning \
     --bucket "$bucket" \
-    "${owner_args[@]}" \
+    "${owner_args[@]+"${owner_args[@]}"}" \
     --versioning-configuration Status=Enabled >/dev/null
 
   aws s3api put-bucket-encryption \
     --bucket "$bucket" \
-    "${owner_args[@]}" \
+    "${owner_args[@]+"${owner_args[@]}"}" \
     --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' >/dev/null
 
   aws s3api put-public-access-block \
     --bucket "$bucket" \
-    "${owner_args[@]}" \
+    "${owner_args[@]+"${owner_args[@]}"}" \
     --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
 
   echo "S3 bucket created and baseline controls applied: $bucket"
@@ -138,7 +138,7 @@ verify_bucket_controls() {
 
   actual_region="$(aws s3api get-bucket-location \
     --bucket "$bucket" \
-    "${owner_args[@]}" \
+    "${owner_args[@]+"${owner_args[@]}"}" \
     --query LocationConstraint \
     --output text)"
   if [[ "$actual_region" == "None" || "$actual_region" == "null" ]]; then
@@ -153,7 +153,7 @@ verify_bucket_controls() {
 
   versioning_status="$(aws s3api get-bucket-versioning \
     --bucket "$bucket" \
-    "${owner_args[@]}" \
+    "${owner_args[@]+"${owner_args[@]}"}" \
     --query Status \
     --output text)"
   if [[ "$versioning_status" != "Enabled" ]]; then
@@ -163,7 +163,7 @@ verify_bucket_controls() {
 
   encryption_algorithms="$(aws s3api get-bucket-encryption \
     --bucket "$bucket" \
-    "${owner_args[@]}" \
+    "${owner_args[@]+"${owner_args[@]}"}" \
     --query 'ServerSideEncryptionConfiguration.Rules[].ApplyServerSideEncryptionByDefault.SSEAlgorithm' \
     --output text)"
   [[ -n "$encryption_algorithms" && "$encryption_algorithms" != "None" ]] || {
@@ -182,7 +182,7 @@ verify_bucket_controls() {
 
   public_access_block="$(aws s3api get-public-access-block \
     --bucket "$bucket" \
-    "${owner_args[@]}" \
+    "${owner_args[@]+"${owner_args[@]}"}" \
     --query '[PublicAccessBlockConfiguration.BlockPublicAcls,PublicAccessBlockConfiguration.IgnorePublicAcls,PublicAccessBlockConfiguration.BlockPublicPolicy,PublicAccessBlockConfiguration.RestrictPublicBuckets]' \
     --output text)"
   if [[ "$public_access_block" != $'True\tTrue\tTrue\tTrue' ]]; then
@@ -291,7 +291,7 @@ main() {
         -backend-config="key=$key" \
         -backend-config="region=$region" \
         -backend-config="encrypt=true" \
-        "${backend_owner_config[@]}"
+        "${backend_owner_config[@]+"${backend_owner_config[@]}"}"
       echo "Backend configured to existing remote state"
       return 0
       ;;
@@ -306,7 +306,7 @@ main() {
       -backend-config="key=$key" \
       -backend-config="region=$region" \
       -backend-config="encrypt=true" \
-      "${backend_owner_config[@]}"
+      "${backend_owner_config[@]+"${backend_owner_config[@]}"}"
     echo "Local state migrated to s3://$bucket/$key"
     return 0
   fi
@@ -317,7 +317,7 @@ main() {
     -backend-config="key=$key" \
     -backend-config="region=$region" \
     -backend-config="encrypt=true" \
-    "${backend_owner_config[@]}"
+    "${backend_owner_config[@]+"${backend_owner_config[@]}"}"
   echo "Fresh S3 backend configured at s3://$bucket/$key"
 }
 
