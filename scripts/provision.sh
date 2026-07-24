@@ -1,114 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage() {
-  cat <<'EOF'
-Usage:
-  provision.sh <scope> [--auto-approve] [--bootstrap-platform-controllers]
-
-Scopes:
-  all                  Provision MongoDB + PostgreSQL prerequisites (separate states), then MongoDB k8s stack.
-  mongodb              Provision MongoDB prerequisites only, then MongoDB k8s stack.
-  mongo                Alias of mongodb.
-  pg                   Provision PostgreSQL prerequisites only.
-  signoz               Provision SigNoz application telemetry stack.
-  signoz-observability Apply dashboards + alert rules as code (requires signoz-api-key Secret; see docs/references/signoz-dashboard-import-pack.md).
-
-Examples:
-  bash scripts/provision.sh all
-  bash scripts/provision.sh mongodb
-  bash scripts/provision.sh mongo
-  bash scripts/provision.sh pg --auto-approve
-  bash scripts/provision.sh signoz-observability --auto-approve
-  bash scripts/provision.sh signoz
-  bash scripts/provision.sh mongodb --bootstrap-platform-controllers
-EOF
-}
+# Public compatibility entrypoint. This wrapper makes exactly one routing
+# decision: a leading `--env` routes to unified orchestration; anything else
+# (including no arguments, `-h`/`--help`, or any legacy scope) execs the
+# frozen legacy dev implementation unchanged. See "Task 4: Add Explicit
+# Unified Entrypoints Without Changing Legacy Dev Behavior" in
+# docs/superpowers/plans/2026-07-22-phase2-environment-orchestration-foundation.md.
+# Later arguments are never inspected for `--env`; a non-leading flag
+# belongs to the unchanged legacy grammar and is rejected there as it is
+# today.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SCOPE="${1:-}"
-AUTO_APPROVE="false"
-BOOTSTRAP_PLATFORM_CONTROLLERS="false"
 
-if [[ "$SCOPE" == "-h" || "$SCOPE" == "--help" ]]; then
-  usage
-  exit 0
+if [[ "${1:-}" != "--env" ]]; then
+  exec bash "$ROOT_DIR/scripts/legacy/dev/provision.sh" "$@"
 fi
 
-if [[ -z "$SCOPE" ]]; then
-  usage
-  exit 1
-fi
-
-shift || true
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --auto-approve)
-      AUTO_APPROVE="true"
-      shift
-      ;;
-    --bootstrap-platform-controllers)
-      BOOTSTRAP_PLATFORM_CONTROLLERS="true"
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Error: unknown argument: $1" >&2
-      usage
-      exit 1
-      ;;
-  esac
-done
-
-run_platform() {
-  local scope="$1"
-  local -a args=("$scope")
-  if [[ "$AUTO_APPROVE" == "true" ]]; then
-    args+=("--auto-approve")
-  fi
-  bash "$ROOT_DIR/scripts/provision-platform-prereq.sh" "${args[@]}"
-}
-
-run_k8s() {
-  local scope="$1"
-  local -a args=("$scope")
-  if [[ "$BOOTSTRAP_PLATFORM_CONTROLLERS" == "true" ]]; then
-    args+=("--bootstrap-platform-controllers")
-  fi
-  bash "$ROOT_DIR/scripts/provision-k8s-components.sh" "${args[@]}"
-}
-
-case "$SCOPE" in
-  all)
-    run_platform mongodb
-    run_platform pg
-    run_k8s mongodb
-    ;;
-  mongodb|mongo)
-    run_platform mongodb
-    run_k8s mongodb
-    ;;
-  pg)
-    run_platform pg
-    ;;
-  signoz)
-    run_k8s signoz
-    ;;
-  signoz-observability)
-    signoz_obs_args=()
-    if [[ "$AUTO_APPROVE" == "true" ]]; then
-      signoz_obs_args+=("--auto-approve")
-    fi
-    bash "$ROOT_DIR/scripts/provision-signoz-observability.sh" "${signoz_obs_args[@]}"
-    ;;
-  *)
-    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, signoz, signoz-observability" >&2
-    usage
-    exit 1
-    ;;
-esac
-
-echo "Completed provisioning scope: $SCOPE"
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/lib/orchestrator.sh"
+run_unified_command provision "$@"
