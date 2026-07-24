@@ -180,7 +180,7 @@ _platform_env_load_manifest() {
       return 1
     fi
 
-    if _platform_env_contains "$field_a" "${_platform_env_schema_keys[@]}"; then
+    if _platform_env_contains "$field_a" "${_platform_env_schema_keys[@]+"${_platform_env_schema_keys[@]}"}"; then
       _platform_env_error "duplicate manifest key declaration: ${field_a}"
       return 1
     fi
@@ -293,7 +293,7 @@ _platform_env_parse_environment_file() {
     # second "unresolved or executable value" check here: that classification
     # would be dead code.
 
-    if _platform_env_contains "$key_name" "${_platform_env_loaded_keys[@]}"; then
+    if _platform_env_contains "$key_name" "${_platform_env_loaded_keys[@]+"${_platform_env_loaded_keys[@]}"}"; then
       _platform_env_error "duplicate dotenv key ${key_name} at ${environment_file}:${line_number}"
       return 1
     fi
@@ -673,7 +673,7 @@ load_platform_env() {
 
   for ((index = 0; index < ${#_platform_env_loaded_keys[@]}; index++)); do
     key_name="${_platform_env_loaded_keys[$index]}"
-    if ! _platform_env_contains "$key_name" "${_platform_env_schema_keys[@]}"; then
+    if ! _platform_env_contains "$key_name" "${_platform_env_schema_keys[@]+"${_platform_env_schema_keys[@]}"}"; then
       _platform_env_error "unknown dotenv key: ${key_name}"
       return 1
     fi
@@ -681,7 +681,7 @@ load_platform_env() {
 
   for ((index = 0; index < ${#_platform_env_schema_keys[@]}; index++)); do
     if [[ "${_platform_env_schema_required[$index]}" == "required" ]] && \
-       ! _platform_env_contains "${_platform_env_schema_keys[$index]}" "${_platform_env_loaded_keys[@]}"; then
+       ! _platform_env_contains "${_platform_env_schema_keys[$index]}" "${_platform_env_loaded_keys[@]+"${_platform_env_loaded_keys[@]}"}"; then
       _platform_env_error "missing required key: ${_platform_env_schema_keys[$index]}"
       return 1
     fi

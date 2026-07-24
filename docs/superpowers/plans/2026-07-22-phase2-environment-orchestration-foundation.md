@@ -2057,8 +2057,11 @@ later-plan handoff notes:
 2. ADR: lock payload fencing semantics replacing bare lock directories with
    identity-bearing canonical JSON lock payloads plus deterministic liveness
    fencing checks for break-glass unlock.
+3. ADR: serialization of resolved Assertion/Mutation scope topology in
+  orchestration artifacts so consumer jobs can re-evaluate the exact required
+  preconditions without depending on potentially drifted local registry logic.
 
-Expected: both ADR tasks are explicitly queued with owner, decision deadline,
+Expected: all ADR tasks are explicitly queued with owner, decision deadline,
 and acceptance test strategy before Task 7 handoff completes.
 
 - [ ] **Step 2: Run only when execution is separately authorized - execute the final focused verification**

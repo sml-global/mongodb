@@ -376,6 +376,13 @@ _orchestrator_run_provision() {
 
   local symbol
   for step in "${order[@]}"; do
+    requirement="$(implementation_requirement_for_scope "$step")" || {
+      _orchestrator_error "no implementation-requirement mapping for scope: ${step}"
+      return 1
+    }
+    if [[ "$requirement" == "external-existing-platform" ]]; then
+      continue
+    fi
     symbol="$(provision_handler_for_scope "$step")" || {
       _orchestrator_error "no provision handler is mapped for scope: ${step}"
       return 1

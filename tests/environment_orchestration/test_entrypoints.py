@@ -71,6 +71,8 @@ from pathlib import Path
 
 from .helpers import REPO_ROOT
 
+REAL_JQ = shutil.which("jq")
+
 # ---------------------------------------------------------------------------
 # Task 4 Step 1: representative legacy argument vectors (verbatim from the
 # plan, docs/superpowers/plans/2026-07-22-phase2-environment-orchestration-
@@ -847,6 +849,198 @@ class DestroyOptionGrammarTests(OrchestratorFixture):
         self.assertIn("unknown unified destroy argument: --bogus", result.stderr)
         self.assertNotIn(self.BLOCK_MESSAGE, result.stderr)
         self._assert_no_side_effects()
+
+
+_UAT_AWS_MOCK = """#!/usr/bin/env bash
+printf 'aws %s\\n' "$*" >> "$MOCK_COMMAND_LOG"
+case "$1" in
+    sts)
+        if [[ "$2" == "get-caller-identity" ]]; then
+            printf '%s\\n' "${MOCK_AWS_ACCOUNT_ID:-672172129937}"
+            exit "${MOCK_AWS_STS_EXIT:-0}"
+        fi
+        ;;
+    configure)
+        if [[ "$2" == "get" && "$3" == "region" ]]; then
+            printf '%s\\n' "${MOCK_AWS_CONFIGURED_REGION:-}"
+            exit 0
+        fi
+        ;;
+    s3api)
+        if [[ "$2" == "head-bucket" ]]; then
+            exit "${MOCK_AWS_S3_HEAD_BUCKET_EXIT:-0}"
+        fi
+        ;;
+    eks)
+        if [[ "$2" == "describe-cluster" ]]; then
+            printf '%s\\n' "${MOCK_AWS_EKS_AUTH_MODE:-API}"
+            exit "${MOCK_AWS_EKS_EXIT:-0}"
+        fi
+        ;;
+esac
+exit 97
+"""
+
+_UAT_KUBECTL_MOCK = """#!/usr/bin/env bash
+printf 'kubectl %s\\n' "$*" >> "$MOCK_COMMAND_LOG"
+if [[ "$1" == "config" && "$2" == "current-context" ]]; then
+    printf '%s\\n' "${MOCK_KUBECTL_CONTEXT:-uat-context}"
+    exit "${MOCK_KUBECTL_CONTEXT_EXIT:-0}"
+fi
+if [[ "$1" == "config" && "$2" == "view" ]]; then
+    printf '%s\\n' "${MOCK_KUBECTL_CLUSTER_REF:-arn:aws:eks:ap-east-1:672172129937:cluster/EKS-boomi-runtime-cluster}"
+    exit "${MOCK_KUBECTL_VIEW_EXIT:-0}"
+fi
+exit 97
+"""
+
+_UAT_TERRAFORM_MOCK = """#!/usr/bin/env bash
+printf 'terraform %s\\n' "$*" >> "$MOCK_COMMAND_LOG"
+subcommand="$2"
+case "$subcommand" in
+    fmt|validate|plan|apply)
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+"""
+
+_UAT_JQ_MOCK_TEMPLATE = """#!/usr/bin/env bash
+printf 'jq %s\\n' "$*" >> "$MOCK_COMMAND_LOG"
+exec "{real_jq}" "$@"
+"""
+
+_UAT_BACKEND_BOOTSTRAP_STUB = """#!/usr/bin/env bash
+printf 'bootstrap-terraform-s3-backend.sh %s\\n' "$*" >> "$MOCK_COMMAND_LOG"
+bucket=""
+owner=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --bucket) bucket="$2"; shift 2 ;;
+        --expected-bucket-owner) owner="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+aws s3api head-bucket --bucket "$bucket" --expected-bucket-owner "$owner"
+"""
+
+
+class UatEksAccessEntrypointFixture(_BaseFixture):
+    def setUp(self):
+        super().setUp()
+        if REAL_JQ is None:
+            self.skipTest("jq must be installed and on PATH")
+
+        self._copy(
+            "scripts/provision.sh",
+            "scripts/lib/orchestrator.sh",
+            "scripts/lib/environment-contracts.sh",
+            "scripts/lib/platform-env.sh",
+            "scripts/lib/platform-guards.sh",
+            "scripts/lib/orchestration-paths.sh",
+            "scripts/lib/scope-registry.sh",
+            "scripts/lib/scope-handlers.d/10-foundation-access.sh",
+            "scripts/lib/scope-verifiers.d/10-foundation-access.sh",
+            "scripts/lib/packages/10-foundation-access/internal/access-scopes.sh",
+            "scripts/validate-uat-workforce-principals.sh",
+            "config/environment-schema/base.manifest",
+            "config/environments/uat.env",
+            "platform-prerequisites/terraform/access-governance/.terraform.lock.hcl",
+            "platform-prerequisites/terraform/access-governance/main.tf",
+            "platform-prerequisites/terraform/access-governance/outputs.tf",
+            "platform-prerequisites/terraform/access-governance/uat.tfvars",
+            "platform-prerequisites/terraform/access-governance/variables.tf",
+            "platform-prerequisites/terraform/access-governance/versions.tf",
+            "platform-prerequisites/terraform/eks-access/.terraform.lock.hcl",
+            "platform-prerequisites/terraform/eks-access/main.tf",
+            "platform-prerequisites/terraform/eks-access/outputs.tf",
+            "platform-prerequisites/terraform/eks-access/uat.tfvars",
+            "platform-prerequisites/terraform/eks-access/variables.tf",
+            "platform-prerequisites/terraform/eks-access/versions.tf",
+        )
+
+        self._write_executable(self.mock_bin / "aws", _UAT_AWS_MOCK)
+        self._write_executable(self.mock_bin / "kubectl", _UAT_KUBECTL_MOCK)
+        self._write_executable(self.mock_bin / "terraform", _UAT_TERRAFORM_MOCK)
+        self._write_executable(
+            self.mock_bin / "jq", _UAT_JQ_MOCK_TEMPLATE.format(real_jq=REAL_JQ)
+        )
+        self._write_executable(
+            self.root / "scripts" / "bootstrap-terraform-s3-backend.sh",
+            _UAT_BACKEND_BOOTSTRAP_STUB,
+        )
+
+        validator = self.root / "scripts" / "validate-uat-workforce-principals.sh"
+        validator.chmod(validator.stat().st_mode | stat.S_IXUSR)
+
+        self.principals_path = (
+            self.root / "config" / "environments" / "uat.local" / "workforce-principals.json"
+        )
+        self.plan_dir = self.root / ".local" / "uat" / "plans"
+        self.generated_dir = self.root / ".local" / "uat" / "generated"
+
+    def run_wrapper(self, args, extra_env=None):
+        return self.run_clean(["bash", "scripts/provision.sh", *args], extra_env=extra_env)
+
+    def write_valid_principals(self):
+        self.principals_path.parent.mkdir(parents=True, exist_ok=True)
+        self.principals_path.write_text(
+            (
+                '{"infra_admin_role_arn":"arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/ap-east-1/AWSReservedSSO_UATInfraAdminEA_111111",'
+                '"application_developer_role_arn":"arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/ap-east-1/AWSReservedSSO_UATApplicationDeveloper_222222",'
+                '"boomi_admin_role_arn":"arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/ap-east-1/AWSReservedSSO_UATBoomiAdmin_333333",'
+                '"process_owner_role_arn":"arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/ap-east-1/AWSReservedSSO_UATBoomiProcessOwner_444444"}'
+            ),
+            encoding="utf-8",
+        )
+
+
+class UatEksAccessBypassTests(UatEksAccessEntrypointFixture):
+    def test_public_uat_eks_access_path_succeeds_after_existing_platform_verification(self):
+        self.write_valid_principals()
+        result = self.run_wrapper(["--env", "uat", "eks-access", "--auto-approve"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        lines = self.command_log_lines()
+        joined = "\n".join(lines)
+        self.assertIn("aws sts get-caller-identity", joined)
+        self.assertIn("aws configure get region", joined)
+        self.assertIn("kubectl config current-context", joined)
+        self.assertIn("kubectl config view --minify", joined)
+        self.assertIn("aws eks describe-cluster", joined)
+        self.assertIn("jq -e", joined)
+        self.assertIn("bootstrap-terraform-s3-backend.sh", joined)
+        self.assertIn("terraform -chdir=", joined)
+
+    def test_existing_platform_verification_failure_stops_before_eks_access_backend_and_terraform(self):
+        self.write_valid_principals()
+        result = self.run_wrapper(
+            ["--env", "uat", "eks-access", "--auto-approve"],
+            extra_env={
+                "MOCK_KUBECTL_CLUSTER_REF": "arn:aws:eks:ap-east-1:672172129937:cluster/OTHER-CLUSTER",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not target uat", result.stderr)
+
+        lines = self.command_log_lines()
+        self.assertFalse(
+            any(
+                line.startswith("bootstrap-terraform-s3-backend.sh")
+                and "--key oms/uat/eks-access.tfstate" in line
+                for line in lines
+            ),
+            lines,
+        )
+        self.assertFalse(any(line.startswith("terraform ") for line in lines), lines)
+
+        self.assertFalse((self.root / ".local" / "dev").exists())
+        if self.plan_dir.exists():
+            self.assertEqual(list(self.plan_dir.iterdir()), [])
+        if self.generated_dir.exists():
+            self.assertEqual(list(self.generated_dir.iterdir()), [])
 
 
 if __name__ == "__main__":
