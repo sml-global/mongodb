@@ -20,6 +20,18 @@ fail() {
   exit 1
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENVIRONMENT_CONTRACTS_LIB="${SCRIPT_DIR}/lib/environment-contracts.sh"
+[[ -r "$ENVIRONMENT_CONTRACTS_LIB" ]] || fail "environment contracts library is not readable: $ENVIRONMENT_CONTRACTS_LIB"
+# shellcheck disable=SC1091
+source "$ENVIRONMENT_CONTRACTS_LIB"
+
+UAT_ACCOUNT_ID="$(immutable_environment_value uat EXPECTED_AWS_ACCOUNT_ID)" || fail "could not resolve immutable UAT account id."
+UAT_INFRA_ROLE_PREFIX="$(immutable_environment_value uat INFRA_ROLE_PREFIX)" || fail "could not resolve immutable UAT infra admin role prefix."
+UAT_APPLICATION_DEVELOPER_ROLE_PREFIX="$(immutable_environment_value uat APPLICATION_DEVELOPER_ROLE_PREFIX)" || fail "could not resolve immutable UAT application developer role prefix."
+UAT_BOOMI_ADMIN_ROLE_PREFIX="$(immutable_environment_value uat BOOMI_ADMIN_ROLE_PREFIX)" || fail "could not resolve immutable UAT boomi admin role prefix."
+UAT_PROCESS_OWNER_ROLE_PREFIX="$(immutable_environment_value uat PROCESS_OWNER_ROLE_PREFIX)" || fail "could not resolve immutable UAT process owner role prefix."
+
 reject_directory_output() {
   [[ ! -d "$OUTPUT_PATH" ]] || fail "output path must not be a directory or resolve to a directory; choose a regular file path: $OUTPUT_PATH"
 }
@@ -77,9 +89,9 @@ if ! jq -e '
   fail "input must be a JSON object with exactly four required keys: infra_admin_role_arn, application_developer_role_arn, boomi_admin_role_arn, and process_owner_role_arn."
 fi
 
-if ! jq -e '
+if ! jq -e --arg account_id "$UAT_ACCOUNT_ID" '
   all(.[]; type == "string") and
-  all(.[]; startswith("arn:aws:iam::672172129937:role/"))
+  all(.[]; startswith("arn:aws:iam::" + $account_id + ":role/"))
 ' "$INPUT_PATH" >/dev/null; then
   fail "every principal must be a role ARN in UAT account 672172129937."
 fi
@@ -88,30 +100,30 @@ if ! jq -e '[.[]] | length == (unique | length)' "$INPUT_PATH" >/dev/null; then
   fail "all four UAT workforce principal ARNs must be unique."
 fi
 
-if ! jq -e '
+if ! jq -e --arg account_id "$UAT_ACCOUNT_ID" --arg role_prefix "$UAT_INFRA_ROLE_PREFIX" '
   .infra_admin_role_arn |
-  test("^arn:aws:iam::672172129937:role/aws-reserved/sso\\.amazonaws\\.com/[^/]+/AWSReservedSSO_UATInfraAdminEA_[A-Za-z0-9]+$")
+  test("^arn:aws:iam::" + $account_id + ":role/aws-reserved/sso\\.amazonaws\\.com/[^/]+/" + $role_prefix + "[A-Za-z0-9]+$")
 ' "$INPUT_PATH" >/dev/null; then
   fail "infra_admin_role_arn must be an AWSReservedSSO_UATInfraAdminEA role in UAT account 672172129937."
 fi
 
-if ! jq -e '
+if ! jq -e --arg account_id "$UAT_ACCOUNT_ID" --arg role_prefix "$UAT_APPLICATION_DEVELOPER_ROLE_PREFIX" '
   .application_developer_role_arn |
-  test("^arn:aws:iam::672172129937:role/aws-reserved/sso\\.amazonaws\\.com/[^/]+/AWSReservedSSO_UATApplicationDeveloper_[A-Za-z0-9]+$")
+  test("^arn:aws:iam::" + $account_id + ":role/aws-reserved/sso\\.amazonaws\\.com/[^/]+/" + $role_prefix + "[A-Za-z0-9]+$")
 ' "$INPUT_PATH" >/dev/null; then
   fail "application_developer_role_arn must be an AWSReservedSSO_UATApplicationDeveloper role in UAT account 672172129937."
 fi
 
-if ! jq -e '
+if ! jq -e --arg account_id "$UAT_ACCOUNT_ID" --arg role_prefix "$UAT_BOOMI_ADMIN_ROLE_PREFIX" '
   .boomi_admin_role_arn |
-  test("^arn:aws:iam::672172129937:role/aws-reserved/sso\\.amazonaws\\.com/[^/]+/AWSReservedSSO_UATBoomiAdmin_[A-Za-z0-9]+$")
+  test("^arn:aws:iam::" + $account_id + ":role/aws-reserved/sso\\.amazonaws\\.com/[^/]+/" + $role_prefix + "[A-Za-z0-9]+$")
 ' "$INPUT_PATH" >/dev/null; then
   fail "boomi_admin_role_arn must be an AWSReservedSSO_UATBoomiAdmin role in UAT account 672172129937."
 fi
 
-if ! jq -e '
+if ! jq -e --arg account_id "$UAT_ACCOUNT_ID" --arg role_prefix "$UAT_PROCESS_OWNER_ROLE_PREFIX" '
   .process_owner_role_arn |
-  test("^arn:aws:iam::672172129937:role/aws-reserved/sso\\.amazonaws\\.com/[^/]+/AWSReservedSSO_UATBoomiProcessOwner_[A-Za-z0-9]+$")
+  test("^arn:aws:iam::" + $account_id + ":role/aws-reserved/sso\\.amazonaws\\.com/[^/]+/" + $role_prefix + "[A-Za-z0-9]+$")
 ' "$INPUT_PATH" >/dev/null; then
   fail "process_owner_role_arn must be an AWSReservedSSO_UATBoomiProcessOwner role in UAT account 672172129937."
 fi
