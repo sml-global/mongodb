@@ -6,6 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULES_ROOT = REPO_ROOT / "platform-prerequisites" / "terraform" / "modules"
 ROOT_STACK = REPO_ROOT / "platform-prerequisites" / "terraform" / "eks-platform"
+WORKLOAD_IDENTITY_ROOT = REPO_ROOT / "platform-prerequisites" / "terraform" / "workload-identity"
 ENV_ROOT = REPO_ROOT / "platform-prerequisites" / "terraform" / "environments"
 
 
@@ -105,6 +106,64 @@ class TerraformContractTests(unittest.TestCase):
         self.assertIn("addons[*].addon_version must be explicit and cannot be latest", variables_tf)
         self.assertNotRegex(dev_tfvars, r'addon_version\s*=\s*"latest"')
         self.assertNotRegex(uat_tfvars, r'addon_version\s*=\s*"latest"')
+
+    def test_workload_identity_root(self):
+        fixture_identities = {
+            "collector": {
+                "namespace": "telemetry",
+                "service_account": "otel-collector",
+                "policy_json": '{"Version":"2012-10-17","Statement":[]}',
+                "description": "Collector role",
+            }
+        }
+
+        versions_tf = read(WORKLOAD_IDENTITY_ROOT / "versions.tf")
+        variables_tf = read(WORKLOAD_IDENTITY_ROOT / "variables.tf")
+        main_tf = read(WORKLOAD_IDENTITY_ROOT / "main.tf")
+        outputs_tf = read(WORKLOAD_IDENTITY_ROOT / "outputs.tf")
+        dev_tfvars = read(ENV_ROOT / "dev" / "workload-identity.tfvars")
+        uat_tfvars = read(ENV_ROOT / "uat" / "workload-identity.tfvars")
+
+        self.assertIn('required_version = ">= 1.10.0"', versions_tf)
+        self.assertIn('source  = "hashicorp/aws"', versions_tf)
+        self.assertIn('version = ">= 6.0, < 7.0"', versions_tf)
+
+        self.assertRegex(
+            variables_tf,
+            r'variable\s+"identities"\s*\{\s*type\s*=\s*map\(object\(\{\s*namespace\s*=\s*string\s*service_account\s*=\s*string\s*policy_json\s*=\s*string\s*description\s*=\s*string\s*\}\)\)\s*default\s*=\s*\{\s*\}',
+        )
+        self.assertNotIn("role_name", variables_tf)
+        self.assertNotIn("optional(", variables_tf)
+
+        self.assertIn('data "terraform_remote_state" "eks_platform"', main_tf)
+        self.assertRegex(
+            main_tf,
+            r'platform_contract\s*=\s*data\.terraform_remote_state\.eks_platform\.outputs\.platform_contract',
+        )
+        self.assertIn('local.platform_contract.account_id == var.expected_account_id', main_tf)
+        self.assertIn('local.platform_contract.region == var.aws_region', main_tf)
+        self.assertIn('local.platform_contract.environment == var.environment', main_tf)
+        self.assertIn('local.platform_contract.cluster_name == var.cluster_name', main_tf)
+        self.assertIn('local.platform_contract.cluster_arn == local.expected_cluster_arn', main_tf)
+
+        self.assertIn('for_each = var.identities', main_tf)
+        self.assertEqual(len(re.findall(r'resource\s+"aws_iam_role"\s+"identity"\s*\{', main_tf)), 1)
+        self.assertEqual(len(re.findall(r'resource\s+"aws_iam_role_policy"\s+"identity"\s*\{', main_tf)), 1)
+        self.assertEqual(len(re.findall(r'resource\s+"aws_eks_pod_identity_association"\s+"identity"\s*\{', main_tf)), 1)
+
+        self.assertRegex(main_tf, r'name\s*=\s*"\$\{var\.environment\}-\$\{each\.key\}"')
+        self.assertNotIn("fixture-ns", main_tf)
+        self.assertNotIn("fixture-sa", main_tf)
+        self.assertNotIn("fixture-policy", main_tf)
+        self.assertNotIn("fixture-description", main_tf)
+        self.assertNotIn("fixture-role", main_tf)
+        self.assertNotIn("if each.key == \"collector\"", main_tf)
+
+        self.assertEqual(len(fixture_identities), 1)
+        self.assertEqual(len(re.findall(r'for\s+identity_key,\s*identity\s+in\s+var\.identities\s*:', outputs_tf)), 1)
+
+        self.assertIsNotNone(re.search(r'^identities\s*=\s*\{\s*\}\s*$', dev_tfvars, re.MULTILINE))
+        self.assertIsNotNone(re.search(r'^identities\s*=\s*\{\s*\}\s*$', uat_tfvars, re.MULTILINE))
 
 
 if __name__ == "__main__":
