@@ -40,165 +40,36 @@ if [[ $# -eq 2 && "$2" != "--auto-approve" ]]; then
   fail "unknown argument: $2"
 fi
 
-AUTO_APPROVE="false"
+AUTO_APPROVE_ARGS=()
 if [[ $# -eq 2 ]]; then
-  AUTO_APPROVE="true"
+  AUTO_APPROVE_ARGS=("--auto-approve")
 fi
 
-reject_execution_environment_overrides() {
-  local variable_name=""
-
-  while IFS= read -r variable_name; do
-    case "$variable_name" in
-      AWS_ENDPOINT_URL|AWS_ENDPOINT_URL_*|AWS_S3_ENDPOINT|AWS_STS_ENDPOINT|AWS_CA_BUNDLE|TF_CLI_CONFIG_FILE|TF_PLUGIN_CACHE_DIR|TF_REATTACH_PROVIDERS|TF_CLI_ARGS*|TF_VAR*|TF_WORKSPACE|TF_DATA_DIR)
-        fail "Execution environment override is not allowed: $variable_name"
-        ;;
-    esac
-  done < <(compgen -e)
-}
-
-reject_execution_environment_overrides
-# Ignore endpoint_url and services settings from otherwise authorized shared AWS profiles.
-export AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true
+# This wrapper is temporary (owned by "Task 5: Supply Reviewed UAT Access
+# Symbols To Unified Provisioning" in
+# docs/superpowers/plans/2026-07-22-phase2-environment-orchestration-foundation.md)
+# and contains no account, backend, Terraform, kubectl, lock, plan,
+# generated-file, or cleanup logic of its own: it only maps its old scope
+# grammar to the public unified provision command and forwards. Its removal
+# is a handoff item for the post-UAT migration plan.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PLATFORM_ENV_LIBRARY="$ROOT_DIR/scripts/lib/platform-env.sh"
-BACKEND_BOOTSTRAP="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
-PRINCIPAL_VALIDATOR="$ROOT_DIR/scripts/validate-uat-workforce-principals.sh"
-PRINCIPAL_INPUT="$ROOT_DIR/config/environments/uat-workforce-principals.json"
-GOVERNANCE_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/access-governance"
-EKS_TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/eks-access"
-EKS_TFVARS="$EKS_TF_DIR/generated.auto.tfvars.json"
-[[ "$PRINCIPAL_INPUT" != "$EKS_TFVARS" ]] || fail "principal input and generated Terraform output must be distinct"
-LOCK_DIR="$ROOT_DIR/.uat-access.lock"
-LOCK_HELD="false"
-ACTIVE_PLAN=""
-ACTIVE_GENERATED_TFVARS=""
+PROVISION="$ROOT_DIR/scripts/provision.sh"
 
-cleanup() {
-  local original_status=$?
-  local cleanup_status=0
-
-  trap - EXIT
-  set +e
-  if [[ -n "$ACTIVE_PLAN" ]]; then
-    rm -f "$ACTIVE_PLAN"
-    [[ $? -eq 0 ]] || cleanup_status=1
-  fi
-  if [[ -n "$ACTIVE_GENERATED_TFVARS" ]]; then
-    rm -f "$ACTIVE_GENERATED_TFVARS"
-    [[ $? -eq 0 ]] || cleanup_status=1
-  fi
-  if [[ "$LOCK_HELD" == "true" ]]; then
-    rmdir "$LOCK_DIR"
-    [[ $? -eq 0 ]] || cleanup_status=1
-  fi
-
-  if [[ $original_status -ne 0 ]]; then
-    exit "$original_status"
-  fi
-  exit "$cleanup_status"
-}
-trap cleanup EXIT
-
-[[ -r "$PLATFORM_ENV_LIBRARY" ]] || fail "platform environment library is not readable: $PLATFORM_ENV_LIBRARY"
-# shellcheck disable=SC1090
-source "$PLATFORM_ENV_LIBRARY"
-load_platform_env uat
-
-acquire_lock() {
-  if ! mkdir "$LOCK_DIR"; then
-    fail "another UAT access orchestration is running: $LOCK_DIR"
-  fi
-  LOCK_HELD="true"
-}
-
-bootstrap_backend() {
-  local tf_dir="$1"
-  local state_key="$2"
-
-  [[ -x "$BACKEND_BOOTSTRAP" ]] || fail "backend bootstrap script is not executable: $BACKEND_BOOTSTRAP"
-  "$BACKEND_BOOTSTRAP" \
-    --tf-dir "$tf_dir" \
-    --bucket "$TF_STATE_BUCKET" \
-    --region "$TF_STATE_REGION" \
-    --key "$state_key" \
-    --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID"
-}
-
-remove_generated_tfvars() {
-  if [[ -n "$ACTIVE_GENERATED_TFVARS" ]]; then
-    rm -f "$ACTIVE_GENERATED_TFVARS"
-  fi
-}
-
-confirm_apply() {
-  local root_name="$1"
-  local response=""
-
-  if [[ "$AUTO_APPROVE" == "true" ]]; then
-    return 0
-  fi
-
-  printf "Apply saved Terraform plan for %s? Type 'yes' to continue: " "$root_name"
-  if ! IFS= read -r response || [[ "$response" != "yes" ]]; then
-    fail "apply aborted for Terraform root: $root_name"
-  fi
-}
-
-run_terraform() {
-  local tf_dir="$1"
-  local root_name="${tf_dir##*/}"
-  local plan_name="uat-access.$$.tfplan"
-  local plan_path="$tf_dir/$plan_name"
-
-  ACTIVE_PLAN="$plan_path"
-  rm -f "$plan_path"
-  terraform -chdir="$tf_dir" fmt -check -recursive
-  terraform -chdir="$tf_dir" validate
-  terraform -chdir="$tf_dir" plan -input=false -out="$plan_name" -var-file=uat.tfvars
-  remove_generated_tfvars
-  confirm_apply "$root_name"
-  terraform -chdir="$tf_dir" apply -input=false "$plan_name"
-  rm -f "$plan_path"
-  ACTIVE_PLAN=""
-}
-
-provision_governance() {
-  bootstrap_backend "$GOVERNANCE_TF_DIR" "$ACCESS_GOVERNANCE_STATE_KEY"
-  run_terraform "$GOVERNANCE_TF_DIR"
-}
-
-provision_eks_access() {
-  ACTIVE_GENERATED_TFVARS="$EKS_TFVARS"
-  rm -f "$EKS_TFVARS"
-  [[ -r "$PRINCIPAL_INPUT" ]] || fail "UAT workforce principal input is not readable: $PRINCIPAL_INPUT"
-  [[ -x "$PRINCIPAL_VALIDATOR" ]] || fail "principal validator is not executable: $PRINCIPAL_VALIDATOR"
-  "$PRINCIPAL_VALIDATOR" --input "$PRINCIPAL_INPUT" --output "$EKS_TFVARS"
-
-  bootstrap_backend "$EKS_TF_DIR" "$EKS_ACCESS_STATE_KEY"
-  run_terraform "$EKS_TF_DIR"
-}
+echo "DEPRECATED: use scripts/provision.sh --env uat <access-governance|eks-access>" >&2
 
 case "$SCOPE" in
   governance)
-    verify_aws_identity
-    acquire_lock
-    provision_governance
+    exec "$PROVISION" --env uat access-governance "${AUTO_APPROVE_ARGS[@]+"${AUTO_APPROVE_ARGS[@]}"}"
     ;;
   eks-access)
-    verify_aws_identity
-    verify_kubernetes_context
-    verify_eks_authentication_mode
-    acquire_lock
-    provision_eks_access
+    exec "$PROVISION" --env uat eks-access "${AUTO_APPROVE_ARGS[@]+"${AUTO_APPROVE_ARGS[@]}"}"
     ;;
   all)
-    verify_aws_identity
-    verify_kubernetes_context
-    verify_eks_authentication_mode
-    acquire_lock
-    provision_governance
-    provision_eks_access
+    # The old `all` expands to the two access scopes this script has always
+    # owned; it does not forward to unified `--env uat all`, which correctly
+    # includes the full platform and fails on deferred work package 3.
+    "$PROVISION" --env uat access-governance "${AUTO_APPROVE_ARGS[@]+"${AUTO_APPROVE_ARGS[@]}"}"
+    exec "$PROVISION" --env uat eks-access "${AUTO_APPROVE_ARGS[@]+"${AUTO_APPROVE_ARGS[@]}"}"
     ;;
 esac
