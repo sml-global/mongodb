@@ -8,7 +8,7 @@
 # owns this file. It is sourced only by the thin public wrappers
 # (scripts/provision.sh, scripts/destroy.sh, scripts/verify-platform-health.sh)
 # on their explicit `--env <dev|uat> ...` branch; the non-`--env` branch never
-# reaches this file at all and execs the frozen `scripts/legacy/dev/*.sh`
+# reaches this file at all and execs the frozen legacy-dev wrapper bodies
 # bodies unchanged. This file contains no top-level execution beyond sourcing
 # its own foundation dependencies and defining functions; `run_unified_command`
 # is the single public entry point.

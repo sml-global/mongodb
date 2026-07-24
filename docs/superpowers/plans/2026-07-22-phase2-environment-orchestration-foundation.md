@@ -2103,8 +2103,10 @@ python3 - <<'PY'
 from pathlib import Path
 
 registry = Path("scripts/lib/scope-registry.sh").read_text(encoding="utf-8")
+if 'printf \'%s\\n\' "external-existing-platform"' not in registry:
+  raise SystemExit("missing implementation requirement token: external-existing-platform")
+
 for scope, work_package in {
-    "eks-platform": 3,
   "platform-controllers": 3,
   "workload-identity": 3,
     "mongodb": 4,
@@ -2117,7 +2119,7 @@ for scope, work_package in {
     "signoz-observability": 4,
     "boomi-runtime": 5,
 }.items():
-    required = f"{scope} requires work package {work_package}"
+    required = f'_scope_registry_fail_work_package "{scope}" {work_package}'
     if required not in registry:
         raise SystemExit(f"missing closed dependency declaration: {required}")
 print("Deferred scope dependency declarations are complete")
