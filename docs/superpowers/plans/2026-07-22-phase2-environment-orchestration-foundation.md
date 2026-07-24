@@ -198,6 +198,14 @@ bash scripts/destroy.sh --env uat eks-access
 bash scripts/verify-platform-health.sh --env uat --preflight
 ```
 
+These examples illustrate the leading `--env <scope>` command shape only, not
+a complete recipe for every operation. In particular, the destroy example is
+a first-pass preparation invocation as specified in Task 4: run without
+`--confirm`/`--confirmation-artifact`, it generates the confirmation artifact,
+prints the required second-pass arguments, and exits nonzero without
+mutation — it does not delete anything by itself. See Task 4's two-pass
+destroy protocol for the complete, non-illustrative command sequence.
+
 `--env` must be the first argument. This deliberately makes routing decidable
 before legacy code, AWS, backend, Terraform, Kubernetes, locks, plans, or
 generated files are touched. Explicit invocations reject missing values,
@@ -619,7 +627,7 @@ values.
 Use this assignment grammar and explicit content rejection:
 
 ```bash
-if [[ ! "$line" =~ ^([A-Z][A-Z0-9_]*)=([^\"\'\`\\\;\&\|\<\>\(\)\{\}]*)$ ]]; then
+if [[ ! "$line" =~ ^([A-Z][A-Z0-9_]*)=([^\"\'\`\\\;\&\|\<\>\(\)\{\}\#]*)$ ]]; then
   _platform_env_error "invalid dotenv assignment at ${environment_file}:${line_number}"
   return 1
 fi
@@ -630,13 +638,21 @@ value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
   _platform_env_error "empty value for ${key_name}"
   return 1
 }
-case "$value" in
-  *'$('*|*'${'*|*'<example>'*|*'<identity-center-region>'*|*'#'*)
-    _platform_env_error "unresolved or executable value for ${key_name}"
-    return 1
-    ;;
-esac
 ```
+
+The value character class excludes `"`, `'`, `` ` ``, `\`, `;`, `&`, `|`, `<`,
+`>`, `(`, `)`, `{`, `}`, and `#`. This single regex is the sole rejection gate
+for command substitution (`$(...)`), parameter expansion (`${...}`),
+backticks, inline comments, and angle-bracket placeholders such as
+`<example>`: every one of those constructs contains at least one excluded
+character, so no separate post-hoc `case "$value" in *'$('*|...)` check is
+reachable or needed. Do not add one — it would be dead code that can silently
+drift out of sync with the regex (this exact drift was found and fixed during
+Task 1 implementation, where an earlier draft of this regex omitted `#`,
+making the inline-comment test case fall through to a second, unreachable
+check). If the regex's excluded-character set ever changes, immediately
+verify by inspection that nothing downstream still assumes a second check
+fires for any of these constructs.
 
 Do not use `eval`, `source`, `declare -g`, associative arrays, or process
 substitution that hides loop assignments in a subshell. Bash 3.2 compatibility
@@ -673,6 +689,7 @@ Expected: one commit containing only the listed parser/config/test files.
 - Create: `tests/environment_orchestration/test_guards_and_paths.py`
 - Create: `scripts/lib/platform-guards.sh`
 - Create: `scripts/lib/orchestration-paths.sh`
+- Modify: `scripts/lib/platform-env.sh`
 - Modify: `.gitignore`
 
 - [ ] **Step 1: Write mocked guard and path-isolation tests**
@@ -763,6 +780,24 @@ key from the registry mapping and reject keys outside `${TF_STATE_PREFIX}/`,
 keys containing `..`, and unknown scopes before invoking the existing backend
 bootstrap.
 
+`platform-env.sh` currently still contains the legacy, UAT-only
+`verify_aws_identity`, `verify_kubernetes_context`, `verify_eks_authentication_mode`,
+and their `_validate_uat_contract`/`_validate_required_platform_env` helpers
+(intentionally left unchanged by Task 1, whose scope was the parser only).
+`platform-env.sh`'s Canonical Foundation Ownership contract is generic dotenv
+parsing and schema validation only — it must not also own identity/context/
+authentication guards once `platform-guards.sh` exists. This task must
+therefore also modify `scripts/lib/platform-env.sh` to remove
+`verify_aws_identity`, `verify_kubernetes_context`,
+`verify_eks_authentication_mode`, `_validate_uat_contract`, and
+`_validate_required_platform_env` entirely, migrating their checks into the
+generalized dev+uat-capable equivalents (`verify_aws_identity_and_region`,
+`verify_kubernetes_context`, `verify_eks_authentication_mode`) implemented in
+the new `scripts/lib/platform-guards.sh`. Any caller of the old names
+(currently none outside `platform-env.sh` itself) must be updated in the same
+commit. After this task, `platform-env.sh` contains no `verify_*` guard
+function and no UAT-only contract check.
+
 - [ ] **Step 4: Implement environment-local paths, ownership, locks, and cleanup**
 
 `initialize_orchestration_paths` computes paths from repository root and the
@@ -794,7 +829,9 @@ fail.
 
 - [ ] **Step 5: Ignore all local contracts and generated state**
 
-Replace UAT-specific ignore entries with:
+Replace only the two UAT-specific ignore lines
+(`config/environments/uat-workforce-principals.json` and
+`platform-prerequisites/terraform/eks-access/generated.auto.tfvars.json`) with:
 
 ```gitignore
 # Operator-local environment inputs and generated orchestration state
@@ -802,7 +839,11 @@ config/environments/*.local/
 .local/
 ```
 
-Keep existing legacy dev escrow ignores and Terraform-local ignores.
+Keep every other existing `.gitignore` entry untouched, including the legacy
+dev escrow ignores, the Terraform-local ignores, the `# Other` section
+(`docs/operations/command-log.md`, `.worktrees/`, `*.bak`), and any general
+hygiene entry such as `__pycache__/`. This step only narrows the UAT-specific
+section; it is not a wholesale rewrite of the file.
 
 - [ ] **Step 6: Run only when execution is separately authorized - verify shared guards and paths**
 
@@ -1720,6 +1761,8 @@ mocked regression tests; no Terraform resource file changes.
 - Create: `tests/environment_orchestration/test_static_boundary.py`
 - Modify: `tests/environment_orchestration/test_scope_registry.py`
 - Modify: `tests/environment_orchestration/test_entrypoints.py`
+- Modify: `scripts/lib/scope-registry.sh`
+- Modify: `scripts/lib/orchestrator.sh`
 
 - [ ] **Step 1: Add operation-matrix tests for every scope**
 
@@ -1734,6 +1777,12 @@ result class:
 | dev verify full/smoke | fail closed on unavailable internal fixed-graph verifier symbols; no mutation gate is consulted |
 | UAT provision `access-governance` | implemented |
 | UAT provision `eks-access` | implemented after existing-platform verification |
+
+For `eks-access` provision dispatch:
+- Modify `orchestrator.sh` to skip the provision handler dispatch (but not the pass-1 dependency resolution) ONLY for scopes reporting `external-existing-platform`, and ONLY during the `provision` operation. Destroy and verify must remain strictly fail-closed.
+- Update `test_scope_registry.py` to stop asserting that narrow `eks-access` fails via `eks-platform` pre-resolution.
+- Update `test_entrypoints.py` to assert the new public CLI success path for UAT `eks-access` after `verify_existing_eks_platform_dependency` succeeds.
+- Add an edge-case test: if `verify_existing_eks_platform_dependency` fails, assert no backend bootstrap, no Terraform plan/apply, and only UAT local artifact cleanup occurs.
 | UAT provision `backend` | requires a concrete downstream state owner; direct standalone call reports usage and does not guess a key |
 | UAT provision `all` | fails pre-resolution on work package 3 with no handler calls |
 | UAT provision deferred narrow scope | exact owning-work-package dependency failure |
