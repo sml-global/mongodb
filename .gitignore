@@ -7,8 +7,14 @@ terraform.tfvars
 .terraform/
 *.tfplan
 tfplan
+.uat-access.lock/
 
 # Other
 docs/operations/command-log.md
 .worktrees/
 *.bak
+
+# Operator-local environment inputs and generated orchestration state
+config/environments/*.local/
+.local/
+__pycache__/
