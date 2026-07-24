@@ -1,0 +1,54 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: cert-manager
+  namespace: flux-system
+spec:
+  interval: 30m
+  url: oci://ghcr.io/jetstack/charts/cert-manager
+  ref:
+    tag: v1.17.2
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: kyverno
+  namespace: flux-system
+spec:
+  interval: 30m
+  url: oci://ghcr.io/kyverno/charts/kyverno
+  ref:
+    tag: v3.3.7
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: cluster-autoscaler
+  namespace: flux-system
+spec:
+  interval: 30m
+  url: oci://ghcr.io/kubernetes/autoscaler/cluster-autoscaler-chart
+  ref:
+    tag: 9.46.6
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: metrics-server
+  namespace: flux-system
+spec:
+  interval: 30m
+  url: oci://ghcr.io/kubernetes-sigs/metrics-server/charts/metrics-server
+  ref:
+    tag: 3.12.2
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: aws-load-balancer-controller
+  namespace: flux-system
+spec:
+  interval: 30m
+  url: oci://public.ecr.aws/eks/aws-load-balancer-controller-chart
+  ref:
+    tag: 1.13.0
