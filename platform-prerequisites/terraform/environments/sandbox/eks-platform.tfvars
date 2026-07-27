@@ -26,6 +26,34 @@ enable_cluster_autoscaling = false
 enable_ebs_encryption      = true
 enable_backup              = false
 
+# EKS Add-ons configuration (from UAT baseline)
+addons = {
+  vpc-cni = {
+    enabled              = true
+    addon_version        = "v1.20.4-eksbuild.1"
+    resolve_conflicts    = "OVERWRITE"
+    service_account_role = false
+  }
+  coredns = {
+    enabled              = true
+    addon_version        = "v1.12.4-eksbuild.1"
+    resolve_conflicts    = "OVERWRITE"
+    service_account_role = false
+  }
+  kube-proxy = {
+    enabled              = true
+    addon_version        = "v1.33.0-eksbuild.2"
+    resolve_conflicts    = "OVERWRITE"
+    service_account_role = false
+  }
+  aws-ebs-csi-driver = {
+    enabled              = true
+    addon_version        = "v2.17.0-eksbuild.1"
+    resolve_conflicts    = "OVERWRITE"
+    service_account_role = true
+  }
+}
+
 # Tags
 tags = {
   Environment = "sandbox"
