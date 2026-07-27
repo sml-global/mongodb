@@ -239,8 +239,9 @@ git status
    bash -n scripts/lib/scope-verifiers.d/40-postgresql.sh
    
    # Copy-Paste Detection
-   grep -r "mongodb" scripts/lib/packages/40-postgresql/ scripts/lib/scope-handlers.d/40-postgresql.sh scripts/lib/scope-verifiers.d/40-postgresql.sh
+   grep -ir "mongodb" scripts/lib/packages/40-postgresql/ scripts/lib/scope-handlers.d/40-postgresql.sh scripts/lib/scope-verifiers.d/40-postgresql.sh
    # Expected: 0 matches
+   # Case-insensitive (-i) catches both function names and environment variables
    ```
 
 4. **Atomic Commit:**
@@ -273,10 +274,11 @@ python3 -m unittest discover -s tests/postgresql -p "test_*.py" -v
 # Expected output: Ran 44 tests ... OK
 ```
 
-**GATE 2: No Copy-Paste Leakage**
+**GATE 2: No Copy-Paste Leakage (Case-Insensitive)**
 ```bash
-grep -r "mongodb_internal\|verify_mongodb\|mongodb-access" scripts/lib/packages/40-postgresql/ scripts/lib/scope-handlers.d/40-postgresql.sh scripts/lib/scope-verifiers.d/40-postgresql.sh
+grep -ir "mongodb" scripts/lib/packages/40-postgresql/ scripts/lib/scope-handlers.d/40-postgresql.sh scripts/lib/scope-verifiers.d/40-postgresql.sh
 # Exit code: 1 (no matches)
+# Note: -i flag catches both function names (mongodb_internal) and environment variables (MONGODB_*)
 ```
 
 **GATE 3: Terraform Validation**
