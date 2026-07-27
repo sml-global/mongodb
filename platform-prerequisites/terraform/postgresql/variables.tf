@@ -1,99 +1,40 @@
 variable "aws_region" {
-  description = "AWS region hosting Aurora PostgreSQL."
+  description = "AWS region for platform resources."
   type        = string
-  default     = "ap-east-1"
+}
+
+variable "expected_account_id" {
+  description = "Approved AWS account for deployment."
+  type        = string
+}
+
+variable "environment" {
+  description = "Environment identifier (for example, sandbox or uat)."
+  type        = string
 }
 
 variable "name_prefix" {
-  description = "Prefix used for PostgreSQL generated resource names."
-  type        = string
-  default     = "dev-pg18"
-}
-
-variable "vpc_id" {
-  description = "VPC ID where the PostgreSQL security group is created."
+  description = "Prefix used for naming platform resources."
   type        = string
 }
 
-variable "private_subnet_ids" {
-  description = "Existing private subnet IDs used by the PostgreSQL DB subnet group."
-  type        = list(string)
-}
-
-variable "allowed_source_security_group_id" {
-  description = "Optional application security group ID allowed to connect on PostgreSQL port 5432."
+variable "cnpg_backup_bucket_name" {
+  description = "S3 bucket for CloudNativePG WAL archive and base backup (from Phase 2 platform_contract)."
   type        = string
-  default     = ""
 }
 
-variable "allowed_cidr_blocks" {
-  description = "Optional CIDR blocks allowed to connect on PostgreSQL port 5432. Keep this empty unless needed."
-  type        = list(string)
-  default     = []
-}
-
-variable "db_identifier" {
-  description = "Aurora PostgreSQL cluster identifier."
+variable "postgresql_operator_iam_role_arn" {
+  description = "From platform_contract.postgresql_operator_iam_role_arn (Phase 2 output)."
   type        = string
-  default     = "pg18-dev"
 }
 
-variable "engine_version" {
-  description = "Aurora PostgreSQL engine version. Must be available in the target region (check: aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1)."
+variable "cluster_kms_key_arn" {
+  description = "KMS key ARN for CNPG S3 backup encryption."
   type        = string
-  default     = "18.3"
 }
 
-variable "instance_class" {
-  description = "Aurora provisioned instance class for the single writer (such as db.t4g.medium)."
-  type        = string
-  default     = "db.t4g.medium"
-}
-
-variable "writer_availability_zone" {
-  description = "Optional AZ for the only writer instance (such as ap-east-1a). Leave empty for AWS placement."
-  type        = string
-  default     = ""
-}
-
-variable "db_name" {
-  description = "Initial PostgreSQL database name."
-  type        = string
-  default     = "app"
-}
-
-variable "db_master_username" {
-  description = "Master username for PostgreSQL."
-  type        = string
-  default     = "pgadmin"
-}
-
-variable "db_master_password" {
-  description = "Master password for PostgreSQL (stored in terraform state). Keep local only."
-  type        = string
-  sensitive   = true
-}
-
-variable "eks_cluster_name" {
-  description = "EKS cluster name used to register the CloudWatch monitoring pod identity association."
-  type        = string
-  default     = "EKS-boomi-runtime-cluster"
-}
-
-variable "cloudwatch_monitor_role_name" {
-  description = "IAM role name for the read-only PostgreSQL/Aurora CloudWatch metrics collector pod."
-  type        = string
-  default     = "postgres-cloudwatch-monitor-role"
-}
-
-variable "cloudwatch_monitor_namespace" {
-  description = "Kubernetes namespace of the CloudWatch metrics collector pod's ServiceAccount."
-  type        = string
-  default     = "mongodb"
-}
-
-variable "cloudwatch_monitor_service_account_name" {
-  description = "Kubernetes ServiceAccount name bound to the CloudWatch monitoring IAM role via Pod Identity."
-  type        = string
-  default     = "postgres-metrics-collector"
+variable "tags" {
+  description = "Tags applied to all resources in this module."
+  type        = map(string)
+  default     = {}
 }

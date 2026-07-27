@@ -1,34 +1,4 @@
-output "postgresql_cluster_id" {
-  description = "Aurora PostgreSQL cluster identifier."
-  value       = aws_rds_cluster.postgresql.id
-}
-
-output "postgresql_endpoint" {
-  description = "Aurora PostgreSQL writer endpoint address."
-  value       = aws_rds_cluster.postgresql.endpoint
-}
-
-output "postgresql_reader_endpoint" {
-  description = "Aurora PostgreSQL reader endpoint address."
-  value       = aws_rds_cluster.postgresql.reader_endpoint
-}
-
-output "postgresql_port" {
-  description = "PostgreSQL endpoint port."
-  value       = aws_rds_cluster.postgresql.port
-}
-
-output "postgresql_security_group_id" {
-  description = "Security group attached to PostgreSQL."
-  value       = aws_security_group.postgresql.id
-}
-
-output "postgresql_subnet_group_name" {
-  description = "DB subnet group used by PostgreSQL cluster."
-  value       = aws_db_subnet_group.postgresql.name
-}
-
-output "postgres_cloudwatch_monitor_role_arn" {
-  description = "IAM role ARN used by the PostgreSQL/Aurora CloudWatch metrics collector pod."
-  value       = aws_iam_role.postgres_cloudwatch_monitor.arn
+output "cnpg_backup_policy_id" {
+  description = "ID of the CNPG backup S3 access policy (format: role_name:policy_name) attached to the Phase 2 operator role"
+  value       = aws_iam_role_policy.cnpg_backup_access.id
 }
