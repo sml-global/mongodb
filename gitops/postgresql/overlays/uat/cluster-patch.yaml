@@ -1,0 +1,6 @@
+- op: replace
+  path: /spec/instances
+  value: 3
+- op: replace
+  path: /spec/backup/barmanObjectStore/wal/compression
+  value: gzip
