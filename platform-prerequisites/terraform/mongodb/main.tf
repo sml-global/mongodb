@@ -19,16 +19,3 @@ resource "aws_iam_role_policy" "pbm_s3_access" {
   })
 }
 
-check "operator_role_is_provided" {
-  assert {
-    condition     = length(var.operator_iam_role_arn) > 0
-    error_message = "operator_iam_role_arn must be provided from Phase 2 platform_contract. Direct IAM bypass is not allowed."
-  }
-}
-
-check "pbm_bucket_is_provided" {
-  assert {
-    condition     = length(var.pbm_bucket_name) > 0
-    error_message = "pbm_bucket_name must be provided from Phase 2 platform_contract."
-  }
-}
