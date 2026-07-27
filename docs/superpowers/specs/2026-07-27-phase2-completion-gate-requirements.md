@@ -101,7 +101,7 @@ aws sts get-caller-identity --profile sandbox
 cd /Users/frank/sml/oms/mongodb/.worktrees/uat-access-foundation
 bash scripts/bootstrap-terraform-s3-backend.sh
 ```
-**Expected:** S3 bucket created, DynamoDB lock table created
+**Expected:** S3 bucket created, Terraform backend configured with S3-native locking
 
 **(2c) Initialize terraform:**
 ```bash
@@ -139,8 +139,9 @@ cd platform-prerequisites
 # Initialize terraform with sandbox backend configuration
 terraform init \
   -backend-config="bucket=$EKS_PLATFORM_STATE_BUCKET" \
-  -backend-config="dynamodb_table=oms-sandbox-eks-lock" \
-  -backend-config="region=$AWS_REGION"
+  -backend-config="key=eks-platform.tfstate" \
+  -backend-config="region=$AWS_REGION" \
+  -backend-config="use_lockfile=true"
 
 # Validate terraform syntax
 terraform validate
@@ -323,7 +324,7 @@ Phase 2 is **formally complete** when **ALL** of the following are true:
 7. ✅ Gate 3 (System): Contract documentation present (eks-platform-contract.md)
 8. ✅ Gate 4 (Superpowers): Merge commit recorded on main branch
 9. ✅ Gate 4 (Superpowers): Worktree cleaned (git worktree prune)
-10. ✅ Post-Merge: S3 backend bucket (oms-sandbox-eks-tfstate) and DynamoDB lock table (oms-sandbox-eks-lock) deleted
+10. ✅ Post-Merge: S3 backend bucket (oms-sandbox-eks-tfstate) deleted
 
 **Only after all 10 criteria are met, Phase 3 planning can begin.**
 
@@ -340,7 +341,7 @@ Phase 2 is **formally complete** when **ALL** of the following are true:
    # Confirm merge commit is at HEAD
    ```
 
-2. **Delete sandbox backend resources (S3 bucket & DynamoDB table):**
+2. **Delete sandbox backend resources (S3 bucket only):**
    ```bash
    # Load sandbox environment
    source /Users/frank/sml/oms/mongodb/.worktrees/uat-access-foundation/config/environments/sandbox.env
@@ -348,13 +349,13 @@ Phase 2 is **formally complete** when **ALL** of the following are true:
    # Empty S3 backend bucket
    aws s3 rm s3://$EKS_PLATFORM_STATE_BUCKET --recursive --profile sandbox
 
-   # Delete DynamoDB lock table
-   aws dynamodb delete-table \
-     --table-name oms-sandbox-eks-lock \
+   # Delete S3 bucket
+   aws s3api delete-bucket \
+     --bucket $EKS_PLATFORM_STATE_BUCKET \
      --region $AWS_REGION \
      --profile sandbox
    ```
-   **Expected:** S3 bucket emptied and deleted; DynamoDB table deleted
+   **Expected:** S3 bucket emptied and deleted
    **Timing:** Execute within 1 hour after merge completes
    **Result:** Backend cleanup cost = $0 (no ongoing resources)
 
