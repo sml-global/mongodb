@@ -122,11 +122,41 @@ terraform fmt -check
 ```
 **Expected:** All files already formatted correctly
 
-**(2f) Execute terraform plan:**
+**(2f) Execute terraform plan using sandbox configuration:**
+
 ```bash
-terraform plan -out=/tmp/phase2.tfplan
+cd /Users/frank/sml/oms/mongodb/.worktrees/uat-access-foundation
+
+# Load sandbox environment variables
+source config/environments/sandbox.env
+
+# Verify AWS profile is set to sandbox (not production)
+aws sts get-caller-identity --profile sandbox
+
+# Navigate to terraform directory
+cd platform-prerequisites
+
+# Initialize terraform with sandbox backend configuration
+terraform init \
+  -backend-config="bucket=$EKS_PLATFORM_STATE_BUCKET" \
+  -backend-config="dynamodb_table=oms-sandbox-eks-lock" \
+  -backend-config="region=$AWS_REGION"
+
+# Validate terraform syntax
+terraform validate
+
+# Check formatting
+terraform fmt -check
+
+# Execute plan using sandbox tfvars files
+terraform plan \
+  -var-file="environments/sandbox/eks-platform.tfvars" \
+  -var-file="environments/sandbox/workload-identity.tfvars" \
+  -out=/tmp/phase2-sandbox.tfplan
 ```
-**Expected:** 0 errors, plan shows resources to be created
+
+**Expected:** Plan succeeds with 0 errors (shows proposed infrastructure, creates no actual AWS resources)
+**Note:** `terraform plan` is read-only. No EKS clusters, no IAM roles, no infrastructure is actually created. Only the S3 backend bucket and DynamoDB lock table were created by bootstrap script.
 
 **Critical Checks in Plan Output:**
 - ✅ EKS cluster ARN derivation is correct
@@ -137,6 +167,42 @@ terraform plan -out=/tmp/phase2.tfplan
 - ✅ No region-specific quota warnings
 
 **Gate 2 Status:** ✅ PASS if plan succeeds with 0 errors
+
+---
+
+## Sandbox Configuration & Regional Isolation (Updated for us-east-1)
+
+### Sandbox Strategy
+
+**Rationale:** Use existing UAT AWS account (672172129937) in us-east-1 (cheapest region) with distinct `name_prefix` to avoid IAM role collision with UAT environment in ap-east-1.
+
+**Key Isolation Principles:**
+- ✅ Different AWS Region (us-east-1 vs. ap-east-1) = separate resource quotas, separate regional endpoints
+- ✅ Distinct name_prefix ("oms-sandbox-eks" vs. "oms-uat") = separate IAM roles, security groups, EKS cluster names
+- ✅ Separate S3 backend bucket ("oms-sandbox-eks-tfstate" vs. "oms-uat-tfstate") = separate Terraform state files
+- ✅ Distinct DynamoDB lock table ("oms-sandbox-eks-lock" vs. "oms-uat-lock") = separate state locks
+
+**Why Dummy ARNs are Safe for Plan Validation:**
+- `terraform plan` is **read-only**; does not create any infrastructure
+- Terraform validates ARN **syntax** during plan phase only; does NOT verify resource existence
+- Dummy KMS and OIDC provider ARNs pass syntax validation without needing to exist in us-east-1
+- Result: Plan output shows proposed infrastructure accurately without requiring pre-existing resources
+
+### Sandbox Configuration Files
+
+Three new configuration files enable sandbox validation:
+
+1. **`config/environments/sandbox.env`**
+   - Exports: `ENVIRONMENT=sandbox`, `AWS_REGION=us-east-1`, `EKS_PLATFORM_STATE_BUCKET=oms-sandbox-eks-tfstate`
+   - Purpose: Environment variables for local shell and Terraform backend initialization
+
+2. **`platform-prerequisites/terraform/environments/sandbox/eks-platform.tfvars`**
+   - Sets: `name_prefix="oms-sandbox-eks"`, `aws_region="us-east-1"`, dummy KMS and OIDC ARNs
+   - Purpose: EKS platform configuration isolated from UAT
+
+3. **`platform-prerequisites/terraform/environments/sandbox/workload-identity.tfvars`**
+   - Sets: `environment="sandbox"`, points to sandbox state bucket
+   - Purpose: Workload identity configuration isolated from UAT
 
 ---
 
@@ -247,12 +313,14 @@ Phase 2 is **formally complete** when **ALL** of the following are true:
 2. ✅ Gate 1 (DevOps): Bash + Python syntax valid
 3. ✅ Gate 2 (AWS): Terraform plan succeeds against sandbox AWS
 4. ✅ Gate 2 (AWS): Plan output shows 0 errors, all resources valid
-5. ✅ Gate 3 (System): platform_contract outputs locked in outputs.tf
-6. ✅ Gate 3 (System): Contract documentation present (eks-platform-contract.md)
-7. ✅ Gate 4 (Superpowers): Merge commit recorded on main branch
-8. ✅ Gate 4 (Superpowers): Worktree cleaned (git worktree prune)
+5. ✅ Gate 2 (AWS): Plan uses sandbox configuration (environments/sandbox/ tfvars files)
+6. ✅ Gate 3 (System): platform_contract outputs locked in outputs.tf
+7. ✅ Gate 3 (System): Contract documentation present (eks-platform-contract.md)
+8. ✅ Gate 4 (Superpowers): Merge commit recorded on main branch
+9. ✅ Gate 4 (Superpowers): Worktree cleaned (git worktree prune)
+10. ✅ Post-Merge: S3 backend bucket (oms-sandbox-eks-tfstate) and DynamoDB lock table (oms-sandbox-eks-lock) deleted
 
-**Only after all 8 criteria are met, Phase 3 planning can begin.**
+**Only after all 10 criteria are met, Phase 3 planning can begin.**
 
 ---
 
@@ -267,16 +335,34 @@ Phase 2 is **formally complete** when **ALL** of the following are true:
    # Confirm merge commit is at HEAD
    ```
 
-2. **Invoke superpowers:finishing-a-development-branch skill:**
+2. **Delete sandbox backend resources (S3 bucket & DynamoDB table):**
+   ```bash
+   # Load sandbox environment
+   source /Users/frank/sml/oms/mongodb/.worktrees/uat-access-foundation/config/environments/sandbox.env
+
+   # Empty S3 backend bucket
+   aws s3 rm s3://$EKS_PLATFORM_STATE_BUCKET --recursive --profile sandbox
+
+   # Delete DynamoDB lock table
+   aws dynamodb delete-table \
+     --table-name oms-sandbox-eks-lock \
+     --region $AWS_REGION \
+     --profile sandbox
+   ```
+   **Expected:** S3 bucket emptied and deleted; DynamoDB table deleted
+   **Timing:** Execute within 1 hour after merge completes
+   **Result:** Backend cleanup cost = $0 (no ongoing resources)
+
+3. **Invoke superpowers:finishing-a-development-branch skill:**
    - Document the Phase 2 completion
    - Record all gate results
    - Transition to Phase 3 readiness
 
-3. **Wait 24 hours for emergency hotfixes:**
+4. **Wait 24 hours for emergency hotfixes:**
    - If any critical bug is found, patch on main
    - Do not start Phase 3 until main is stable
 
-4. **Begin Phase 3 Planning:**
+5. **Begin Phase 3 Planning:**
    - Invoke `superpowers:writing-plans` skill
    - Draft Phase 3 (MongoDB, PostgreSQL, SigNoz)
    - Define Tasks 1-6 for Phase 3
@@ -362,6 +448,14 @@ GATE 4: MERGE READY
 [ ] Ready to execute local merge
 [ ] Ready to clean up worktree
 
+POST-MERGE BACKEND CLEANUP
+==========================
+
+[ ] S3 bucket (oms-sandbox-eks-tfstate) deleted
+[ ] DynamoDB lock table (oms-sandbox-eks-lock) deleted
+[ ] AWS CLI verified deletion (aws s3 ls, aws dynamodb list-tables)
+[ ] Cost savings confirmed ($0 ongoing)
+
 MERGE AUTHORIZATION
 ===================
 
@@ -369,22 +463,33 @@ If ALL checkboxes above are checked ✅, then:
   git checkout main
   git merge feat/uat-access-foundation --no-ff -m "..."
   git worktree prune
+  # Then execute backend cleanup commands
 ```
 
 ---
 
 ## User Action Required
 
-**This specification is complete and committed (commit: `a68bcfa`). You are ready to execute the gates.**
+**This specification is complete and committed. Sandbox configuration files are in place. You are ready to execute the gates.**
+
+**Sandbox Environment Summary:**
+- **AWS Account:** 672172129937 (UAT account, shared)
+- **AWS Region:** us-east-1 (cheapest)
+- **Name Prefix:** oms-sandbox-eks (distinct from UAT ap-east-1)
+- **State Bucket:** oms-sandbox-eks-tfstate
+- **Lock Table:** oms-sandbox-eks-lock
+- **Plan Scope:** Read-only validation (zero infrastructure created)
 
 **Next Step:** Execute the four gates in sequence:
 
 1. **Gate 1:** Run tests locally (`python3 -m unittest`)
-2. **Gate 2:** Run terraform plan locally (requires sandbox AWS account)
+2. **Gate 2:** Run terraform plan locally using sandbox config (requires AWS credentials configured for sandbox profile)
 3. **Gate 3:** Verify outputs.tf is unchanged
 4. **Gate 4:** Merge to main locally
 
-**When finished:** All 8 success criteria will be met, and Phase 2 will be formally merged into main. Phase 3 planning can then proceed.
+**Then:** Delete sandbox backend resources (S3 + DynamoDB) via AWS CLI
+
+**When finished:** All 10 success criteria will be met, and Phase 2 will be formally merged into main. Phase 3 planning can then proceed.
 
 ---
 
