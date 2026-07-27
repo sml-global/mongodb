@@ -1,5 +1,8 @@
 # Phase 2 EKS Platform Implementation Plan
 
+> **STATUS: ✅ COMPLETED — 2026-07-27**
+> Merged to `main` via commit `ddd155f`. All 8 tasks implemented, 177/177 tests passed, Terraform plan validated (43 resources, 0 errors) against sandbox AWS account (632674123947, us-east-1). All 4 completion gates passed. Worktree and sandbox S3 backend cleaned up.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the UAT EKS platform, generic workload-identity root, and platform-controller delivery while preserving every foundation-owned environment, registry, orchestration, and public command contract.
