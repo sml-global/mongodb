@@ -45,7 +45,6 @@ node_spot_enabled     = false
 cluster_kms_key_arn = "arn:aws:kms:us-east-1:632674123947:key/11111111-2222-3333-4444-555555555555"
 
 # OIDC Provider for workload identity (dummy values for sandbox validation)
-oidc_provider             = "arn:aws:iam::632674123947:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/DUMMY12345"
 cluster_oidc_thumbprint   = "9e99a48a9960b14926bb7f3b02e22da0afd40a4d"
 cluster_oidc_issuer_url   = "https://oidc.eks.us-east-1.amazonaws.com/id/DUMMY12345"
 
@@ -54,9 +53,8 @@ enable_load_balancer_controller = true
 efs_enabled                     = true
 efs_throughput_mode             = "bursting"
 
-# Disable features not needed for plan validation
+# Disable cluster autoscaling; enable EBS encryption and backup
 enable_cluster_autoscaling = false
-enable_ebs_encryption      = true
 backup_enabled             = true
 backup_retention_days      = 7
 backup_kms_key_arn         = "arn:aws:kms:us-east-1:632674123947:key/22222222-3333-4444-5555-666666666666"
