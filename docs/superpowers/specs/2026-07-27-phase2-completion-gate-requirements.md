@@ -157,7 +157,7 @@ terraform plan \
 ```
 
 **Expected:** Plan succeeds with 0 errors (shows proposed infrastructure, creates no actual AWS resources)
-**Note:** `terraform plan` is read-only. No EKS clusters, no IAM roles, no infrastructure is actually created. Only the S3 backend bucket and DynamoDB lock table were created by bootstrap script.
+**Note:** `terraform plan` is read-only. No EKS clusters, no IAM roles, no infrastructure is actually created. Only the S3 backend bucket was created by the bootstrap script (S3-native locking via `use_lockfile=true`; no DynamoDB table required).
 
 **Critical Checks in Plan Output:**
 - ✅ EKS cluster ARN derivation is correct
@@ -186,7 +186,7 @@ terraform plan \
 - ✅ Different AWS Region (us-east-1 vs. ap-east-1) = separate resource quotas, separate regional endpoints
 - ✅ Distinct name_prefix ("oms-sandbox-eks" vs. "oms-uat") = separate IAM roles, security groups, EKS cluster names
 - ✅ Separate S3 backend bucket ("oms-sandbox-eks-tfstate" vs. "oms-uat-tfstate") = separate Terraform state files
-- ✅ Distinct DynamoDB lock table ("oms-sandbox-eks-lock" vs. "oms-uat-lock") = separate state locks
+- ✅ S3-native state locking (`use_lockfile=true`) per bucket = separate lock files, no DynamoDB table required
 
 **Why Dummy ARNs are Safe for Plan Validation:**
 - `terraform plan` is **read-only**; does not create any infrastructure
@@ -458,8 +458,7 @@ POST-MERGE BACKEND CLEANUP
 ==========================
 
 [ ] S3 bucket (oms-sandbox-eks-tfstate) deleted
-[ ] DynamoDB lock table (oms-sandbox-eks-lock) deleted
-[ ] AWS CLI verified deletion (aws s3 ls, aws dynamodb list-tables)
+[ ] S3 bucket deleted (aws s3 ls confirms bucket no longer exists)
 [ ] Cost savings confirmed ($0 ongoing)
 
 MERGE AUTHORIZATION
@@ -483,7 +482,7 @@ If ALL checkboxes above are checked ✅, then:
 - **AWS Region:** us-east-1 (cheapest)
 - **Name Prefix:** oms-sandbox-eks (distinct from UAT ap-east-1)
 - **State Bucket:** oms-sandbox-eks-tfstate
-- **Lock Table:** oms-sandbox-eks-lock
+- **State Locking:** S3-native (`use_lockfile=true`, no DynamoDB table)
 - **Plan Scope:** Read-only validation (zero infrastructure created)
 
 **Next Step:** Execute the four gates in sequence:
@@ -493,7 +492,7 @@ If ALL checkboxes above are checked ✅, then:
 3. **Gate 3:** Verify outputs.tf is unchanged
 4. **Gate 4:** Merge to main locally
 
-**Then:** Delete sandbox backend resources (S3 + DynamoDB) via AWS CLI
+**Then:** Delete sandbox S3 backend bucket via AWS CLI
 
 **When finished:** All 10 success criteria will be met, and Phase 2 will be formally merged into main. Phase 3 planning can then proceed.
 
