@@ -1,0 +1,11 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: signoz-k8s-infra
+  namespace: signoz
+spec:
+  values:
+    global:
+      clusterName: EKS-uat-cluster
+      deploymentEnvironment: uat
