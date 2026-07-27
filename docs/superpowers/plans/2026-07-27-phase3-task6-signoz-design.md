@@ -282,8 +282,9 @@ python3 -m unittest discover -s tests/signoz -p "test_*.py" -v
 
 **GATE 2: No Cross-Scope Copy-Paste**
 ```bash
-grep -ir "mongodb\|postgresql" scripts/lib/packages/50-signoz/ scripts/lib/scope-handlers.d/50-signoz.sh scripts/lib/scope-verifiers.d/50-signoz.sh
+grep -irE "mongodb|postgresql" scripts/lib/packages/50-signoz/ scripts/lib/scope-handlers.d/50-signoz.sh scripts/lib/scope-verifiers.d/50-signoz.sh
 # Expected: 0 matches (checks both prior scopes)
+# Note: -E flag enables extended regex; pipe | is literal alternation
 ```
 
 **GATE 3: No Credential Leakage**
@@ -380,7 +381,7 @@ TEST SUITE (34 tests):
 
 VALIDATION GATES (all must pass):
 - Gate 1: python3 -m unittest discover -s tests/signoz -p "test_*.py" -v → 34/34 PASS
-- Gate 2: grep -ir "mongodb|postgresql" scripts/lib/packages/50-signoz/ ... → 0 matches
+- Gate 2: grep -irE "mongodb|postgresql" scripts/lib/packages/50-signoz/ ... → 0 matches
 - Gate 3: grep -r "CHANGE_ME" gitops/signoz/base/ → 0 matches
 - Gate 4: kustomize build gitops/signoz/base && kustomize build gitops/signoz/overlays/uat
 - Gate 5: bash -n on all 5 bash files
