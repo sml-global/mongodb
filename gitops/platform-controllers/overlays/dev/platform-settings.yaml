@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-controller-settings
+  namespace: flux-system
+  labels:
+    platform.oms/environment: dev
+    platform.oms/visibility: private
+    platform.oms/render-strategy: static
+data:
+  ENVIRONMENT: dev
+  AWS_REGION: ap-east-1
+  ACCOUNT_ID: "815402439714"
+  CLUSTER_NAME: oms-dev-eks-cluster
+  CLUSTER_ARN: arn:aws:eks:ap-east-1:815402439714:cluster/oms-dev-eks-cluster
+  AUTOSCALER_SERVICE_ACCOUNT: cluster-autoscaler
+  CLUSTER_AUTOSCALER_ROLE_ARN: arn:aws:iam::815402439714:role/oms-dev-eks-eks-cluster-autoscaler-role
+  SUSPEND_METRICS_SERVER: "true"
+  SUSPEND_AWS_LOAD_BALANCER_CONTROLLER: "true"
+  RENDER_VISIBILITY: private
+  RENDER_STRATEGY: static

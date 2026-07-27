@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-controller-settings
+  namespace: flux-system
+  labels:
+    platform.oms/environment: uat
+    platform.oms/visibility: private
+    platform.oms/render-strategy: static
+data:
+  ENVIRONMENT: uat
+  AWS_REGION: ap-east-1
+  ACCOUNT_ID: "672172129937"
+  CLUSTER_NAME: oms-uat-eks-cluster
+  CLUSTER_ARN: arn:aws:eks:ap-east-1:672172129937:cluster/oms-uat-eks-cluster
+  AUTOSCALER_SERVICE_ACCOUNT: cluster-autoscaler
+  CLUSTER_AUTOSCALER_ROLE_ARN: arn:aws:iam::672172129937:role/oms-uat-eks-eks-cluster-autoscaler-role
+  SUSPEND_METRICS_SERVER: "false"
+  SUSPEND_AWS_LOAD_BALANCER_CONTROLLER: "false"
+  RENDER_VISIBILITY: private
+  RENDER_STRATEGY: static
