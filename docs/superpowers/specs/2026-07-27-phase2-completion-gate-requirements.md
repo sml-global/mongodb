@@ -174,9 +174,14 @@ terraform plan \
 
 ### Sandbox Strategy
 
-**Rationale:** Use existing UAT AWS account (672172129937) in us-east-1 (cheapest region) with distinct `name_prefix` to avoid IAM role collision with UAT environment in ap-east-1.
+**Rationale:** Use production AWS account (632674123947) in us-east-1 (cheapest region) as temporary sandbox for Phase 2 validation with distinct `name_prefix` to avoid IAM role collision. UAT account (672172129937) is reserved for actual UAT environment work.
+
+**Account Allocation:**
+- **Sandbox (Phase 2 Validation):** Production account (632674123947) with region us-east-1 and `name_prefix="oms-sandbox-eks"`
+- **UAT (Future Phase 3+):** UAT account (672172129937) with region ap-east-1 and `name_prefix="oms-uat"`
 
 **Key Isolation Principles:**
+- ✅ Different AWS Accounts (production vs. UAT) = separate billing, separate IAM namespace
 - ✅ Different AWS Region (us-east-1 vs. ap-east-1) = separate resource quotas, separate regional endpoints
 - ✅ Distinct name_prefix ("oms-sandbox-eks" vs. "oms-uat") = separate IAM roles, security groups, EKS cluster names
 - ✅ Separate S3 backend bucket ("oms-sandbox-eks-tfstate" vs. "oms-uat-tfstate") = separate Terraform state files
@@ -202,7 +207,7 @@ Three new configuration files enable sandbox validation:
 
 3. **`platform-prerequisites/terraform/environments/sandbox/workload-identity.tfvars`**
    - Sets: `environment="sandbox"`, points to sandbox state bucket
-   - Purpose: Workload identity configuration isolated from UAT
+   - Purpose: Workload identity configuration isolated from UAT (reserved for Phase 3+)
 
 ---
 
