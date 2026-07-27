@@ -746,5 +746,157 @@ class EksFragmentRegistryLoadTests(ScopeRegistryFixture):
         self.assertNotRegex(content, r"(^|[^A-Za-z0-9_])(list_provision_scopes|resolve_provision_order|resolve_destroy_order|dependencies_for_scope)\\s*=",)
 
 
+class EksVerifierFragmentRegistryLoadTests(ScopeRegistryFixture):
+    """Task 7 integration checks: loading the EKS verifier fragment through
+    orchestrator fragment loading must resolve all six canonical verifier/guard
+    symbols while leaving the immutable registry graph, catalog, provision/
+    destroy orders, state keys, and guard mappings UNCHANGED."""
+
+    def setUp(self):
+        super().setUp()
+        self.copy(
+            "scripts/lib/orchestrator.sh",
+            "scripts/lib/environment-contracts.sh",
+            "scripts/lib/platform-env.sh",
+            "scripts/lib/platform-guards.sh",
+            "scripts/lib/orchestration-paths.sh",
+            "scripts/lib/scope-handlers.d/10-foundation-access.sh",
+            "scripts/lib/scope-handlers.d/20-eks-platform.sh",
+            "scripts/lib/scope-verifiers.d/10-foundation-access.sh",
+            "scripts/lib/scope-verifiers.d/20-eks-platform.sh",
+            "scripts/lib/packages/10-foundation-access/internal/access-scopes.sh",
+            "scripts/lib/packages/20-eks-platform/internal/lifecycle-handlers.sh",
+            "scripts/lib/packages/20-eks-platform/internal/verifiers.sh",
+            "scripts/lib/packages/20-eks-platform/internal/pre-destroy-guards.sh",
+        )
+
+    def test_loading_verifier_fragment_resolves_all_six_canonical_symbols(self):
+        """All six symbols defined by the verifier fragment are callable functions
+        after _orchestrator_load_package_fragments."""
+        six_symbols = (
+            "scope_registry_verify_eks_platform",
+            "scope_registry_verify_workload_identity",
+            "scope_registry_verify_platform_controllers",
+            "verify_eks_platform_pre_destroy",
+            "verify_workload_identity_pre_destroy",
+            "verify_platform_controllers_pre_destroy",
+        )
+        checks = " && ".join(
+            f'[[ "$(type -t {sym})" == "function" ]]' for sym in six_symbols
+        )
+        result = self.run_bash(
+            "source scripts/lib/orchestrator.sh && "
+            "_orchestrator_load_package_fragments verify eks-platform && "
+            + checks
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_verifier_fragment_load_leaves_registry_catalog_unchanged(self):
+        result = self.run_bash(
+            "source scripts/lib/orchestrator.sh && "
+            "before=\"$(list_provision_scopes | tr '\\n' '|')\" && "
+            "_orchestrator_load_package_fragments verify eks-platform && "
+            "after=\"$(list_provision_scopes | tr '\\n' '|')\" && "
+            '[[ "$before" == "$after" ]]'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_verifier_fragment_load_leaves_provision_order_unchanged(self):
+        result = self.run_bash(
+            "source scripts/lib/orchestrator.sh && "
+            "before=\"$(resolve_provision_order all | tr '\\n' '|')\" && "
+            "_orchestrator_load_package_fragments verify eks-platform && "
+            "after=\"$(resolve_provision_order all | tr '\\n' '|')\" && "
+            '[[ "$before" == "$after" ]]'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_verifier_fragment_load_leaves_destroy_order_unchanged(self):
+        result = self.run_bash(
+            "source scripts/lib/orchestrator.sh && "
+            "before=\"$(resolve_destroy_order all | tr '\\n' '|')\" && "
+            "_orchestrator_load_package_fragments verify eks-platform && "
+            "after=\"$(resolve_destroy_order all | tr '\\n' '|')\" && "
+            '[[ "$before" == "$after" ]]'
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_verifier_fragment_load_leaves_state_keys_unchanged(self):
+        scopes = (
+            "eks-platform", "workload-identity", "platform-controllers",
+        )
+        checks_before = " && ".join(
+            f'before_{s.replace("-","_")}="$(state_key_variable_for_scope {s})"'
+            for s in scopes
+        )
+        checks_after = " && ".join(
+            f'after_{s.replace("-","_")}="$(state_key_variable_for_scope {s})"'
+            for s in scopes
+        )
+        checks_equal = " && ".join(
+            f'[[ "$before_{s.replace("-","_")}" == "$after_{s.replace("-","_")}" ]]'
+            for s in scopes
+        )
+        result = self.run_bash(
+            "source scripts/lib/orchestrator.sh && "
+            + checks_before + " && "
+            "_orchestrator_load_package_fragments verify eks-platform && "
+            + checks_after + " && "
+            + checks_equal
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_verifier_fragment_load_leaves_guard_mappings_unchanged(self):
+        """The registry's pre-destroy guard slot for eks-platform, workload-identity,
+        and platform-controllers still points to the original placeholder symbol
+        after the verifier fragment is loaded (the fragment does NOT redefine
+        scope_registry_pre_destroy_guard_* symbols)."""
+        scopes = ("eks-platform", "workload-identity", "platform-controllers")
+        checks_before = " && ".join(
+            f'before_{s.replace("-","_")}="$(pre_destroy_guard_for_scope {s})"'
+            for s in scopes
+        )
+        checks_after = " && ".join(
+            f'after_{s.replace("-","_")}="$(pre_destroy_guard_for_scope {s})"'
+            for s in scopes
+        )
+        checks_equal = " && ".join(
+            f'[[ "$before_{s.replace("-","_")}" == "$after_{s.replace("-","_")}" ]]'
+            for s in scopes
+        )
+        result = self.run_bash(
+            "source scripts/lib/orchestrator.sh && "
+            + checks_before + " && "
+            "_orchestrator_load_package_fragments verify eks-platform && "
+            + checks_after + " && "
+            + checks_equal
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_verifier_fragment_does_not_use_registry_mutation_api(self):
+        """Static check: the verifier fragment must not write to the immutable
+        registry arrays or attempt to redefine any registry lookup function."""
+        fragment = self.root / "scripts/lib/scope-verifiers.d/20-eks-platform.sh"
+        content = fragment.read_text(encoding="utf-8")
+        self.assertNotIn("_SCOPE_REGISTRY_CATALOG", content)
+        self.assertNotIn("_SCOPE_REGISTRY_ALL_PROVISION_ORDER", content)
+        self.assertNotIn("_SCOPE_REGISTRY_ALL_DESTROY_ORDER", content)
+
+    def test_verifier_wrappers_for_three_component_scopes_are_functions_after_load(self):
+        """verification_handler_for_slot returns the canonical symbol and that
+        symbol is a real function after fragment load."""
+        slots = ("eks-platform", "workload-identity", "platform-controllers")
+        checks = " && ".join(
+            f'sym="$(verification_handler_for_slot {slot})" && [[ "$(type -t "$sym")" == "function" ]]'
+            for slot in slots
+        )
+        result = self.run_bash(
+            "source scripts/lib/orchestrator.sh && "
+            "_orchestrator_load_package_fragments verify eks-platform && "
+            + checks
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
