@@ -664,5 +664,87 @@ class DecisiveDispatchTests(ScopeRegistryFixture):
         self.assertFalse(self.command_log.exists())
 
 
+class EksFragmentRegistryLoadTests(ScopeRegistryFixture):
+    """Task 6 integration checks: loading the EKS handler fragment through
+    orchestrator fragment loading must resolve canonical symbols while leaving
+    the immutable registry graph and mappings unchanged."""
+
+    def setUp(self):
+        super().setUp()
+        self.copy(
+            "scripts/lib/orchestrator.sh",
+            "scripts/lib/environment-contracts.sh",
+            "scripts/lib/platform-env.sh",
+            "scripts/lib/platform-guards.sh",
+            "scripts/lib/orchestration-paths.sh",
+            "scripts/lib/scope-handlers.d/10-foundation-access.sh",
+            "scripts/lib/scope-handlers.d/20-eks-platform.sh",
+            "scripts/lib/scope-verifiers.d/10-foundation-access.sh",
+            "scripts/lib/packages/10-foundation-access/internal/access-scopes.sh",
+            "scripts/lib/packages/20-eks-platform/internal/lifecycle-handlers.sh",
+        )
+
+    def test_loading_eks_fragment_preserves_registry_data_and_resolves_mapped_symbols(self):
+        result = self.run_bash(
+            "source scripts/lib/orchestrator.sh && "
+            "before_catalog=\"$(list_provision_scopes | tr '\\n' '|')\" && "
+            "before_provision_all=\"$(resolve_provision_order all | tr '\\n' '|')\" && "
+            "before_destroy_all=\"$(resolve_destroy_order all | tr '\\n' '|')\" && "
+            "before_dep=\"$(dependencies_for_scope platform-controllers)\" && "
+            "before_provision_eks=\"$(provision_handler_for_scope eks-platform)\" && "
+            "before_provision_workload=\"$(provision_handler_for_scope workload-identity)\" && "
+            "before_provision_controllers=\"$(provision_handler_for_scope platform-controllers)\" && "
+            "before_destroy_eks=\"$(destroy_handler_for_scope eks-platform)\" && "
+            "before_destroy_workload=\"$(destroy_handler_for_scope workload-identity)\" && "
+            "before_destroy_controllers=\"$(destroy_handler_for_scope platform-controllers)\" && "
+            "before_guard_eks=\"$(pre_destroy_guard_for_scope eks-platform)\" && "
+            "before_guard_workload=\"$(pre_destroy_guard_for_scope workload-identity)\" && "
+            "before_guard_controllers=\"$(pre_destroy_guard_for_scope platform-controllers)\" && "
+            "_orchestrator_load_package_fragments provision eks-platform && "
+            "after_catalog=\"$(list_provision_scopes | tr '\\n' '|')\" && "
+            "after_provision_all=\"$(resolve_provision_order all | tr '\\n' '|')\" && "
+            "after_destroy_all=\"$(resolve_destroy_order all | tr '\\n' '|')\" && "
+            "after_dep=\"$(dependencies_for_scope platform-controllers)\" && "
+            "after_provision_eks=\"$(provision_handler_for_scope eks-platform)\" && "
+            "after_provision_workload=\"$(provision_handler_for_scope workload-identity)\" && "
+            "after_provision_controllers=\"$(provision_handler_for_scope platform-controllers)\" && "
+            "after_destroy_eks=\"$(destroy_handler_for_scope eks-platform)\" && "
+            "after_destroy_workload=\"$(destroy_handler_for_scope workload-identity)\" && "
+            "after_destroy_controllers=\"$(destroy_handler_for_scope platform-controllers)\" && "
+            "after_guard_eks=\"$(pre_destroy_guard_for_scope eks-platform)\" && "
+            "after_guard_workload=\"$(pre_destroy_guard_for_scope workload-identity)\" && "
+            "after_guard_controllers=\"$(pre_destroy_guard_for_scope platform-controllers)\" && "
+            "[[ \"$before_catalog\" == \"$after_catalog\" ]] && "
+            "[[ \"$before_provision_all\" == \"$after_provision_all\" ]] && "
+            "[[ \"$before_destroy_all\" == \"$after_destroy_all\" ]] && "
+            "[[ \"$before_dep\" == \"$after_dep\" ]] && "
+            "[[ \"$before_provision_eks\" == \"$after_provision_eks\" ]] && "
+            "[[ \"$before_provision_workload\" == \"$after_provision_workload\" ]] && "
+            "[[ \"$before_provision_controllers\" == \"$after_provision_controllers\" ]] && "
+            "[[ \"$before_destroy_eks\" == \"$after_destroy_eks\" ]] && "
+            "[[ \"$before_destroy_workload\" == \"$after_destroy_workload\" ]] && "
+            "[[ \"$before_destroy_controllers\" == \"$after_destroy_controllers\" ]] && "
+            "[[ \"$before_guard_eks\" == \"$after_guard_eks\" ]] && "
+            "[[ \"$before_guard_workload\" == \"$after_guard_workload\" ]] && "
+            "[[ \"$before_guard_controllers\" == \"$after_guard_controllers\" ]] && "
+            "symbol=\"$(provision_handler_for_scope eks-platform)\" && [[ \"$(type -t \"$symbol\")\" == function ]] && "
+            "symbol=\"$(provision_handler_for_scope workload-identity)\" && [[ \"$(type -t \"$symbol\")\" == function ]] && "
+            "symbol=\"$(provision_handler_for_scope platform-controllers)\" && [[ \"$(type -t \"$symbol\")\" == function ]] && "
+            "symbol=\"$(destroy_handler_for_scope eks-platform)\" && [[ \"$(type -t \"$symbol\")\" == function ]] && "
+            "symbol=\"$(destroy_handler_for_scope workload-identity)\" && [[ \"$(type -t \"$symbol\")\" == function ]] && "
+            "symbol=\"$(destroy_handler_for_scope platform-controllers)\" && [[ \"$(type -t \"$symbol\")\" == function ]]"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_eks_fragment_does_not_use_registry_mutation_api(self):
+        fragment = self.root / "scripts/lib/scope-handlers.d/20-eks-platform.sh"
+        content = fragment.read_text(encoding="utf-8")
+        self.assertNotIn("_SCOPE_REGISTRY_CATALOG", content)
+        self.assertNotIn("_SCOPE_REGISTRY_ALL_PROVISION_ORDER", content)
+        self.assertNotIn("_SCOPE_REGISTRY_ALL_DESTROY_ORDER", content)
+        self.assertNotRegex(content, r"(^|[^A-Za-z0-9_])(provision_handler_for_scope|destroy_handler_for_scope|pre_destroy_guard_for_scope)\\s*=",)
+        self.assertNotRegex(content, r"(^|[^A-Za-z0-9_])(list_provision_scopes|resolve_provision_order|resolve_destroy_order|dependencies_for_scope)\\s*=",)
+
+
 if __name__ == "__main__":
     unittest.main()
