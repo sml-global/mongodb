@@ -1,8 +1,10 @@
 # Sandbox Workload Identity Terraform Configuration
-# Phase 2 Validation Environment (us-east-1, UAT Account)
+# Phase 2 Validation Environment (us-east-1, Production Account)
 #
 # Purpose: Configure workload identity for sandbox validation environment
 # Links to sandbox EKS platform state outputs
+# Account: 632674123947 (Production, temporary sandbox for Phase 2)
+# Note: UAT Account (672172129937) reserved for actual UAT environment work
 
 environment = "sandbox"
 aws_region  = "us-east-1"
