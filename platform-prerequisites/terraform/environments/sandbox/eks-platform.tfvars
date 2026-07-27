@@ -33,7 +33,7 @@ endpoint_private_access = true
 deletion_protection     = true
 
 # Node group (minimal for plan validation)
-node_instance_type    = "m6i.large"
+node_instance_type    = "t3.medium"
 node_min_size         = 2
 node_desired_size     = 2
 node_max_size         = 4
