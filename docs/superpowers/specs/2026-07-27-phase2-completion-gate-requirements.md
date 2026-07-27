@@ -105,8 +105,13 @@ bash scripts/bootstrap-terraform-s3-backend.sh
 
 **(2c) Initialize terraform:**
 ```bash
-cd platform-prerequisites
-terraform init -backend=true
+cd platform-prerequisites/terraform/eks-platform
+terraform init \
+  -reconfigure \
+  -backend-config="bucket=$EKS_PLATFORM_STATE_BUCKET" \
+  -backend-config="key=eks-platform.tfstate" \
+  -backend-config="region=$AWS_REGION" \
+  -backend-config="use_lockfile=true"
 ```
 **Expected:** Providers downloaded, modules initialized, backend configured
 
@@ -127,17 +132,18 @@ terraform fmt -check
 ```bash
 cd /Users/frank/sml/oms/mongodb/.worktrees/uat-access-foundation
 
-# Load sandbox environment variables
+# Load sandbox environment variables (REQUIRED: sets AWS_PROFILE and region)
 source config/environments/sandbox.env
 
-# Verify AWS profile is set to sandbox (not production)
+# Verify credentials point to sandbox account (632674123947)
 aws sts get-caller-identity --profile sandbox
 
-# Navigate to terraform directory
-cd platform-prerequisites
+# Navigate to Terraform configuration root
+cd platform-prerequisites/terraform/eks-platform
 
 # Initialize terraform with sandbox backend configuration
 terraform init \
+  -reconfigure \
   -backend-config="bucket=$EKS_PLATFORM_STATE_BUCKET" \
   -backend-config="key=eks-platform.tfstate" \
   -backend-config="region=$AWS_REGION" \
@@ -150,9 +156,10 @@ terraform validate
 terraform fmt -check
 
 # Execute plan using sandbox tfvars files
+# (paths are relative to platform-prerequisites/terraform/eks-platform/)
 terraform plan \
-  -var-file="environments/sandbox/eks-platform.tfvars" \
-  -var-file="environments/sandbox/workload-identity.tfvars" \
+  -var-file="../environments/sandbox/eks-platform.tfvars" \
+  -var-file="../environments/sandbox/workload-identity.tfvars" \
   -out=/tmp/phase2-sandbox.tfplan
 ```
 
