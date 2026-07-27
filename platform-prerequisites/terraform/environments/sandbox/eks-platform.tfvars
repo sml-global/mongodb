@@ -28,15 +28,15 @@ nat_mode             = "single"
 # EKS Cluster
 kubernetes_version      = "1.33"
 authentication_mode     = "API"
-endpoint_public_access  = true
-endpoint_private_access = false
-deletion_protection     = false
+endpoint_public_access  = false
+endpoint_private_access = true
+deletion_protection     = true
 
 # Node group (minimal for plan validation)
 node_instance_type    = "m6i.large"
-node_min_size         = 1
-node_desired_size     = 1
-node_max_size         = 2
+node_min_size         = 2
+node_desired_size     = 2
+node_max_size         = 4
 node_root_volume_size = 50
 node_spot_enabled     = false
 
@@ -49,15 +49,15 @@ oidc_provider             = "arn:aws:iam::632674123947:oidc-provider/oidc.eks.us
 cluster_oidc_thumbprint   = "9e99a48a9960b14926bb7f3b02e22da0afd40a4d"
 cluster_oidc_issuer_url   = "https://oidc.eks.us-east-1.amazonaws.com/id/DUMMY12345"
 
-# Optional features (disabled for plan validation)
-enable_load_balancer_controller = false
-efs_enabled                     = false
+# Optional features (enabled to exercise full module code paths during plan)
+enable_load_balancer_controller = true
+efs_enabled                     = true
 efs_throughput_mode             = "bursting"
 
 # Disable features not needed for plan validation
 enable_cluster_autoscaling = false
 enable_ebs_encryption      = true
-backup_enabled             = false
+backup_enabled             = true
 backup_retention_days      = 7
 backup_kms_key_arn         = "arn:aws:kms:us-east-1:632674123947:key/22222222-3333-4444-5555-666666666666"
 backup_service_role_arn    = "arn:aws:iam::632674123947:role/service-role/AWSBackupDefaultServiceRole"
