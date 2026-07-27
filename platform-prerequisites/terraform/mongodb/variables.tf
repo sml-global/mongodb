@@ -1,17 +1,21 @@
 variable "aws_region" {
-  type = string
+  description = "AWS region for platform resources."
+  type        = string
 }
 
 variable "expected_account_id" {
-  type = string
+  description = "Approved AWS account for deployment."
+  type        = string
 }
 
 variable "environment" {
-  type = string
+  description = "Environment identifier (for example, dev or uat)."
+  type        = string
 }
 
 variable "name_prefix" {
-  type = string
+  description = "Prefix used for naming platform resources."
+  type        = string
 }
 
 variable "pbm_bucket_name" {
@@ -30,6 +34,7 @@ variable "cluster_kms_key_arn" {
 }
 
 variable "tags" {
-  type    = map(string)
-  default = {}
+  description = "Tags applied to all resources in this module."
+  type        = map(string)
+  default     = {}
 }
