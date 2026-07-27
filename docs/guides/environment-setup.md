@@ -398,6 +398,116 @@ aws configure list-profiles
 Get-Content "$env:USERPROFILE\.aws\config"
 ```
 
+## UAT Workforce Access Prerequisite
+
+This section is the workstation handoff for the UAT access foundation. It does
+not replace the existing dev setup above or authorize changes to dev.
+
+The workflow may mutate only UAT account `672172129937` in `ap-east-1`, for
+cluster `EKS-boomi-runtime-cluster` and namespace `boomi-uat`. Dev account
+`815402439714` is evidence/read-only and must not be mutated by this workflow.
+No other AWS account may be accessed.
+
+The UAT access-foundation roots require Terraform `>= 1.10.0`. They use the
+S3 backend's native lockfile support in addition to the repository entrypoint's
+local orchestration lock. This UAT-specific requirement does not change the
+existing dev workflow or its Terraform roots.
+
+AWS IAM Identity Center is an external prerequisite owned by the authorized
+identity owner. This repository neither manages nor inspects Identity Center.
+There is no SAML-role or IAM-user fallback. Before an operator runs the UAT
+workflow, the identity owner must create and assign exactly this initial
+contract:
+
+| Permission set | Initial members | EKS access created by this foundation |
+|---|---|---|
+| `UATInfraAdminEA` | `frankcheong` | Cluster administrator |
+| `UATApplicationDeveloper` | `yczhang`, `xavierlee`, `jiaweima` | Cluster administrator |
+| `UATBoomiAdmin` | `JesusRosario`, `jacklee` | Administrator in `boomi-uat` only |
+| `UATBoomiProcessOwner` | None | No EKS access entry |
+
+### Authorized UAT Workstation Setup
+
+On an authorized UAT workstation, create a clearly separated UAT profile:
+
+```bash
+aws configure sso --profile oms-uat
+```
+
+The authorized Identity Center owner supplies the portal start URL, Identity
+Center session region, UAT account assignment, and approved permission set.
+Do not invent these values. At the account prompt, choose UAT account
+`672172129937`; at the role prompt, choose the approved role for the operator.
+Set the default workload region to `ap-east-1`.
+
+Authenticate and make that profile and workload region active:
+
+```bash
+aws sso login --profile oms-uat
+export AWS_PROFILE=oms-uat
+export AWS_REGION=ap-east-1
+aws sts get-caller-identity --query Account --output text
+```
+
+The final command must print exactly `672172129937`. Stop immediately if it
+prints another account or fails; do not continue with UAT setup or
+provisioning.
+
+Create or select the UAT kubeconfig context, then display the selected context:
+
+```bash
+aws eks update-kubeconfig --region ap-east-1 --name EKS-boomi-runtime-cluster --profile oms-uat
+kubectl config current-context
+```
+
+Do not run mutating `kubectl` commands during access setup. A context alias is
+acceptable, but the platform environment helper resolves the selected
+context's cluster reference and requires the canonical value
+`arn:aws:eks:ap-east-1:672172129937:cluster/EKS-boomi-runtime-cluster`.
+
+The external EKS cluster must already use authentication mode `API` or
+`API_AND_CONFIG_MAP`. An authorized operator can check this read-only
+prerequisite with:
+
+```bash
+aws eks describe-cluster \
+  --name EKS-boomi-runtime-cluster \
+  --region ap-east-1 \
+  --query 'cluster.accessConfig.authenticationMode' \
+  --output text
+```
+
+Stop if the result is `CONFIG_MAP`, empty, or the command fails. The UAT
+entrypoint performs the same check before principal validation, generated
+output, backend initialization, or Terraform; it does not change the cluster's
+authentication mode.
+
+After those assignments produce IAM roles, the identity owner supplies the
+four role ARNs in the gitignored file
+`config/environments/uat-workforce-principals.json`. The offline validator
+requires exactly the following four keys. The values below are deliberately
+non-runnable placeholders; replace each `<...>` segment with the corresponding
+value supplied by the identity owner, including the actual generated suffix.
+
+```json
+{
+  "infra_admin_role_arn": "arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/<identity-center-region>/AWSReservedSSO_UATInfraAdminEA_<generated-suffix>",
+  "application_developer_role_arn": "arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/<identity-center-region>/AWSReservedSSO_UATApplicationDeveloper_<generated-suffix>",
+  "boomi_admin_role_arn": "arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/<identity-center-region>/AWSReservedSSO_UATBoomiAdmin_<generated-suffix>",
+  "process_owner_role_arn": "arn:aws:iam::672172129937:role/aws-reserved/sso.amazonaws.com/<identity-center-region>/AWSReservedSSO_UATBoomiProcessOwner_<generated-suffix>"
+}
+```
+
+Do not commit this input or invent role ARN suffixes. The validator checks the
+exact keys, UAT account, permission-set prefixes, role shape, and uniqueness
+without calling AWS. Continue with the
+[UAT Access Foundation Procedure](operator-runbook.md#uat-access-foundation-procedure)
+only after the identity owner has supplied all four ARNs and deployment
+authorization exists. The approved boundaries are defined in the
+[UAT Workforce Access Design](../superpowers/specs/2026-07-21-uat-workforce-access-design.md)
+and implemented by the
+[UAT Access Foundation Plan](../superpowers/plans/2026-07-21-uat-access-foundation.md).
+
 ## Configure Kubernetes Access
 
 ### Update Kubeconfig
@@ -460,7 +570,12 @@ Test-Path platform-prerequisites/terraform/mongodb
 
 ## Run Preflight Verification
 
-After completing setup, run the unified preflight check:
+**DEV ONLY:** The unified preflight below belongs to the existing dev workflow.
+Do not use it as UAT access-foundation verification. For UAT, continue to the
+[UAT Access Foundation Procedure](operator-runbook.md#uat-access-foundation-procedure)
+and its linked UAT verification section.
+
+After completing dev setup, run the unified preflight check:
 
 ```bash
 scripts/verify-platform-health.sh --preflight

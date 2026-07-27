@@ -39,8 +39,12 @@ EXPECTED_KEYS = {
     "EKS_CONNECTED_CIDR",
     "EKS_AZ_LAYOUT_MODE",
     "EKS_AZ_COUNT",
-    "EKS_PRIVATE_SUBNET_CIDRS",
-    "EKS_PUBLIC_SUBNET_CIDRS",
+    "EKS_PRIVATE_SUBNET_A_CIDR",
+    "EKS_PRIVATE_SUBNET_B_CIDR",
+    "EKS_PRIVATE_SUBNET_C_CIDR",
+    "EKS_PUBLIC_SUBNET_A_CIDR",
+    "EKS_PUBLIC_SUBNET_B_CIDR",
+    "EKS_PUBLIC_SUBNET_C_CIDR",
     "EKS_NAT_GATEWAY_COUNT",
     "EKS_NODE_INSTANCE_TYPE",
     "EKS_NODE_MIN_SIZE",
@@ -71,8 +75,6 @@ def read_fragment_keys(path):
         if not stripped or stripped.startswith("#") or stripped.startswith("@constraint"):
             continue
         key, required, validator, immutable = stripped.split("|")
-        if key == "EKS_CLUSTER_NAME":
-            continue
         keys.add(key)
     return keys
 
@@ -96,12 +98,12 @@ class EksEnvironmentContractTests(unittest.TestCase):
         self.assertTrue(SCHEMA_PATH.exists())
         with self.subTest("exact enums"):
             manifest = SCHEMA_PATH.read_text(encoding="utf-8")
-            self.assertIn("EKS_AZ_LAYOUT_MODE|required|enum:single,one-per-az|-", manifest)
+            self.assertIn("EKS_AZ_LAYOUT_MODE|required|fixed:one-per-az|-", manifest)
             self.assertIn("EKS_ADDON_DELIVERY_MODE|required|enum:managed-addon,helm-fallback|-", manifest)
         with self.subTest("bounds and containment are encoded in constraints"):
             manifest = SCHEMA_PATH.read_text(encoding="utf-8")
             self.assertIn("@constraint|cidr-contained-by|EKS_CONNECTED_CIDR,EKS_VPC_CIDR|-", manifest)
-            self.assertIn("@constraint|cidr-nonoverlap|EKS_PRIVATE_SUBNET_CIDRS,EKS_PUBLIC_SUBNET_CIDRS|-", manifest)
+            self.assertIn("@constraint|cidr-nonoverlap|EKS_PRIVATE_SUBNET_A_CIDR,EKS_PRIVATE_SUBNET_B_CIDR,EKS_PRIVATE_SUBNET_C_CIDR,EKS_PUBLIC_SUBNET_A_CIDR,EKS_PUBLIC_SUBNET_B_CIDR,EKS_PUBLIC_SUBNET_C_CIDR|-", manifest)
             self.assertIn("@constraint|integer-order|EKS_NODE_MIN_SIZE,EKS_NODE_DESIRED_SIZE,EKS_NODE_MAX_SIZE|-", manifest)
 
     def test_composed_schema_has_no_duplicate_keys(self):
@@ -146,10 +148,14 @@ Ensure the test does not import or exercise any Terraform root, handler, verifie
 
 Use the foundation manifest grammar to declare only the keys approved by the design spec. The fragment must include the platform identity, network, compute, storage, and add-on flags from the spec and nothing else.
 
+The fragment keys are optional for this task so the existing `dev.env` and
+`uat.env` files keep loading unchanged; the contract test still validates the
+schema surface, validators, and composed-schema uniqueness.
+
 The fragment must declare the allowed enums and bounds exactly as specified:
 
 ```text
-EKS_AZ_LAYOUT_MODE = single|one-per-az
+EKS_AZ_LAYOUT_MODE = fixed:one-per-az
 EKS_ADDON_DELIVERY_MODE = managed-addon|helm-fallback
 ```
 

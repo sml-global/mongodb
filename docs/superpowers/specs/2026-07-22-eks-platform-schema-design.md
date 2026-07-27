@@ -16,6 +16,10 @@ This spec does not introduce runtime checks, Terraform logic, access-entry
 logic, identity checks, backend checks, or provisioning behavior. Those belong
 to later implementation tasks.
 
+The fragment is additive and non-breaking: it may declare new EKS keys as
+optional so the current `dev.env` and `uat.env` files continue to load while
+later tasks introduce the corresponding values.
+
 ## Scope Boundary
 
 ### In scope
@@ -53,53 +57,58 @@ These are the only keys this task may introduce.
 
 ### Platform identity and topology
 
-- `EKS_KUBERNETES_VERSION`
-- `EKS_AUTHENTICATION_MODE`
-- `EKS_ENDPOINT_PUBLIC_ACCESS`
-- `EKS_ENDPOINT_PRIVATE_ACCESS`
-- `EKS_DELETION_PROTECTION`
+- `EKS_KUBERNETES_VERSION` (optional)
+- `EKS_AUTHENTICATION_MODE` (optional)
+- `EKS_ENDPOINT_PUBLIC_ACCESS` (optional)
+- `EKS_ENDPOINT_PRIVATE_ACCESS` (optional)
+- `EKS_DELETION_PROTECTION` (optional)
 
 ### Network and address planning
 
-- `EKS_VPC_CIDR`
-- `EKS_CONNECTED_CIDR`
-- `EKS_AZ_LAYOUT_MODE`
-- `EKS_AZ_COUNT`
-- `EKS_PRIVATE_SUBNET_CIDRS`
-- `EKS_PUBLIC_SUBNET_CIDRS`
-- `EKS_NAT_GATEWAY_COUNT`
+- `EKS_VPC_CIDR` (optional)
+- `EKS_CONNECTED_CIDR` (optional)
+- `EKS_AZ_LAYOUT_MODE` (optional)
+- `EKS_AZ_COUNT` (optional)
+- `EKS_PRIVATE_SUBNET_A_CIDR` (optional)
+- `EKS_PRIVATE_SUBNET_B_CIDR` (optional)
+- `EKS_PRIVATE_SUBNET_C_CIDR` (optional)
+- `EKS_PUBLIC_SUBNET_A_CIDR` (optional)
+- `EKS_PUBLIC_SUBNET_B_CIDR` (optional)
+- `EKS_PUBLIC_SUBNET_C_CIDR` (optional)
+- `EKS_NAT_GATEWAY_COUNT` (optional)
 
 ### Compute and scaling
 
-- `EKS_NODE_INSTANCE_TYPE`
-- `EKS_NODE_MIN_SIZE`
-- `EKS_NODE_DESIRED_SIZE`
-- `EKS_NODE_MAX_SIZE`
-- `EKS_NODE_ROOT_VOLUME_GB`
-- `EKS_SPOT_ENABLED`
+- `EKS_NODE_INSTANCE_TYPE` (optional)
+- `EKS_NODE_MIN_SIZE` (optional)
+- `EKS_NODE_DESIRED_SIZE` (optional)
+- `EKS_NODE_MAX_SIZE` (optional)
+- `EKS_NODE_ROOT_VOLUME_GB` (optional)
+- `EKS_SPOT_ENABLED` (optional)
 
 ### Storage and data services
 
-- `EKS_EFS_ENABLED`
-- `EKS_EFS_THROUGHPUT_MODE`
-- `EKS_EFS_BACKUP_ENABLED`
-- `EKS_BACKUP_RETENTION_DAYS`
+- `EKS_EFS_ENABLED` (optional)
+- `EKS_EFS_THROUGHPUT_MODE` (optional)
+- `EKS_EFS_BACKUP_ENABLED` (optional)
+- `EKS_BACKUP_RETENTION_DAYS` (optional)
 
 ### Managed add-ons and feature flags
 
-- `EKS_ADDON_DELIVERY_MODE`
-- `EKS_ENABLE_VPC_CNI`
-- `EKS_ENABLE_COREDNS`
-- `EKS_ENABLE_KUBE_PROXY`
-- `EKS_ENABLE_EBS_CSI`
-- `EKS_ENABLE_EFS_CSI`
-- `EKS_ENABLE_POD_IDENTITY_AGENT`
-- `EKS_ENABLE_CLUSTER_AUTOSCALER`
-- `EKS_ENABLE_METRICS_SERVER`
+- `EKS_ADDON_DELIVERY_MODE` (optional)
+- `EKS_ENABLE_VPC_CNI` (optional)
+- `EKS_ENABLE_COREDNS` (optional)
+- `EKS_ENABLE_KUBE_PROXY` (optional)
+- `EKS_ENABLE_EBS_CSI` (optional)
+- `EKS_ENABLE_EFS_CSI` (optional)
+- `EKS_ENABLE_POD_IDENTITY_AGENT` (optional)
+- `EKS_ENABLE_CLUSTER_AUTOSCALER` (optional)
+- `EKS_ENABLE_METRICS_SERVER` (optional)
 
 ## Validation Rules
 
-The fragment's validations must be explicit and bounded.
+The fragment's validations must be explicit and bounded. Optional keys are
+still validated when values are later supplied in an environment file.
 
 ### Scalar fields
 
@@ -112,11 +121,9 @@ The fragment's validations must be explicit and bounded.
 - `EKS_VPC_CIDR`: CIDR string; must be valid IPv4 CIDR notation.
 - `EKS_CONNECTED_CIDR`: CIDR string; must be valid IPv4 CIDR notation and must
   remain contained within the VPC CIDR without overlapping any subnet block.
-- `EKS_AZ_LAYOUT_MODE`: enum; allowed values `single` or `one-per-az`.
-- `EKS_AZ_COUNT`: integer; must be at least `1`.
-- `EKS_NAT_GATEWAY_COUNT`: integer; must be at least `1` and must not exceed
-  `EKS_AZ_COUNT`; `single` requires `1`, while `one-per-az` requires one NAT
-  gateway per AZ.
+- `EKS_AZ_LAYOUT_MODE`: fixed value `one-per-az`.
+- `EKS_AZ_COUNT`: fixed value `3`.
+- `EKS_NAT_GATEWAY_COUNT`: fixed value `3`.
 - `EKS_NODE_INSTANCE_TYPE`: enum or validated string; must be one of the
   approved node instance families for the phase plan.
 - `EKS_NODE_MIN_SIZE`: integer; `>= 1`.
@@ -133,10 +140,12 @@ The fragment's validations must be explicit and bounded.
 
 ### Array-like or repeated fields
 
-- `EKS_PRIVATE_SUBNET_CIDRS`: must be a non-empty list of valid IPv4 CIDRs.
-- `EKS_PUBLIC_SUBNET_CIDRS`: must be a non-empty list of valid IPv4 CIDRs.
-- The number of private and public subnets must each match `EKS_AZ_COUNT`.
-- CIDR blocks must not overlap with each other or with the VPC CIDR.
+- `EKS_PRIVATE_SUBNET_A_CIDR`, `EKS_PRIVATE_SUBNET_B_CIDR`,
+  `EKS_PRIVATE_SUBNET_C_CIDR`, `EKS_PUBLIC_SUBNET_A_CIDR`,
+  `EKS_PUBLIC_SUBNET_B_CIDR`, and `EKS_PUBLIC_SUBNET_C_CIDR` are valid IPv4
+  CIDRs.
+- All six subnet CIDRs must be pairwise non-overlapping.
+- Each subnet CIDR must remain contained within `EKS_VPC_CIDR`.
 
 ### Managed add-on flags
 
