@@ -38,6 +38,14 @@ Every database/operator that accesses AWS APIs (S3 for PBM backups, KMS for encr
 1. A static test asserting no Kubernetes `serviceAccountName` appears in Phase 3 manifests outside the Phase 2 contract values.
 2. A Terraform `check` block verifying the `operator_iam_role_arn` output from Phase 2 state is non-empty before Phase 3 Terraform runs.
 
+**IRSA Trust Policy Dependency (AWS Architect flag):** The Phase 2 IRSA role trust policy must have been constructed with the exact `mongodb` namespace and `mongodb_workload_service_account` in the OIDC `StringEquals` condition. Phase 2 outputs these values in `platform_contract`. The GitOps manifests in Task 3 **must** reference `platform_contract.mongodb_namespace` and `platform_contract.mongodb_workload_service_account` exactly — any drift breaks IRSA silently at pod startup. The static IAM test in Task 4 enforces this.
+
+### Decision 4: HelmRepository Flux Prerequisite
+
+Task 3 `HelmRelease` resources reference `HelmRepository` sources (`percona`, `cloudnative-pg`) in the `flux-system` namespace. If Phase 2 Task 5 (platform-controllers GitOps) did not bootstrap these repository definitions, the `HelmRelease` will fail to reconcile with `HelmRepository not found`.
+
+**Resolution:** Each operator's base manifest directory (`gitops/mongodb/base/`, `gitops/postgresql/base/`) must include its own `HelmRepository` source definition. This makes each scope self-contained and removes the dependency on Phase 2 having pre-installed them.
+
 ---
 
 ## Foundation Contract (Phase 3 reads, never modifies)
@@ -72,6 +80,7 @@ Every database/operator that accesses AWS APIs (S3 for PBM backups, KMS for encr
 - `gitops/mongodb/base/kustomization.yaml`
 - `gitops/mongodb/base/namespace.yaml`
 - `gitops/mongodb/base/operator.yaml` — PSMDB Operator HelmRelease
+- `gitops/mongodb/base/helmrepository.yaml` — Percona HelmRepository (self-contained, no Flux pre-bootstrap required)
 - `gitops/mongodb/base/cluster.yaml` — PerconaServerMongoDB CR
 - `gitops/mongodb/overlays/uat/kustomization.yaml`
 - `gitops/mongodb/overlays/uat/cluster-patch.yaml`
@@ -330,6 +339,7 @@ git commit -m "feat(mongodb): add environment schema fragment"
 **Files:**
 - Create: `gitops/mongodb/base/kustomization.yaml`
 - Create: `gitops/mongodb/base/namespace.yaml`
+- Create: `gitops/mongodb/base/helmrepository.yaml`
 - Create: `gitops/mongodb/base/operator.yaml`
 - Create: `gitops/mongodb/base/cluster.yaml`
 - Create: `gitops/mongodb/overlays/uat/kustomization.yaml`
