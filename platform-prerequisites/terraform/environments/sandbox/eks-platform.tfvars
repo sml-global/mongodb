@@ -14,17 +14,55 @@ name_prefix    = "oms-sandbox-eks"
 environment    = "sandbox"
 aws_region     = "us-east-1"
 
+# Account ID for sandbox (production account used as temporary sandbox for Phase 2)
+expected_account_id = "632674123947"
+
+# Networking (minimal single-AZ for plan validation only)
+vpc_cidr             = "10.90.0.0/16"
+availability_zones   = ["us-east-1a", "us-east-1b"]
+private_subnet_cidrs = ["10.90.0.0/20", "10.90.16.0/20"]
+public_subnet_cidrs  = ["10.90.128.0/20", "10.90.144.0/20"]
+nat_gateway_count    = 1
+nat_mode             = "single"
+
+# EKS Cluster
+kubernetes_version      = "1.33"
+authentication_mode     = "API"
+endpoint_public_access  = true
+endpoint_private_access = false
+deletion_protection     = false
+
+# Node group (minimal for plan validation)
+node_instance_type    = "m6i.large"
+node_min_size         = 1
+node_desired_size     = 1
+node_max_size         = 2
+node_root_volume_size = 50
+node_spot_enabled     = false
+
 # KMS Key for EKS encryption (dummy ARN for sandbox validation)
 # Terraform plan validates syntax only; does not check existence
 cluster_kms_key_arn = "arn:aws:kms:us-east-1:632674123947:key/11111111-2222-3333-4444-555555555555"
 
-# OIDC Provider for workload identity (dummy ARN for sandbox validation)
-oidc_provider = "arn:aws:iam::632674123947:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/DUMMY12345"
+# OIDC Provider for workload identity (dummy values for sandbox validation)
+oidc_provider             = "arn:aws:iam::632674123947:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/DUMMY12345"
+cluster_oidc_thumbprint   = "9e99a48a9960b14926bb7f3b02e22da0afd40a4d"
+cluster_oidc_issuer_url   = "https://oidc.eks.us-east-1.amazonaws.com/id/DUMMY12345"
+
+# Optional features (disabled for plan validation)
+enable_load_balancer_controller = false
+efs_enabled                     = false
+efs_throughput_mode             = "bursting"
 
 # Disable features not needed for plan validation
 enable_cluster_autoscaling = false
 enable_ebs_encryption      = true
-enable_backup              = false
+backup_enabled             = false
+backup_retention_days      = 7
+backup_kms_key_arn         = "arn:aws:kms:us-east-1:632674123947:key/22222222-3333-4444-5555-666666666666"
+backup_service_role_arn    = "arn:aws:iam::632674123947:role/service-role/AWSBackupDefaultServiceRole"
+vault_min_retention_days   = 7
+vault_max_retention_days   = 35
 
 # EKS Add-ons configuration (from UAT baseline)
 addons = {
