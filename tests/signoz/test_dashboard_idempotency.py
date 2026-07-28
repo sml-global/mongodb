@@ -58,9 +58,15 @@ class DashboardIdempotencyTests(unittest.TestCase):
         """Verify dashboard import script checks existence before importing.
         
         The bootstrap script must query the SigNoz API to check if a dashboard
-        with the same UUID/ID or title already exists. If it does, the import
-        must be skipped to preserve SRE customizations.
+        with the same UUID/ID already exists. If it does, the import must be
+        skipped to preserve SRE customizations.
+        
+        NOTE: Matching is by UUID/ID ONLY (not title). Title-based matching is
+        fragile: if an SRE renames a dashboard in the UI, the title no longer
+        matches and the import script would incorrectly re-import a duplicate.
+        
         Requirement: Must include check logic with curl API query and skip branching.
+        Must match by UUID/ID, NOT by title.
         """
         bootstrap_script = read(BOOTSTRAP_SCRIPT)
         
@@ -69,6 +75,15 @@ class DashboardIdempotencyTests(unittest.TestCase):
                       "bootstrap script must use curl to query SigNoz API")
         self.assertIn('dashboards', bootstrap_script,
                       "bootstrap script must query the dashboards endpoint")
+        
+        # Must match by UUID/ID ONLY (not title to avoid fragility)
+        # Count occurrences to verify both UUID and ID are checked
+        uuid_checks = bootstrap_script.count('.uuid')
+        id_checks = bootstrap_script.count('.id')
+        self.assertTrue(
+            uuid_checks >= 1 and id_checks >= 1,
+            "bootstrap script must check both .uuid and .id for matching"
+        )
         
         # Must implement skip logic for existing dashboards
         self.assertIn('skip', bootstrap_script.lower(),

@@ -29,6 +29,9 @@ class SignozAuthenticationTests(unittest.TestCase):
         admin credentials. Credentials must NEVER be hardcoded or obtained from
         environment variables without Secret backing.
         
+        Secret schema: .data.email and .data.password (base64-encoded)
+        (Note: Keys are 'email' and 'password', not 'admin_email'/'admin_password')
+        
         Requirement: Must include 'signoz-root-user' AND 'kubectl get secret'.
         Must NOT include hardcoded password patterns like 'password=' literals.
         """
@@ -40,8 +43,14 @@ class SignozAuthenticationTests(unittest.TestCase):
         self.assertIn('kubectl get secret', bootstrap_script,
                       "bootstrap script must use 'kubectl get secret' to retrieve credentials")
         
+        # Must use correct Secret keys: 'email' and 'password'
+        # (not 'admin_email' and 'admin_password')
+        self.assertIn('.data.email', bootstrap_script,
+                      "bootstrap script must retrieve '.data.email' from Secret")
+        self.assertIn('.data.password', bootstrap_script,
+                      "bootstrap script must retrieve '.data.password' from Secret")
+        
         # Must NOT have hardcoded credentials
-        # (Check for patterns that would indicate hardcoded secrets)
         self.assertNotIn('password=admin', bootstrap_script,
                          "bootstrap script must not hardcode password")
         self.assertNotIn("password='", bootstrap_script,

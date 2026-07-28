@@ -4,17 +4,27 @@ set -euo pipefail
 # File: scripts/bootstrap_signoz_dashboards.sh
 # Purpose: Import SigNoz dashboards with idempotency guarantees
 #
+# REQUIRED KUBERNETES SECRET SCHEMA:
+#   Secret name: signoz-root-user
+#   Namespace: signoz
+#   Keys:
+#     - .data.email (base64-encoded): SigNoz admin email (e.g., admin@oms.local)
+#     - .data.password (base64-encoded): SigNoz admin password
+#
+# Create with:
+#   bash scripts/create-signoz-root-user-secret.sh [--email <email>]
+#
 # This script:
 # 1. Retrieves SigNoz admin credentials from Kubernetes Secret (signoz-root-user)
 # 2. Authenticates to SigNoz API
-# 3. Checks each dashboard for existence (by UUID/ID or title)
+# 3. Checks each dashboard for existence (by UUID/ID ONLY — no title matching)
 # 4. Imports new dashboards, skips existing ones (preserves SRE customizations)
 # 5. Logs status for each dashboard
 #
 # Idempotency Guarantee:
 # - First run: Imports all dashboards
-# - Second run: Skips existing dashboards (check by UUID), restores missing ones
-# - SRE customizations: NEVER overwritten
+# - Second run: Skips existing dashboards (UUID/ID matching only), restores missing ones
+# - SRE customizations: NEVER overwritten (idempotency uses UUID/ID, not fragile title)
 #
 # Exit with error code 1 if authentication or import fails.
 
@@ -25,18 +35,20 @@ SIGNOZ_API_URL="http://frontend.${NAMESPACE}.svc.cluster.local:3301/api/v1"
 echo "=== SigNoz Dashboard Import ==="
 echo ""
 
-# Retrieve credentials from Kubernetes Secret
+# Retrieve credentials from Kubernetes Secret (SCHEMA: .data.email and .data.password)
 echo "Retrieving SigNoz credentials from Kubernetes Secret..."
 if ! kubectl get secret signoz-root-user -n "$NAMESPACE" >/dev/null 2>&1; then
-  echo "❌ Kubernetes Secret 'signoz-root-user' not found in namespace '$NAMESPACE'"
-  echo "   Please create it first: bash scripts/create-signoz-root-user-secret.sh"
+  echo "❌ FATAL: Kubernetes Secret 'signoz-root-user' not found in namespace '$NAMESPACE'"
+  echo "   Action: Create it with: bash scripts/create-signoz-root-user-secret.sh"
+  echo "   This Secret must have keys: .data.email and .data.password (base64-encoded)"
   exit 1
 fi
 
+# NOTE: The create-signoz-root-user-secret.sh uses 'email' and 'password' keys (not admin_email/admin_password)
 SIGNOZ_ADMIN_EMAIL=$(kubectl get secret signoz-root-user -n "$NAMESPACE" \
-  -o jsonpath='{.data.admin_email}' 2>/dev/null | base64 -d || echo "admin@oms.local")
+  -o jsonpath='{.data.email}' 2>/dev/null | base64 -d)
 SIGNOZ_ADMIN_PASSWORD=$(kubectl get secret signoz-root-user -n "$NAMESPACE" \
-  -o jsonpath='{.data.admin_password}' 2>/dev/null | base64 -d || echo "")
+  -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)
 
 if [ -z "$SIGNOZ_ADMIN_PASSWORD" ]; then
   echo "❌ Could not retrieve password from Secret. Secret may be incomplete."
@@ -93,15 +105,16 @@ for dashboard_file in "$DASHBOARDS_DIR"/*.json; do
     dashboard_uuid=$(uuidgen 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "generated-$(date +%s)")
   fi
   
-  # Check if dashboard already exists by UUID or title
-  echo "  → Checking if dashboard exists..."
+  # Check if dashboard already exists by UUID/ID ONLY (not title — title matching is fragile)
+  # If dashboard renamed in UI, title match would fail and cause duplicate import
+  echo "  → Checking if dashboard exists (UUID/ID)..."
   existing_dashboard=$(curl -s -X GET "$SIGNOZ_API_URL/dashboards" \
     -H "Authorization: Bearer $session_token" 2>/dev/null | \
-    jq -r ".dashboards[] | select(.uuid == \"$dashboard_uuid\" or .title == \"$dashboard_title\") | .uuid" 2>/dev/null || echo "")
+    jq -r ".dashboards[] | select(.uuid == \"$dashboard_uuid\" or .id == \"$dashboard_uuid\") | .uuid" 2>/dev/null || echo "")
   
   if [ ! -z "$existing_dashboard" ]; then
     echo "  ⏭️  Skipping: Dashboard already exists (UUID: $existing_dashboard)"
-    echo "     To update, manually delete in SigNoz UI or re-import with new UUID"
+    echo "     SRE customizations preserved. To update: delete in UI and re-run provision."
     ((dashboards_skipped++)) || true
     continue
   fi
