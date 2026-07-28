@@ -43,15 +43,26 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         )
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
-    def _install_happy_path_mocks(self, sts_arn=DRILL_ROLE_ARN):
-        self._mock("kubectl", "exit 0")
-        self._mock("aws", f'echo "{sts_arn}"')
-        self._mock("pbm", (
-            'if [ "$1" = "status" ]; then exit 0; fi\n'
-            'if [ "$1" = "list" ]; then echo "2026-07-28T12:00:00Z"; exit 0; fi\n'
-            'if [ "$1" = "restore" ]; then exit 0; fi\n'
+    def _mock_kubectl(self, pbm_list_output="2026-07-28T12:00:00Z", pbm_status_exit=0,
+                       doc_count="42"):
+        # All pbm/mongosh interaction happens via `kubectl exec` -- this
+        # script runs on the operator's machine, not inside the cluster, so
+        # there is no local pbm/mongosh binary to mock separately.
+        self._mock("kubectl", (
+            'if [ "$1" = "get" ]; then echo "mongodb-restore-target-abc"; exit 0; fi\n'
+            'if [ "$1" = "exec" ]; then\n'
+            '  if [[ "$*" == *"pbm status"* ]]; then exit ' + str(pbm_status_exit) + '; fi\n'
+            '  if [[ "$*" == *"pbm list"* ]]; then echo "' + pbm_list_output + '"; exit 0; fi\n'
+            '  if [[ "$*" == *"pbm restore"* ]]; then exit 0; fi\n'
+            '  if [[ "$*" == *"mongosh"* ]]; then echo "' + doc_count + '"; exit 0; fi\n'
+            '  exit 0\n'
+            'fi\n'
+            'exit 0\n'
         ))
-        self._mock("mongosh", 'echo "42"')
+
+    def _install_happy_path_mocks(self, sts_arn=DRILL_ROLE_ARN):
+        self._mock_kubectl()
+        self._mock("aws", f'echo "{sts_arn}"')
 
     def _run(self):
         return subprocess.run(
@@ -87,30 +98,23 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
                                   "production namespace")
 
     def test_fails_closed_when_pbm_status_fails(self):
-        self._mock("kubectl", "exit 0")
+        self._mock_kubectl(pbm_status_exit=1)
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
-        self._mock("pbm", 'if [ "$1" = "status" ]; then exit 1; fi; exit 0')
-        self._mock("mongosh", 'echo "42"')
         result = self._run()
         self.assertNotEqual(result.returncode, 0,
                              "script must exit non-zero when pbm status fails")
 
     def test_fails_closed_when_no_backups_exist(self):
-        self._mock("kubectl", "exit 0")
+        self._mock_kubectl(pbm_list_output="")
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
-        self._mock("pbm", (
-            'if [ "$1" = "status" ]; then exit 0; fi\n'
-            'if [ "$1" = "list" ]; then echo ""; exit 0; fi\n'
-        ))
-        self._mock("mongosh", 'echo "42"')
         result = self._run()
         self.assertNotEqual(result.returncode, 0,
                              "script must exit non-zero when the PBM backup "
                              "catalog is empty")
 
     def test_fails_closed_when_post_restore_document_count_is_zero(self):
-        self._install_happy_path_mocks()
-        self._mock("mongosh", 'echo "0"')
+        self._mock_kubectl(doc_count="0")
+        self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
         result = self._run()
         self.assertNotEqual(result.returncode, 0,
                              "script must exit non-zero when the post-restore "
@@ -128,10 +132,8 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         self.assertIn("identity", (result.stdout + result.stderr).lower())
 
     def test_tears_down_drill_namespace_even_on_failure(self):
-        self._mock("kubectl", "exit 0")
+        self._mock_kubectl(pbm_status_exit=1)
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
-        self._mock("pbm", "exit 1")  # force failure mid-script
-        self._mock("mongosh", 'echo "42"')
         self._run()
         self.assertIn("kubectl delete namespace", self._log(),
                       "cleanup trap must run kubectl delete namespace even "

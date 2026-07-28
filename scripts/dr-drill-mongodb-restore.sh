@@ -44,13 +44,22 @@ echo "Deploying throwaway single-node MongoDB for restore target..."
 kubectl apply -n "${DRILL_NAMESPACE}" -f "$(dirname "$0")/../k8s/dr-drill/mongodb-restore-target.yaml"
 kubectl wait --for=condition=ready pod -l app=mongodb-restore-target -n "${DRILL_NAMESPACE}" --timeout=300s
 
+# This script runs on the operator's machine / a CI runner, not inside the
+# cluster -- so pbm and mongosh commands are always run via `kubectl exec`
+# into the restore-target pod (matching the pattern already used by
+# dr-drill-clickhouse-backup-restore.sh), never assumed reachable at
+# localhost:27017 from the caller's machine.
+RESTORE_POD=$(kubectl get pod -n "${DRILL_NAMESPACE}" -l app=mongodb-restore-target \
+  -o jsonpath='{.items[0].metadata.name}')
+
 echo "Checking PBM backup catalog (read-only drill role)..."
-pbm status --mongodb-uri="mongodb://localhost:27017" || {
+kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- pbm status --mongodb-uri="mongodb://localhost:27017" || {
   echo "FATAL: pbm status failed -- cannot enumerate backups for drill"
   exit 1
 }
 
-LATEST_BACKUP=$(pbm list --mongodb-uri="mongodb://localhost:27017" | grep -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z' | tail -1)
+LATEST_BACKUP=$(kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+  pbm list --mongodb-uri="mongodb://localhost:27017" | grep -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z' | tail -1)
 if [ -z "${LATEST_BACKUP}" ]; then
   echo "FATAL: no backups found in PBM catalog"
   exit 1
@@ -58,13 +67,15 @@ fi
 echo "Restoring backup: ${LATEST_BACKUP}"
 
 RESTORE_START=$(date +%s)
-pbm restore "${LATEST_BACKUP}" --mongodb-uri="mongodb://localhost:27017" --wait
+kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+  pbm restore "${LATEST_BACKUP}" --mongodb-uri="mongodb://localhost:27017" --wait
 RESTORE_END=$(date +%s)
 RTO_SECONDS=$((RESTORE_END - RESTORE_START))
 echo "Restore completed. RTO: ${RTO_SECONDS}s"
 
 echo "Verifying data integrity post-restore..."
-DOC_COUNT=$(mongosh "mongodb://localhost:27017" --quiet --eval "db.getSiblingDB('oms').orders.countDocuments({})")
+DOC_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+  mongosh "mongodb://localhost:27017" --quiet --eval "db.getSiblingDB('oms').orders.countDocuments({})")
 if [ -z "${DOC_COUNT}" ] || [ "${DOC_COUNT}" -eq 0 ]; then
   echo "FATAL: post-restore document count is zero -- data integrity check failed"
   exit 1
