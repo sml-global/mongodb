@@ -120,7 +120,7 @@ class DrDrillRoleArnsBootstrapScriptBehaviorTests(unittest.TestCase):
             'if [[ "$*" == *"dr_drill_postgresql_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-postgresql-restore-role"; fi\n'
             'if [[ "$*" == *"dr_drill_clickhouse_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-clickhouse-backup-role"; fi\n'
         ))
-        self._mock("kubectl", "cat > /dev/null; exit 0")
+        self._mock("kubectl", "cat > /dev/null 2>/dev/null; exit 0")
         result = subprocess.run(
             ["bash", str(BOOTSTRAP_SCRIPT)],
             env=self.env, capture_output=True, text=True, timeout=30,
@@ -129,46 +129,122 @@ class DrDrillRoleArnsBootstrapScriptBehaviorTests(unittest.TestCase):
         self.assertIn("dr-drill-role-arns", self._log())
         self.assertIn("DR_DRILL_MONGODB_ROLE_ARN", self._log())
 
+    def test_creates_three_dedicated_service_accounts_with_irsa_annotations(self):
+        # Regression test for a critical bug (C1) caught in whole-branch
+        # review: a single ServiceAccount cannot bind three different IRSA
+        # roles. Each drill needs its own dedicated, IRSA-annotated SA.
+        self._mock("terraform", (
+            'if [[ "$*" == *"dr_drill_mongodb_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-mongodb-restore-role"; fi\n'
+            'if [[ "$*" == *"dr_drill_postgresql_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-postgresql-restore-role"; fi\n'
+            'if [[ "$*" == *"dr_drill_clickhouse_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-clickhouse-backup-role"; fi\n'
+        ))
+        self._mock("kubectl", "cat > /dev/null 2>/dev/null; exit 0")
+        result = subprocess.run(
+            ["bash", str(BOOTSTRAP_SCRIPT)],
+            env=self.env, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self._log()
+        for sa_name, role_arn in (
+            ("dr-drill-mongodb-runner", "dr-drill-mongodb-restore-role"),
+            ("dr-drill-postgresql-runner", "dr-drill-postgresql-restore-role"),
+            ("dr-drill-clickhouse-runner", "dr-drill-clickhouse-backup-role"),
+        ):
+            self.assertIn(sa_name, log, f"must create ServiceAccount {sa_name}")
+            self.assertIn(role_arn, log,
+                          f"must annotate {sa_name} with its own role ARN ({role_arn})")
+
 
 class DrDrillCronJobStructureTests(unittest.TestCase):
-    """Structural (parsed-field) assertions, not substring search."""
+    """Structural (parsed-field) assertions, not substring search.
+
+    THREE separate CronJob documents are expected (multi-doc YAML) -- a
+    regression guard for a critical bug (C1) caught in whole-branch review:
+    a single CronJob running all three drill scripts under one
+    ServiceAccount can satisfy at most one script's IRSA identity guard.
+    """
 
     @classmethod
     def setUpClass(cls):
-        cls.doc = yaml.safe_load(CRONJOB.read_text())
+        cls.docs = [d for d in yaml.safe_load_all(CRONJOB.read_text()) if d]
+        cls.by_script = {}
+        for doc in cls.docs:
+            pod_spec = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+            command_str = pod_spec["containers"][0]["command"][-1]
+            for script_name in (
+                "dr-drill-mongodb-restore.sh",
+                "dr-drill-postgresql-restore.sh",
+                "dr-drill-clickhouse-backup-restore.sh",
+            ):
+                if script_name in command_str:
+                    cls.by_script[script_name] = doc
 
-    def test_cronjob_exists_and_parses(self):
-        self.assertEqual(self.doc["kind"], "CronJob")
+    def test_exactly_three_cronjobs_defined(self):
+        self.assertEqual(len(self.docs), 3)
+        for doc in self.docs:
+            self.assertEqual(doc["kind"], "CronJob")
 
-    def test_cronjob_targets_dr_drill_uat_namespace(self):
-        self.assertEqual(self.doc["metadata"]["namespace"], "dr-drill-uat")
+    def test_each_cronjob_runs_exactly_one_drill_script(self):
+        self.assertEqual(len(self.by_script), 3,
+                          "each of the 3 drill scripts must appear in exactly one CronJob")
+        for script_name, doc in self.by_script.items():
+            pod_spec = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+            command_str = pod_spec["containers"][0]["command"][-1]
+            other_scripts = {
+                "dr-drill-mongodb-restore.sh",
+                "dr-drill-postgresql-restore.sh",
+                "dr-drill-clickhouse-backup-restore.sh",
+            } - {script_name}
+            for other in other_scripts:
+                self.assertNotIn(other, command_str,
+                                  f"{script_name}'s CronJob must not also invoke {other}")
 
-    def test_cronjob_runs_weekly_sunday_0300_utc(self):
-        self.assertEqual(self.doc["spec"]["schedule"], "0 3 * * 0")
+    def test_each_cronjob_targets_dr_drill_uat_namespace(self):
+        for doc in self.docs:
+            self.assertEqual(doc["metadata"]["namespace"], "dr-drill-uat")
 
-    def test_cronjob_pod_spec_uses_dedicated_service_account(self):
-        pod_spec = self.doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
-        self.assertEqual(pod_spec["serviceAccountName"], "dr-drill-runner")
+    def test_each_cronjob_runs_weekly_sunday_0300_utc(self):
+        for doc in self.docs:
+            self.assertEqual(doc["spec"]["schedule"], "0 3 * * 0")
 
-    def test_cronjob_invokes_all_three_drill_scripts_in_order(self):
-        pod_spec = self.doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
-        command_str = pod_spec["containers"][0]["command"][-1]
-        mongo_idx = command_str.index("dr-drill-mongodb-restore.sh")
-        pg_idx = command_str.index("dr-drill-postgresql-restore.sh")
-        ch_idx = command_str.index("dr-drill-clickhouse-backup-restore.sh")
-        self.assertLess(mongo_idx, pg_idx)
-        self.assertLess(pg_idx, ch_idx)
+    def test_each_cronjob_uses_its_own_dedicated_service_account(self):
+        expected_sa = {
+            "dr-drill-mongodb-restore.sh": "dr-drill-mongodb-runner",
+            "dr-drill-postgresql-restore.sh": "dr-drill-postgresql-runner",
+            "dr-drill-clickhouse-backup-restore.sh": "dr-drill-clickhouse-runner",
+        }
+        for script_name, doc in self.by_script.items():
+            pod_spec = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+            self.assertEqual(pod_spec["serviceAccountName"], expected_sa[script_name])
 
-    def test_cronjob_sources_role_arns_from_bootstrapped_configmap(self):
+    def test_service_accounts_are_all_distinct(self):
+        sa_names = {
+            doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["serviceAccountName"]
+            for doc in self.docs
+        }
+        self.assertEqual(len(sa_names), 3, "all 3 CronJobs must use distinct ServiceAccounts")
+
+    def test_cronjobs_use_a_real_publicly_available_image(self):
+        # Regression test for M4: an earlier version referenced
+        # oms/dr-drill-runner:latest, which was never built and does not
+        # exist. alpine/k8s is a real, actively maintained public image
+        # bundling kubectl + aws-cli (verified via Docker Hub).
+        for doc in self.docs:
+            container = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+            self.assertNotEqual(container["image"], "oms/dr-drill-runner:latest")
+            self.assertTrue(container["image"].startswith("alpine/k8s:"))
+
+    def test_each_cronjob_sources_role_arns_from_bootstrapped_configmap(self):
         # No hardcoded AWS account ID/ARNs in the YAML -- real values come
         # from the dr-drill-role-arns ConfigMap (created by
         # scripts/bootstrap-dr-drill-role-arns-configmap.sh from Terraform
-        # outputs, Step 3b).
-        container = self.doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
-        config_map_refs = [
-            ref["configMapRef"]["name"] for ref in container.get("envFrom", [])
-        ]
-        self.assertIn("dr-drill-role-arns", config_map_refs)
+        # outputs).
+        for doc in self.docs:
+            container = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+            config_map_refs = [
+                ref["configMapRef"]["name"] for ref in container.get("envFrom", [])
+            ]
+            self.assertIn("dr-drill-role-arns", config_map_refs)
 
 
 if __name__ == "__main__":

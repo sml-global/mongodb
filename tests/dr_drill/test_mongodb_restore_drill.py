@@ -51,6 +51,7 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         self._mock("kubectl", (
             'if [ "$1" = "get" ]; then echo "mongodb-restore-target-abc"; exit 0; fi\n'
             'if [ "$1" = "exec" ]; then\n'
+            '  if [[ "$*" == *"pbm config"* ]]; then exit 0; fi\n'
             '  if [[ "$*" == *"pbm status"* ]]; then exit ' + str(pbm_status_exit) + '; fi\n'
             '  if [[ "$*" == *"pbm list"* ]]; then echo "' + pbm_list_output + '"; exit 0; fi\n'
             '  if [[ "$*" == *"pbm restore"* ]]; then exit 0; fi\n'
@@ -143,6 +144,43 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         self._install_happy_path_mocks()
         result = self._run()
         self.assertRegex(result.stdout, r"RTO=\d+s")
+
+    def test_pbm_commands_target_the_pbm_agent_container(self):
+        # Regression test: an earlier version omitted `-c pbm-agent`, so
+        # kubectl exec silently defaulted to the first container (mongodb),
+        # where the pbm binary does not exist. Caught in whole-branch review.
+        self._install_happy_path_mocks()
+        self._run()
+        pbm_exec_lines = [
+            l for l in self._log().splitlines()
+            if l.startswith("kubectl ") and "exec" in l and " pbm " in f" {l} "
+        ]
+        self.assertTrue(pbm_exec_lines, "script must exec pbm commands")
+        for line in pbm_exec_lines:
+            self.assertIn("-c pbm-agent", line,
+                          "pbm commands must target the pbm-agent container")
+
+    def test_mongosh_targets_the_mongodb_container(self):
+        self._install_happy_path_mocks()
+        self._run()
+        mongosh_exec_lines = [
+            l for l in self._log().splitlines()
+            if l.startswith("kubectl ") and "exec" in l and "mongosh" in l
+        ]
+        self.assertTrue(mongosh_exec_lines, "script must exec mongosh")
+        for line in mongosh_exec_lines:
+            self.assertIn("-c mongodb", line,
+                          "mongosh must target the mongodb container")
+
+    def test_configures_pbm_storage_backend_before_checking_status(self):
+        self._install_happy_path_mocks()
+        self._run()
+        log = self._log()
+        config_idx = log.index("pbm config")
+        status_idx = log.index("pbm status")
+        self.assertLess(config_idx, status_idx,
+                        "pbm config must run before pbm status/list/restore")
+        self.assertIn("oms-pbm-backups", log)
 
 
 if __name__ == "__main__":

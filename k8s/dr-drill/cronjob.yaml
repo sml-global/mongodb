@@ -1,8 +1,22 @@
 # k8s/dr-drill/cronjob.yaml
+#
+# THREE separate CronJobs, one per drill, each with its own dedicated
+# ServiceAccount. This is required, not stylistic: IRSA binds exactly one
+# IAM role to a ServiceAccount's default assumed identity, and each drill
+# script's identity guard (D7) fails closed unless the assumed role matches
+# its own dedicated least-privilege role. A single CronJob running all three
+# scripts under one ServiceAccount could satisfy at most one of the three
+# identity checks -- caught in whole-branch review before ever being run.
+#
+# ServiceAccounts (dr-drill-mongodb-runner, dr-drill-postgresql-runner,
+# dr-drill-clickhouse-runner) are created and IRSA-annotated by
+# scripts/bootstrap-dr-drill-role-arns-configmap.sh from the matching
+# Terraform output -- never hardcoded here (D9: Terraform never creates
+# Kubernetes objects in this repo).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: dr-drill-weekly
+  name: dr-drill-mongodb-weekly
   namespace: dr-drill-uat
 spec:
   # Weekly, Sunday 03:00 UTC -- low-traffic window in the UAT environment.
@@ -11,15 +25,10 @@ spec:
     spec:
       template:
         spec:
-          serviceAccountName: dr-drill-runner
+          serviceAccountName: dr-drill-mongodb-runner
           containers:
-            - name: dr-drill-runner
-              image: oms/dr-drill-runner:latest
-              # Real expected drill-role ARNs, sourced from the
-              # dr-drill-role-arns ConfigMap created by
-              # scripts/bootstrap-dr-drill-role-arns-configmap.sh (values are
-              # the actual Terraform-output role ARNs -- never hardcoded
-              # here). Re-run that script any time after `terraform apply`.
+            - name: dr-drill-mongodb-runner
+              image: alpine/k8s:1.33.13
               envFrom:
                 - configMapRef:
                     name: dr-drill-role-arns
@@ -28,8 +37,58 @@ spec:
                 - -c
                 - |
                   set -euo pipefail
-                  echo "Running weekly DR drills against UAT..."
                   /scripts/dr-drill-mongodb-restore.sh
+          restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-drill-postgresql-weekly
+  namespace: dr-drill-uat
+spec:
+  schedule: "0 3 * * 0"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: dr-drill-postgresql-runner
+          containers:
+            - name: dr-drill-postgresql-runner
+              image: alpine/k8s:1.33.13
+              envFrom:
+                - configMapRef:
+                    name: dr-drill-role-arns
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
                   /scripts/dr-drill-postgresql-restore.sh
+          restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-drill-clickhouse-weekly
+  namespace: dr-drill-uat
+spec:
+  schedule: "0 3 * * 0"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: dr-drill-clickhouse-runner
+          containers:
+            - name: dr-drill-clickhouse-runner
+              image: alpine/k8s:1.33.13
+              envFrom:
+                - configMapRef:
+                    name: dr-drill-role-arns
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
                   /scripts/dr-drill-clickhouse-backup-restore.sh
           restartPolicy: Never
+

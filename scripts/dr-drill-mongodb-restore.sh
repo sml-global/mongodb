@@ -49,16 +49,31 @@ kubectl wait --for=condition=ready pod -l app=mongodb-restore-target -n "${DRILL
 # into the restore-target pod (matching the pattern already used by
 # dr-drill-clickhouse-backup-restore.sh), never assumed reachable at
 # localhost:27017 from the caller's machine.
+#
+# The restore-target pod has two containers (mongodb-restore-target.yaml):
+# `mongodb` (has mongosh) and `pbm-agent` (has the pbm CLI). Every exec must
+# target the correct one with `-c` -- `kubectl exec` silently defaults to the
+# first container otherwise, which does not have the other tool installed.
 RESTORE_POD=$(kubectl get pod -n "${DRILL_NAMESPACE}" -l app=mongodb-restore-target \
   -o jsonpath='{.items[0].metadata.name}')
 
+echo "Configuring PBM storage backend (read-only drill role, oms-pbm-backups)..."
+# No static access/secret keys: the pbm-agent container inherits AWS
+# credentials from the pod's IRSA-annotated ServiceAccount (ambient AWS SDK
+# credential chain), same as the identity guard above.
+kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -c pbm-agent -- \
+  pbm config --mongodb-uri="mongodb://localhost:27017" \
+    --set storage.type=s3 \
+    --set storage.s3.region="${AWS_REGION:-ap-east-1}" \
+    --set storage.s3.bucket=oms-pbm-backups
+
 echo "Checking PBM backup catalog (read-only drill role)..."
-kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- pbm status --mongodb-uri="mongodb://localhost:27017" || {
+kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -c pbm-agent -- pbm status --mongodb-uri="mongodb://localhost:27017" || {
   echo "FATAL: pbm status failed -- cannot enumerate backups for drill"
   exit 1
 }
 
-LATEST_BACKUP=$(kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+LATEST_BACKUP=$(kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -c pbm-agent -- \
   pbm list --mongodb-uri="mongodb://localhost:27017" | grep -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z' | tail -1)
 if [ -z "${LATEST_BACKUP}" ]; then
   echo "FATAL: no backups found in PBM catalog"
@@ -67,14 +82,14 @@ fi
 echo "Restoring backup: ${LATEST_BACKUP}"
 
 RESTORE_START=$(date +%s)
-kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -c pbm-agent -- \
   pbm restore "${LATEST_BACKUP}" --mongodb-uri="mongodb://localhost:27017" --wait
 RESTORE_END=$(date +%s)
 RTO_SECONDS=$((RESTORE_END - RESTORE_START))
 echo "Restore completed. RTO: ${RTO_SECONDS}s"
 
 echo "Verifying data integrity post-restore..."
-DOC_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+DOC_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -c mongodb -- \
   mongosh "mongodb://localhost:27017" --quiet --eval "db.getSiblingDB('oms').orders.countDocuments({})")
 if [ -z "${DOC_COUNT}" ] || [ "${DOC_COUNT}" -eq 0 ]; then
   echo "FATAL: post-restore document count is zero -- data integrity check failed"

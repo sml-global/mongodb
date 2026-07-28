@@ -22,6 +22,9 @@ locals {
 }
 
 # --- MongoDB PBM restore drill role (read-only) ---
+# Trust scoped to its OWN dedicated ServiceAccount (dr-drill-mongodb-runner)
+# -- each drill has a separate CronJob + ServiceAccount because IRSA binds
+# exactly one role per ServiceAccount; see k8s/dr-drill/cronjob.yaml header.
 
 data "aws_iam_policy_document" "dr_drill_mongodb_trust" {
   statement {
@@ -41,7 +44,7 @@ data "aws_iam_policy_document" "dr_drill_mongodb_trust" {
     condition {
       test     = "StringLike"
       variable = "${local.oidc_hostpath}:sub"
-      values   = ["system:serviceaccount:dr-drill-uat:dr-drill-runner"]
+      values   = ["system:serviceaccount:dr-drill-uat:dr-drill-mongodb-runner"]
     }
   }
 }
@@ -73,6 +76,7 @@ resource "aws_iam_role_policy" "dr_drill_mongodb_restore" {
 }
 
 # --- PostgreSQL WAL/PITR restore drill role (read-only) ---
+# Trust scoped to its OWN dedicated ServiceAccount (dr-drill-postgresql-runner).
 
 data "aws_iam_policy_document" "dr_drill_postgresql_trust" {
   statement {
@@ -92,7 +96,7 @@ data "aws_iam_policy_document" "dr_drill_postgresql_trust" {
     condition {
       test     = "StringLike"
       variable = "${local.oidc_hostpath}:sub"
-      values   = ["system:serviceaccount:dr-drill-uat:dr-drill-runner"]
+      values   = ["system:serviceaccount:dr-drill-uat:dr-drill-postgresql-runner"]
     }
   }
 }
@@ -147,7 +151,7 @@ data "aws_iam_policy_document" "dr_drill_clickhouse_trust" {
     condition {
       test     = "StringLike"
       variable = "${local.oidc_hostpath}:sub"
-      values   = ["system:serviceaccount:dr-drill-uat:dr-drill-runner"]
+      values   = ["system:serviceaccount:dr-drill-uat:dr-drill-clickhouse-runner"]
     }
   }
 }
