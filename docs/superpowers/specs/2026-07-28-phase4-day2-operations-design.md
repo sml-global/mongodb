@@ -36,6 +36,15 @@ used for cost reasons, they must be triggered only after a scripted `FREEZE TABL
 pre-hook and scoped to the specific ClickHouse PVC by volume tag — never a blanket
 policy that could also touch MongoDB volumes on the same storage class.
 
+**Verified installation mechanism:** the upstream `clickhouse` subchart (dependency
+`https://charts.signoz.io`, declared in `charts/signoz/Chart.yaml`) exposes
+`clickhouse.extraContainers: []` — a genuine sidecar-injection hook, confirmed by
+fetching its `values.yaml` directly. An earlier draft of this decision assumed a
+`clickhouse.backup.*` values key; that key does not exist in the real chart and was
+never wired to anything. `clickhouse-backup` is installed via `extraContainers`, not
+a fabricated values path.
+policy that could also touch MongoDB volumes on the same storage class.
+
 ### D2: MongoDB and PostgreSQL already have native, application-consistent backup tools — DR validation tests restore, not backup
 **Evidence:** MongoDB uses Percona Backup Management (PBM) to S3; PostgreSQL uses
 continuous WAL archival with PITR to S3 (both documented in their platform contracts).

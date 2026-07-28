@@ -734,11 +734,17 @@ class ClickhouseHelmReleaseBackupConfigTests(unittest.TestCase):
         )
         cls.clickhouse_values = cls.signoz_release["spec"]["values"]["clickhouse"]
 
-    def test_backup_sidecar_is_enabled(self):
-        self.assertTrue(self.clickhouse_values["backup"]["enabled"])
+    def test_backup_sidecar_container_is_present(self):
+        container_names = [c["name"] for c in self.clickhouse_values["extraContainers"]]
+        self.assertIn("clickhouse-backup", container_names)
 
     def test_backup_targets_dedicated_bucket_not_mongodb_pbm_bucket(self):
-        bucket = self.clickhouse_values["backup"]["s3"]["bucket"]
+        backup_container = next(
+            c for c in self.clickhouse_values["extraContainers"]
+            if c["name"] == "clickhouse-backup"
+        )
+        env_by_name = {e["name"]: e.get("value") for e in backup_container.get("env", [])}
+        bucket = env_by_name.get("REMOTE_STORAGE_S3_BUCKET")
         self.assertEqual(bucket, "oms-signoz-clickhouse-backups")
         self.assertNotEqual(bucket, "oms-pbm-backups")
 
@@ -836,9 +842,15 @@ kubectl exec -n signoz "${CLICKHOUSE_POD}" -- clickhouse-backup delete local "${
 Run: `cd /Users/frank/sml/oms/mongodb && python3 -m pytest tests/dr_drill/test_clickhouse_backup_restore_drill.py::ClickhouseBackupRestoreDrillBehaviorTests -v`
 Expected: PASS (6/6)
 
-- [ ] **Step 5: Add clickhouse-backup sidecar config to the SigNoz HelmRelease**
+- [ ] **Step 5: Add clickhouse-backup sidecar container to the SigNoz HelmRelease**
 
-Modify `gitops/signoz/base/helmreleases.yaml` — add under `clickhouse:`:
+Modify `gitops/signoz/base/helmreleases.yaml` — add under `clickhouse:`.
+
+**Verified against the real upstream chart** (`https://charts.signoz.io/clickhouse`, the dependency
+declared in `Chart.yaml` and pulled in via `clickhouse.enabled: true`): the chart exposes
+`clickhouse.extraContainers: []` ("Extra containers for ClickHouse pod") specifically for this
+purpose. There is no `clickhouse.backup.*` key -- an earlier draft of this plan invented one
+without checking the real chart source; that draft is not used.
 
 ```yaml
     clickhouse:
@@ -848,15 +860,29 @@ Modify `gitops/signoz/base/helmreleases.yaml` — add under `clickhouse:`:
             name: signoz-clickhouse
             key: password
       # clickhouse-backup sidecar: enables application-consistent backups
-      # (FREEZE TABLE-based) instead of raw EBS snapshots. See
-      # scripts/dr-drill-clickhouse-backup-restore.sh and Phase 4 design spec
+      # (FREEZE TABLE-based) instead of raw EBS snapshots. Wired via the real
+      # `extraContainers` hook exposed by the upstream clickhouse subchart
+      # (charts.signoz.io/clickhouse) -- verified against its values.yaml,
+      # not a fabricated key. See scripts/dr-drill-clickhouse-backup-restore.sh
+      # and Phase 4 design spec
       # docs/superpowers/specs/2026-07-28-phase4-day2-operations-design.md (D1).
-      backup:
-        enabled: true
-        image: altinity/clickhouse-backup:latest
-        s3:
-          bucket: oms-signoz-clickhouse-backups
-          path: "clickhouse-backups"
+      extraContainers:
+        - name: clickhouse-backup
+          image: altinity/clickhouse-backup:2.5.19
+          env:
+            - name: REMOTE_STORAGE
+              value: s3
+            - name: REMOTE_STORAGE_S3_BUCKET
+              value: oms-signoz-clickhouse-backups
+            - name: REMOTE_STORAGE_S3_PATH
+              value: clickhouse-backups
+            - name: CLICKHOUSE_HOST
+              value: localhost
+            - name: CLICKHOUSE_PORT
+              value: "9000"
+          ports:
+            - name: backup-rest
+              containerPort: 7171
 ```
 
 - [ ] **Step 6: Run full test file to verify both classes pass**
