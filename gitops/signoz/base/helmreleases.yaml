@@ -22,6 +22,30 @@ spec:
           secretKeyRef:
             name: signoz-clickhouse
             key: password
+      # clickhouse-backup sidecar: enables application-consistent backups
+      # (FREEZE TABLE-based) instead of raw EBS snapshots. Wired via the real
+      # `extraContainers` hook exposed by the upstream clickhouse subchart
+      # (charts.signoz.io/clickhouse) -- verified against its values.yaml,
+      # not a fabricated key. See scripts/dr-drill-clickhouse-backup-restore.sh
+      # and Phase 4 design spec
+      # docs/superpowers/specs/2026-07-28-phase4-day2-operations-design.md (D1).
+      extraContainers:
+        - name: clickhouse-backup
+          image: altinity/clickhouse-backup:2.5.19
+          env:
+            - name: REMOTE_STORAGE
+              value: s3
+            - name: REMOTE_STORAGE_S3_BUCKET
+              value: oms-signoz-clickhouse-backups
+            - name: REMOTE_STORAGE_S3_PATH
+              value: clickhouse-backups
+            - name: CLICKHOUSE_HOST
+              value: localhost
+            - name: CLICKHOUSE_PORT
+              value: "9000"
+          ports:
+            - name: backup-rest
+              containerPort: 7171
     signoz:
       # Bootstraps the SigNoz admin (root) user at pod startup so no manual
       # "Sign Up" step is needed in the UI. Requires SigNoz v0.112.0+.
