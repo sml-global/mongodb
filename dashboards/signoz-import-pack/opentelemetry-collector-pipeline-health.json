@@ -1,4 +1,5 @@
 {
+  "id": "otel-collector-pipeline-health",
   "title": "OpenTelemetry Collector",
   "description": "Pipeline health for the OTel Collector: receiver throughput, processor drops, exporter delivery, queue depth, and process resources.",
   "tags": ["opentelemetry", "otel", "collector", "metrics", "infrastructure"],
