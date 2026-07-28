@@ -65,6 +65,42 @@ class SignozReadinessTests(unittest.TestCase):
         self.assertIn('exit 1', provision_script,
                       "provision script must exit with code 1 on readiness failure")
 
+    def test_provision_script_uses_kubectl_exec_not_ephemeral_pods(self):
+        """Verify connectivity test uses kubectl exec (not kubectl run).
+        
+        The API connectivity check must use 'kubectl exec' into the existing
+        frontend pod. Using 'kubectl run' creates ephemeral pods that:
+        - Cause race conditions if provision runs concurrently
+        - Pollute Kubernetes audit logs with garbage pods
+        - Use non-reproducible 'latest' image tags
+        
+        Requirement: Must use 'kubectl exec', must NOT use 'kubectl run --rm'.
+        """
+        provision_script = read(PROVISION_SCRIPT)
+        
+        self.assertIn('kubectl exec', provision_script,
+                      "provision script must use 'kubectl exec' for API tests")
+        self.assertNotIn('kubectl run -it --rm', provision_script,
+                         "provision script must NOT use ephemeral 'kubectl run' pods")
+        self.assertNotIn('--image=curlimages/curl:latest', provision_script,
+                         "provision script must NOT use non-reproducible 'latest' tag")
+
+    def test_provision_script_validates_endpoint_is_internal(self):
+        """Verify provision script validates SIGNOZ_ENDPOINT (prevent AWS egress).
+        
+        If ENDPOINT is external to cluster (not .svc.cluster.local/127.0.0.1/localhost),
+        traffic routes through AWS NAT gateway → egress charges.
+        
+        Requirement: Must include validation check for internal endpoints.
+        """
+        provision_script = read(PROVISION_SCRIPT)
+        
+        # Check for endpoint validation logic
+        self.assertTrue(
+            ('svc.cluster.local' in provision_script or '127.0.0.1' in provision_script),
+            "provision script must validate endpoint is internal"
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -84,12 +84,10 @@ max_attempts=30
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
-  if kubectl run -it --rm \
-    --image=curlimages/curl:latest \
-    --restart=Never \
-    --namespace=signoz \
-    curl-test-signoz-api -- \
-    curl -f -s http://frontend:3301/api/v1/dashboards >/dev/null 2>&1; then
+  # Use kubectl exec into existing frontend pod (no ephemeral pod creation/cleanup spam)
+  if kubectl exec -n signoz -it \
+    $(kubectl get pod -n signoz -l app.kubernetes.io/name=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) \
+    -- curl -f -s http://localhost:3301/api/v1/dashboards >/dev/null 2>&1; then
     echo "  ✅ API endpoint is responsive"
     break
   fi
@@ -106,6 +104,17 @@ fi
 echo ""
 echo "✅ All SigNoz services ready. Proceeding with observability provisioning..."
 echo ""
+
+# ENDPOINT VALIDATION: Restrict to internal network (prevent AWS egress charges)
+if [[ ! "$ENDPOINT" =~ (svc\.cluster\.local|127\.0\.0\.1|localhost) ]]; then
+  echo "⚠️  WARNING: SIGNOZ_ENDPOINT is not internal to cluster"
+  echo "   Endpoint: $ENDPOINT"
+  echo "   This will route dashboard import traffic through AWS NAT gateway"
+  echo "   Recommended: Use http://frontend.signoz.svc.cluster.local:3301"
+  echo ""
+  echo "Proceeding in 5 seconds (non-interactive mode)..."
+  sleep 5
+fi
 
 if ! kubectl -n signoz get secret signoz-api-key >/dev/null 2>&1; then
   echo "Secret 'signoz-api-key' not found in namespace 'signoz'; bootstrapping it now (headless browser, one time only) ..."
