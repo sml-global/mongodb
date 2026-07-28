@@ -1,0 +1,21 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: psmdb-operator
+  namespace: mongodb-operator
+spec:
+  interval: 10m
+  chart:
+    spec:
+      chart: psmdb-operator
+      version: "1.16.x"
+      sourceRef:
+        kind: HelmRepository
+        name: percona
+        namespace: flux-system
+  values:
+    watchNamespace: "mongodb"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
