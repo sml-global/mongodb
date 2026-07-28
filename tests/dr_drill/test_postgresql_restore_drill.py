@@ -128,6 +128,23 @@ class PostgresqlRestoreDrillBehaviorTests(unittest.TestCase):
         result = self._run()
         self.assertRegex(result.stdout, r"RTO=\d+s")
 
+    def test_exec_targets_the_correct_statefulset_ordinal_zero_pod(self):
+        # Regression test for a real bug caught in task review: CNPG's
+        # Cluster is backed by a StatefulSet, whose pod ordinals start at 0.
+        # With `instances: 1` (this drill's throwaway target), the only pod
+        # is "dr-drill-restore-target-0" -- never "-1". The mock does not
+        # special-case the pod name, so this only passes if the script
+        # actually execs into the pod name the manifest implies.
+        self._install_happy_path_mocks()
+        self._run()
+        exec_lines = [l for l in self._log().splitlines() if "kubectl exec" in l]
+        self.assertTrue(exec_lines, "script must kubectl exec into the restore-target pod")
+        for line in exec_lines:
+            self.assertIn("dr-drill-restore-target-0", line,
+                          "must exec into ordinal-0 pod (StatefulSet, instances: 1), "
+                          "not '-1' or any other ordinal")
+            self.assertIn("psql", line)
+
 
 if __name__ == "__main__":
     unittest.main()
