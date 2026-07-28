@@ -46,8 +46,16 @@ class ClickhouseBackupRestoreDrillBehaviorTests(unittest.TestCase):
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
     def _mock_kubectl(self, exec_row_count="123456"):
+        # Two distinct "kubectl get pod" targets: the LIVE signoz pod (backup
+        # source only) and the THROWAWAY restore-target pod (in the drill
+        # namespace) -- distinguished by args, since the script must never
+        # reuse the live pod for restore. See test_restore_never_targets_the_live_signoz_namespace.
         self._mock("kubectl", (
-            'if [ "$1" = "get" ]; then echo "signoz-clickhouse-0"; exit 0; fi\n'
+            'if [ "$1" = "get" ]; then\n'
+            '  if [[ "$*" == *"-n signoz "* ]] || [[ "$*" == *"-n signoz" ]]; then echo "signoz-clickhouse-0"; fi\n'
+            '  if [[ "$*" == *"clickhouse-restore-target"* ]]; then echo "clickhouse-restore-target-abc"; fi\n'
+            '  exit 0\n'
+            'fi\n'
             'if [ "$1" = "exec" ]; then\n'
             f'  if [[ "$*" == *"count()"* ]]; then echo "{exec_row_count}"; fi\n'
             '  exit 0\n'
@@ -108,6 +116,61 @@ class ClickhouseBackupRestoreDrillBehaviorTests(unittest.TestCase):
         self._install_happy_path_mocks()
         result = self._run()
         self.assertRegex(result.stdout, r"RTO=\d+s")
+
+    def test_backup_create_and_upload_run_against_the_live_signoz_pod(self):
+        # Safe: create/upload only freeze+copy data OUT, never mutate the
+        # source -- this is the one part of the drill allowed to touch the
+        # live namespace.
+        self._install_happy_path_mocks()
+        self._run()
+        log = self._log()
+        self.assertIn("-n signoz", log)
+        create_lines = [l for l in log.splitlines() if "clickhouse-backup create" in l]
+        upload_lines = [l for l in log.splitlines() if "clickhouse-backup upload" in l]
+        self.assertTrue(create_lines and upload_lines)
+        for line in create_lines + upload_lines:
+            self.assertIn("-n signoz", line)
+
+    def test_restore_never_targets_the_live_signoz_namespace(self):
+        # Regression test for a critical bug caught in whole-branch review:
+        # an earlier version ran `clickhouse-backup restore --rm` directly
+        # against the live signoz pod, which would have dropped and
+        # overwritten production tables. Restore must run only against the
+        # throwaway restore-target pod in an isolated dr-drill-* namespace.
+        self._install_happy_path_mocks()
+        self._run()
+        log = self._log()
+        restore_lines = [
+            l for l in log.splitlines()
+            if "clickhouse-backup restore" in l or "clickhouse-backup download" in l
+        ]
+        self.assertTrue(restore_lines, "script must actually run a restore")
+        for line in restore_lines:
+            self.assertNotIn("-n signoz", line,
+                              "restore/download must never target the live "
+                              "signoz namespace")
+            self.assertIn("dr-drill-clickhouse", line,
+                          "restore/download must target an isolated "
+                          "dr-drill-clickhouse-* namespace")
+        self.assertNotIn("--rm", log,
+                          "must never use --rm against a pod that could be live")
+
+    def test_deploys_and_tears_down_throwaway_restore_target(self):
+        self._install_happy_path_mocks()
+        self._run()
+        log = self._log()
+        self.assertIn("kubectl create namespace", log)
+        self.assertIn("clickhouse-restore-target.yaml", log)
+        self.assertIn("kubectl wait", log)
+        self.assertIn("kubectl delete namespace", log)
+
+    def test_tears_down_drill_namespace_even_on_failure(self):
+        self._mock_kubectl(exec_row_count="")
+        self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
+        self._run()
+        self.assertIn("kubectl delete namespace", self._log(),
+                      "cleanup trap must run kubectl delete namespace even "
+                      "when the drill fails partway through")
 
 
 class ClickhouseHelmReleaseBackupConfigTests(unittest.TestCase):

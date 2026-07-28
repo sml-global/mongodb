@@ -149,3 +149,44 @@ not Flux-reconciled, so there is no ordering dependency at all.
 - [ ] Remaining Theme 3, 1, 4 tasks each have passing content-assertion tests
       (repo convention) merged to main.
 - [ ] All new scripts/runbooks documented in the relevant platform contract doc.
+
+## Whole-Branch Review Findings and Fixes (post-Task-4)
+
+A final whole-branch review (comparing all 4 tasks together, not just per-task) found 2
+Critical and 4 Major integration defects invisible to any single task's review — each
+script was individually correct, but the composition was broken.
+
+### D10: One ServiceAccount cannot satisfy three scripts requiring three different IAM roles (Critical)
+A single CronJob ran all 3 drill scripts sequentially under one `dr-drill-runner`
+ServiceAccount. IRSA binds exactly one assumed role to a ServiceAccount's default
+identity; each script's D7 identity guard requires *its own* role name, so at most one
+of the three checks could ever pass — the other two would `FATAL: identity mismatch`
+and abort the Job under `set -euo pipefail`. **Fixed:** split into 3 separate CronJobs
+(`dr-drill-mongodb-weekly`, `dr-drill-postgresql-weekly`, `dr-drill-clickhouse-weekly`),
+each with its own dedicated ServiceAccount (`dr-drill-{mongodb,postgresql,clickhouse}-runner`),
+each IRSA-annotated with its own role ARN by `scripts/bootstrap-dr-drill-role-arns-configmap.sh`.
+Terraform's 3 trust policies were also corrected to scope to their own SA name (they had
+all incorrectly shared `dr-drill-runner`).
+
+### D11: ClickHouse restore was destructive against live production data (Critical)
+The ClickHouse script ran `clickhouse-backup restore --rm` directly against the live
+`signoz` namespace's ClickHouse pod — dropping and overwriting production tables, the
+opposite of an isolated drill, and a direct violation of D3. **Fixed:** backup
+create/upload still run against the live pod (safe — freeze+copy out, never mutates
+source); restore now deploys a throwaway ClickHouse instance into an isolated
+`dr-drill-clickhouse-*` namespace (`k8s/dr-drill/clickhouse-restore-target.yaml`,
+mirroring the MongoDB/PostgreSQL pattern) and restores/verifies there instead.
+
+### D12: MongoDB exec calls targeted the wrong container; PBM had no storage backend configured (Major)
+The restore-target pod has two containers (`mongodb`, `pbm-agent`); exec calls omitted
+`-c`, so `kubectl exec` silently defaulted to the first container, where the other
+tool isn't installed. The `pbm-agent` container also had no S3 storage backend
+configured, so it couldn't see the real `oms-pbm-backups` catalog. **Fixed:** `pbm`
+commands now target `-c pbm-agent`, `mongosh` targets `-c mongodb`; the script now runs
+`pbm config --set storage.type=s3 --set storage.s3.bucket=oms-pbm-backups` before
+checking status (credentials come from the pod's ambient IRSA identity, no static keys).
+
+### D13: CronJob referenced a container image that was never built (Major)
+`oms/dr-drill-runner:latest` does not exist anywhere in this repo or any registry.
+**Fixed:** all 3 CronJobs now use `alpine/k8s:1.33.13`, a real, actively maintained
+public image (50M+ pulls, verified via Docker Hub) bundling kubectl + AWS tooling.
