@@ -467,6 +467,23 @@ class PostgresqlRestoreDrillBehaviorTests(unittest.TestCase):
         result = self._run()
         self.assertRegex(result.stdout, r"RTO=\d+s")
 
+    def test_exec_targets_the_correct_statefulset_ordinal_zero_pod(self):
+        # Regression test for a real bug caught in task review: CNPG's
+        # Cluster is backed by a StatefulSet, whose pod ordinals start at 0.
+        # With `instances: 1` (this drill's throwaway target), the only pod
+        # is "dr-drill-restore-target-0" -- never "-1". The mock does not
+        # special-case the pod name, so this only passes if the script
+        # actually execs into the pod name the manifest implies.
+        self._install_happy_path_mocks()
+        self._run()
+        exec_lines = [l for l in self._log().splitlines() if "kubectl exec" in l]
+        self.assertTrue(exec_lines, "script must kubectl exec into the restore-target pod")
+        for line in exec_lines:
+            self.assertIn("dr-drill-restore-target-0", line,
+                          "must exec into ordinal-0 pod (StatefulSet, instances: 1), "
+                          "not '-1' or any other ordinal")
+            self.assertIn("psql", line)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -555,7 +572,10 @@ RTO_SECONDS=$((RESTORE_END - RESTORE_START))
 echo "Restore completed. RTO: ${RTO_SECONDS}s"
 
 echo "Verifying data integrity post-restore..."
-ROW_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" dr-drill-restore-target-1 -- \
+# CNPG Clusters are backed by a StatefulSet; pod ordinals start at 0, not 1.
+# With `instances: 1` (a throwaway single-node drill target), the only pod
+# is "<cluster-name>-0".
+ROW_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" dr-drill-restore-target-0 -- \
   psql -U postgres -d oms -tAc "SELECT COUNT(*) FROM orders;")
 if [ -z "${ROW_COUNT}" ] || [ "${ROW_COUNT}" -eq 0 ]; then
   echo "FATAL: post-restore row count is zero -- data integrity check failed"
@@ -568,7 +588,7 @@ echo "✅ DR Drill PASSED. RTO=${RTO_SECONDS}s, RestoredRows=${ROW_COUNT}"
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd /Users/frank/sml/oms/mongodb && python3 -m pytest tests/dr_drill/test_postgresql_restore_drill.py -v`
-Expected: PASS (8/8)
+Expected: PASS (9/9)
 
 - [ ] **Step 5: Make the script executable and commit**
 
@@ -1378,7 +1398,7 @@ Expected: PASS (12/12)
 - [ ] **Step 6: Run full dr_drill test suite together**
 
 Run: `cd /Users/frank/sml/oms/mongodb && python3 -m pytest tests/dr_drill/ -v`
-Expected: PASS (37/37 across Tasks 1-4: 9 + 8 + 8 + 12)
+Expected: PASS (38/38 across Tasks 1-4: 9 + 9 + 8 + 12)
 
 - [ ] **Step 7: Make the bootstrap script executable and commit**
 
