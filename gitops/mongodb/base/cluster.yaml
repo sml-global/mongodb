@@ -1,0 +1,30 @@
+apiVersion: psmdb.percona.com/v1
+kind: PerconaServerMongoDB
+metadata:
+  name: oms-mongodb
+  namespace: mongodb
+spec:
+  crVersion: "1.16.0"
+  image: percona/percona-server-mongodb:7.0
+  # IRSA: pods use this service account, which is annotated by Phase 2 Terraform
+  # with the operator IAM role ARN via platform_contract.mongodb_workload_service_account
+  replsets:
+    - name: rs0
+      size: 3
+      serviceAccountName: oms-mongodb-workload
+      volumeSpec:
+        pvc:
+          storageClassName: gp3
+          resources:
+            requests:
+              storage: 50Gi
+  backup:
+    enabled: true
+    storages:
+      s3-backup:
+        type: s3
+        s3:
+          region: us-east-1
+          # IRSA authentication — no credentials secret; pod identity via
+          # service account oms-mongodb-workload annotated with IAM role
+          credentialsSecret: ""

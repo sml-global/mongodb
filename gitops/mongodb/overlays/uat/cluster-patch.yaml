@@ -1,0 +1,6 @@
+- op: replace
+  path: /spec/replsets/0/size
+  value: 3
+- op: replace
+  path: /spec/backup/enabled
+  value: true

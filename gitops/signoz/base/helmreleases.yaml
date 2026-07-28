@@ -17,7 +17,11 @@ spec:
     global:
       storageClass: gp3-mongodb
     clickhouse:
-      password: "CHANGE_ME_BEFORE_PRODUCTION"
+      password:
+        valueFrom:
+          secretKeyRef:
+            name: signoz-clickhouse
+            key: password
     signoz:
       # Bootstraps the SigNoz admin (root) user at pod startup so no manual
       # "Sign Up" step is needed in the UI. Requires SigNoz v0.112.0+.

@@ -1,15 +1,4 @@
-output "mongodb_namespace" {
-  value = module.mongodb_prerequisites.mongodb_namespace
-}
-
-output "pbm_bucket_name" {
-  value = module.mongodb_prerequisites.pbm_bucket_name
-}
-
-output "operator_iam_role_arn" {
-  value = module.mongodb_prerequisites.operator_iam_role_arn
-}
-
-output "mongodb_workload_service_account" {
-  value = module.mongodb_prerequisites.mongodb_workload_service_account
+output "pbm_policy_id" {
+  description = "ID of the PBM S3 access policy (format: role_name:policy_name) attached to the Phase 2 operator role"
+  value       = aws_iam_role_policy.pbm_s3_access.id
 }

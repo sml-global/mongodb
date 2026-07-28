@@ -1,0 +1,9 @@
+# SigNoz schema fragment.
+# @requires eks-platform
+
+SIGNOZ_NAMESPACE|required|fixed:signoz|-
+SIGNOZ_VERSION|required|nonempty|-
+SIGNOZ_K8S_INFRA_VERSION|required|nonempty|-
+SIGNOZ_STORAGE_CLASS|required|fixed:gp3-mongodb|-
+SIGNOZ_OTEL_ENDPOINT|required|nonempty|-
+SIGNOZ_CLICKHOUSE_SECRET_NAME|required|nonempty|-

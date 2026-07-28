@@ -1,0 +1,9 @@
+# PostgreSQL schema fragment.
+# @requires eks-platform
+
+POSTGRESQL_REPLICA_COUNT|required|integer:1:10|-
+POSTGRESQL_STORAGE_CLASS|required|fixed:gp3|-
+POSTGRESQL_IMAGE_REPO|required|nonempty|-
+POSTGRESQL_OPERATOR_VERSION|required|nonempty|-
+POSTGRESQL_BACKUP_ENABLED|required|enum:true,false|-
+POSTGRESQL_BACKUP_SCHEDULE|optional|nonempty|-

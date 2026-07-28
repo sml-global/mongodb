@@ -51,6 +51,71 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# READINESS GATES: Ensure SigNoz platform services are Ready before provisioning
+echo ""
+echo "=== SigNoz Readiness Checks ==="
+echo "Waiting for SigNoz API services to be ready..."
+echo ""
+
+echo "  → Waiting for query-service..."
+if kubectl wait --for=condition=ready pod \
+  -l app.kubernetes.io/name=query-service \
+  -n signoz \
+  --timeout=300s >/dev/null 2>&1; then
+  echo "  ✅ query-service is Ready"
+else
+  echo "  ❌ query-service failed to reach Ready state within 300s"
+  exit 1
+fi
+
+echo "  → Waiting for frontend..."
+if kubectl wait --for=condition=ready pod \
+  -l app.kubernetes.io/name=frontend \
+  -n signoz \
+  --timeout=300s >/dev/null 2>&1; then
+  echo "  ✅ frontend is Ready"
+else
+  echo "  ❌ frontend failed to reach Ready state within 300s"
+  exit 1
+fi
+
+echo "  → Testing API endpoint connectivity..."
+max_attempts=30
+attempt=0
+
+while [ $attempt -lt $max_attempts ]; do
+  # Use kubectl exec into existing frontend pod (no ephemeral pod creation/cleanup spam)
+  if kubectl exec -n signoz -it \
+    $(kubectl get pod -n signoz -l app.kubernetes.io/name=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) \
+    -- curl -f -s http://localhost:3301/api/v1/dashboards >/dev/null 2>&1; then
+    echo "  ✅ API endpoint is responsive"
+    break
+  fi
+  echo "  ⏳ API not yet responsive, attempt $((attempt+1))/$max_attempts..."
+  sleep 10
+  ((attempt++)) || true
+done
+
+if [ $attempt -eq $max_attempts ]; then
+  echo "  ❌ API endpoint did not become responsive within $((max_attempts * 10))s"
+  exit 1
+fi
+
+echo ""
+echo "✅ All SigNoz services ready. Proceeding with observability provisioning..."
+echo ""
+
+# ENDPOINT VALIDATION: Restrict to internal network (prevent AWS egress charges)
+if [[ ! "$ENDPOINT" =~ (svc\.cluster\.local|127\.0\.0\.1|localhost) ]]; then
+  echo "⚠️  WARNING: SIGNOZ_ENDPOINT is not internal to cluster"
+  echo "   Endpoint: $ENDPOINT"
+  echo "   This will route dashboard import traffic through AWS NAT gateway"
+  echo "   Recommended: Use http://frontend.signoz.svc.cluster.local:3301"
+  echo ""
+  echo "Proceeding in 5 seconds (non-interactive mode)..."
+  sleep 5
+fi
+
 if ! kubectl -n signoz get secret signoz-api-key >/dev/null 2>&1; then
   echo "Secret 'signoz-api-key' not found in namespace 'signoz'; bootstrapping it now (headless browser, one time only) ..."
   bash "$ROOT_DIR/scripts/bootstrap-signoz-service-account.sh"
