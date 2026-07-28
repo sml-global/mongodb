@@ -73,7 +73,10 @@ RTO_SECONDS=$((RESTORE_END - RESTORE_START))
 echo "Restore completed. RTO: ${RTO_SECONDS}s"
 
 echo "Verifying data integrity post-restore..."
-ROW_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" dr-drill-restore-target-1 -- \
+# CNPG Clusters are backed by a StatefulSet; pod ordinals start at 0, not 1.
+# With `instances: 1` (a throwaway single-node drill target), the only pod
+# is "<cluster-name>-0".
+ROW_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" dr-drill-restore-target-0 -- \
   psql -U postgres -d oms -tAc "SELECT COUNT(*) FROM orders;")
 if [ -z "${ROW_COUNT}" ] || [ "${ROW_COUNT}" -eq 0 ]; then
   echo "FATAL: post-restore row count is zero -- data integrity check failed"
