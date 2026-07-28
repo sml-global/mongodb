@@ -71,15 +71,26 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         )
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
-    def _install_happy_path_mocks(self, sts_arn=DRILL_ROLE_ARN):
-        self._mock("kubectl", "exit 0")
-        self._mock("aws", f'echo "{sts_arn}"')
-        self._mock("pbm", (
-            'if [ "$1" = "status" ]; then exit 0; fi\n'
-            'if [ "$1" = "list" ]; then echo "2026-07-28T12:00:00Z"; exit 0; fi\n'
-            'if [ "$1" = "restore" ]; then exit 0; fi\n'
+    def _mock_kubectl(self, pbm_list_output="2026-07-28T12:00:00Z", pbm_status_exit=0,
+                       doc_count="42"):
+        # All pbm/mongosh interaction happens via `kubectl exec` -- this
+        # script runs on the operator's machine, not inside the cluster, so
+        # there is no local pbm/mongosh binary to mock separately.
+        self._mock("kubectl", (
+            'if [ "$1" = "get" ]; then echo "mongodb-restore-target-abc"; exit 0; fi\n'
+            'if [ "$1" = "exec" ]; then\n'
+            '  if [[ "$*" == *"pbm status"* ]]; then exit ' + str(pbm_status_exit) + '; fi\n'
+            '  if [[ "$*" == *"pbm list"* ]]; then echo "' + pbm_list_output + '"; exit 0; fi\n'
+            '  if [[ "$*" == *"pbm restore"* ]]; then exit 0; fi\n'
+            '  if [[ "$*" == *"mongosh"* ]]; then echo "' + doc_count + '"; exit 0; fi\n'
+            '  exit 0\n'
+            'fi\n'
+            'exit 0\n'
         ))
-        self._mock("mongosh", 'echo "42"')
+
+    def _install_happy_path_mocks(self, sts_arn=DRILL_ROLE_ARN):
+        self._mock_kubectl()
+        self._mock("aws", f'echo "{sts_arn}"')
 
     def _run(self):
         return subprocess.run(
@@ -115,30 +126,23 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
                                   "production namespace")
 
     def test_fails_closed_when_pbm_status_fails(self):
-        self._mock("kubectl", "exit 0")
+        self._mock_kubectl(pbm_status_exit=1)
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
-        self._mock("pbm", 'if [ "$1" = "status" ]; then exit 1; fi; exit 0')
-        self._mock("mongosh", 'echo "42"')
         result = self._run()
         self.assertNotEqual(result.returncode, 0,
                              "script must exit non-zero when pbm status fails")
 
     def test_fails_closed_when_no_backups_exist(self):
-        self._mock("kubectl", "exit 0")
+        self._mock_kubectl(pbm_list_output="")
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
-        self._mock("pbm", (
-            'if [ "$1" = "status" ]; then exit 0; fi\n'
-            'if [ "$1" = "list" ]; then echo ""; exit 0; fi\n'
-        ))
-        self._mock("mongosh", 'echo "42"')
         result = self._run()
         self.assertNotEqual(result.returncode, 0,
                              "script must exit non-zero when the PBM backup "
                              "catalog is empty")
 
     def test_fails_closed_when_post_restore_document_count_is_zero(self):
-        self._install_happy_path_mocks()
-        self._mock("mongosh", 'echo "0"')
+        self._mock_kubectl(doc_count="0")
+        self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
         result = self._run()
         self.assertNotEqual(result.returncode, 0,
                              "script must exit non-zero when the post-restore "
@@ -156,10 +160,8 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         self.assertIn("identity", (result.stdout + result.stderr).lower())
 
     def test_tears_down_drill_namespace_even_on_failure(self):
-        self._mock("kubectl", "exit 0")
+        self._mock_kubectl(pbm_status_exit=1)
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
-        self._mock("pbm", "exit 1")  # force failure mid-script
-        self._mock("mongosh", 'echo "42"')
         self._run()
         self.assertIn("kubectl delete namespace", self._log(),
                       "cleanup trap must run kubectl delete namespace even "
@@ -197,7 +199,7 @@ set -euo pipefail
 # production PBM write role.
 #
 # Usage:
-#   scripts/dr-drill-mongodb-restore.sh [--namespace <drill-ns>]
+#   scripts/dr-drill-mongodb-restore.sh [<drill-namespace>]
 
 DRILL_NAMESPACE="${1:-dr-drill-mongodb-$(date +%s)}"
 DRILL_IAM_ROLE_ARN="${DR_DRILL_MONGODB_ROLE_ARN:?Set DR_DRILL_MONGODB_ROLE_ARN (dr-drill-mongodb-restore-role, read-only)}"
@@ -229,13 +231,22 @@ echo "Deploying throwaway single-node MongoDB for restore target..."
 kubectl apply -n "${DRILL_NAMESPACE}" -f "$(dirname "$0")/../k8s/dr-drill/mongodb-restore-target.yaml"
 kubectl wait --for=condition=ready pod -l app=mongodb-restore-target -n "${DRILL_NAMESPACE}" --timeout=300s
 
+# This script runs on the operator's machine / a CI runner, not inside the
+# cluster -- so pbm and mongosh commands are always run via `kubectl exec`
+# into the restore-target pod (matching the pattern already used by
+# dr-drill-clickhouse-backup-restore.sh), never assumed reachable at
+# localhost:27017 from the caller's machine.
+RESTORE_POD=$(kubectl get pod -n "${DRILL_NAMESPACE}" -l app=mongodb-restore-target \
+  -o jsonpath='{.items[0].metadata.name}')
+
 echo "Checking PBM backup catalog (read-only drill role)..."
-pbm status --mongodb-uri="mongodb://localhost:27017" || {
+kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- pbm status --mongodb-uri="mongodb://localhost:27017" || {
   echo "FATAL: pbm status failed -- cannot enumerate backups for drill"
   exit 1
 }
 
-LATEST_BACKUP=$(pbm list --mongodb-uri="mongodb://localhost:27017" | grep -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z' | tail -1)
+LATEST_BACKUP=$(kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+  pbm list --mongodb-uri="mongodb://localhost:27017" | grep -Eo '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z' | tail -1)
 if [ -z "${LATEST_BACKUP}" ]; then
   echo "FATAL: no backups found in PBM catalog"
   exit 1
@@ -243,19 +254,63 @@ fi
 echo "Restoring backup: ${LATEST_BACKUP}"
 
 RESTORE_START=$(date +%s)
-pbm restore "${LATEST_BACKUP}" --mongodb-uri="mongodb://localhost:27017" --wait
+kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+  pbm restore "${LATEST_BACKUP}" --mongodb-uri="mongodb://localhost:27017" --wait
 RESTORE_END=$(date +%s)
 RTO_SECONDS=$((RESTORE_END - RESTORE_START))
 echo "Restore completed. RTO: ${RTO_SECONDS}s"
 
 echo "Verifying data integrity post-restore..."
-DOC_COUNT=$(mongosh "mongodb://localhost:27017" --quiet --eval "db.getSiblingDB('oms').orders.countDocuments({})")
+DOC_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -- \
+  mongosh "mongodb://localhost:27017" --quiet --eval "db.getSiblingDB('oms').orders.countDocuments({})")
 if [ -z "${DOC_COUNT}" ] || [ "${DOC_COUNT}" -eq 0 ]; then
   echo "FATAL: post-restore document count is zero -- data integrity check failed"
   exit 1
 fi
 echo "✅ Data integrity verified: ${DOC_COUNT} documents present"
 echo "✅ DR Drill PASSED. RTO=${RTO_SECONDS}s, RestoredDocs=${DOC_COUNT}"
+```
+
+- [ ] **Step 3b: Write the throwaway MongoDB restore-target manifest the script deploys**
+
+```yaml
+# k8s/dr-drill/mongodb-restore-target.yaml
+#
+# Single throwaway MongoDB + PBM sidecar, deployed fresh into each drill
+# namespace by scripts/dr-drill-mongodb-restore.sh. Not GitOps-managed --
+# this is drill scratch infrastructure, torn down by the script's cleanup
+# trap every run.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-restore-target
+  labels:
+    app: mongodb-restore-target
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb-restore-target
+  template:
+    metadata:
+      labels:
+        app: mongodb-restore-target
+    spec:
+      containers:
+        - name: mongodb
+          image: percona/percona-server-mongodb:6.0
+          ports:
+            - containerPort: 27017
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+        - name: pbm-agent
+          image: percona/percona-backup-mongodb:2.4
+          env:
+            - name: PBM_MONGODB_URI
+              value: "mongodb://localhost:27017"
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -267,7 +322,7 @@ Expected: PASS (9/9)
 
 ```bash
 chmod +x scripts/dr-drill-mongodb-restore.sh
-git add scripts/dr-drill-mongodb-restore.sh tests/dr_drill/test_mongodb_restore_drill.py
+git add scripts/dr-drill-mongodb-restore.sh k8s/dr-drill/mongodb-restore-target.yaml tests/dr_drill/test_mongodb_restore_drill.py
 git commit -m "feat(dr-drill): add MongoDB PBM restore drill with RTO measurement and IRSA identity guard"
 ```
 
