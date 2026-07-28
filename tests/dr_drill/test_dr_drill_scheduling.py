@@ -1,0 +1,175 @@
+"""Structural test suite for DR drill IAM least-privilege and CronJob
+scheduling.
+
+Terraform is verified with `terraform validate` (this repo's existing
+verification convention -- see AGENTS.md), which parses the real HCL and
+catches reference errors (e.g. an assume_role_policy pointing at a data
+source that was never defined) that no grep could ever catch. The CronJob
+is verified by parsing the YAML with PyYAML and asserting on structured
+fields, matching tests/signoz/test_gitops_manifests.py. Per
+writing-good-tests.md (v6.2.0): string-presence assertions counterfeit
+falsifiability.
+
+Note: `terraform validate` proves the HCL is internally consistent (types,
+references, required arguments). It does not prove the IAM policy behaves
+correctly against live AWS -- that is proven independently by the runtime
+identity guard (`aws sts get-caller-identity`) built into each drill script
+in Tasks 1-3, and ultimately by the drills actually passing in UAT.
+"""
+import os
+import stat
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+import yaml
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TF_DIR = REPO_ROOT / "platform-prerequisites" / "terraform" / "dr-drill"
+CRONJOB = REPO_ROOT / "k8s" / "dr-drill" / "cronjob.yaml"
+BOOTSTRAP_SCRIPT = REPO_ROOT / "scripts" / "bootstrap-dr-drill-role-arns-configmap.sh"
+
+
+class DrDrillTerraformValidationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        subprocess.run(
+            ["terraform", "init", "-backend=false", "-input=false"],
+            cwd=TF_DIR, capture_output=True, text=True, timeout=120,
+        )
+
+    def test_terraform_directory_exists(self):
+        self.assertTrue(TF_DIR.exists(), "platform-prerequisites/terraform/dr-drill must exist")
+
+    def test_terraform_validate_succeeds(self):
+        # Catches real reference errors -- e.g. assume_role_policy pointing
+        # at an undefined data source -- that grep cannot detect.
+        result = subprocess.run(
+            ["terraform", "validate", "-json"],
+            cwd=TF_DIR, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0,
+                          f"terraform validate failed:\n{result.stdout}\n{result.stderr}")
+
+    def test_terraform_fmt_check_passes(self):
+        result = subprocess.run(
+            ["terraform", "fmt", "-check", "-recursive"],
+            cwd=TF_DIR, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0,
+                          f"terraform fmt -check failed:\n{result.stdout}")
+
+    def test_terraform_never_defines_a_kubernetes_provider(self):
+        # This repo's convention: Terraform manages AWS only. Kubernetes
+        # objects are always created via GitOps/kubectl scripts (see
+        # bootstrap-dr-drill-role-arns-configmap.sh below), never the
+        # `kubernetes` Terraform provider.
+        for tf_file in TF_DIR.glob("*.tf"):
+            self.assertNotIn('provider "kubernetes"', tf_file.read_text())
+            self.assertNotIn("resource \"kubernetes_", tf_file.read_text())
+
+    def test_terraform_outputs_all_three_role_arns(self):
+        result = subprocess.run(
+            ["terraform", "output", "-json"],
+            cwd=TF_DIR, capture_output=True, text=True, timeout=30,
+        )
+        # Without real AWS credentials `terraform output` returns an empty
+        # object (no state), but it must at least declare the output names --
+        # verified structurally by grepping the parsed HCL output blocks via
+        # `terraform validate`'s success above, plus this direct check that
+        # the output declarations exist in the source.
+        main_tf = (TF_DIR / "main.tf").read_text()
+        for output_name in (
+            "dr_drill_mongodb_role_arn",
+            "dr_drill_postgresql_role_arn",
+            "dr_drill_clickhouse_role_arn",
+        ):
+            self.assertIn(f'output "{output_name}"', main_tf)
+
+
+class DrDrillRoleArnsBootstrapScriptBehaviorTests(unittest.TestCase):
+    """Behavioral test for the kubectl-based bootstrap script (PATH-mocked
+    terraform + kubectl), matching the D6 convention for bash scripts."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.bin_dir = Path(self.tmp.name)
+        self.log_path = self.bin_dir / "calls.log"
+        self.env = os.environ.copy()
+        self.env["PATH"] = f"{self.bin_dir}:{self.env['PATH']}"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _mock(self, name, body):
+        path = self.bin_dir / name
+        path.write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo "{name} $*" >> "{self.log_path}"\n'
+            f"{body}\n"
+        )
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+    def _log(self):
+        return self.log_path.read_text() if self.log_path.exists() else ""
+
+    def test_reads_all_three_outputs_and_creates_configmap(self):
+        self._mock("terraform", (
+            'if [[ "$*" == *"dr_drill_mongodb_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-mongodb-restore-role"; fi\n'
+            'if [[ "$*" == *"dr_drill_postgresql_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-postgresql-restore-role"; fi\n'
+            'if [[ "$*" == *"dr_drill_clickhouse_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-clickhouse-backup-role"; fi\n'
+        ))
+        self._mock("kubectl", "cat > /dev/null; exit 0")
+        result = subprocess.run(
+            ["bash", str(BOOTSTRAP_SCRIPT)],
+            env=self.env, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("dr-drill-role-arns", self._log())
+        self.assertIn("DR_DRILL_MONGODB_ROLE_ARN", self._log())
+
+
+class DrDrillCronJobStructureTests(unittest.TestCase):
+    """Structural (parsed-field) assertions, not substring search."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.doc = yaml.safe_load(CRONJOB.read_text())
+
+    def test_cronjob_exists_and_parses(self):
+        self.assertEqual(self.doc["kind"], "CronJob")
+
+    def test_cronjob_targets_dr_drill_uat_namespace(self):
+        self.assertEqual(self.doc["metadata"]["namespace"], "dr-drill-uat")
+
+    def test_cronjob_runs_weekly_sunday_0300_utc(self):
+        self.assertEqual(self.doc["spec"]["schedule"], "0 3 * * 0")
+
+    def test_cronjob_pod_spec_uses_dedicated_service_account(self):
+        pod_spec = self.doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+        self.assertEqual(pod_spec["serviceAccountName"], "dr-drill-runner")
+
+    def test_cronjob_invokes_all_three_drill_scripts_in_order(self):
+        pod_spec = self.doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+        command_str = pod_spec["containers"][0]["command"][-1]
+        mongo_idx = command_str.index("dr-drill-mongodb-restore.sh")
+        pg_idx = command_str.index("dr-drill-postgresql-restore.sh")
+        ch_idx = command_str.index("dr-drill-clickhouse-backup-restore.sh")
+        self.assertLess(mongo_idx, pg_idx)
+        self.assertLess(pg_idx, ch_idx)
+
+    def test_cronjob_sources_role_arns_from_bootstrapped_configmap(self):
+        # No hardcoded AWS account ID/ARNs in the YAML -- real values come
+        # from the dr-drill-role-arns ConfigMap (created by
+        # scripts/bootstrap-dr-drill-role-arns-configmap.sh from Terraform
+        # outputs, Step 3b).
+        container = self.doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+        config_map_refs = [
+            ref["configMapRef"]["name"] for ref in container.get("envFrom", [])
+        ]
+        self.assertIn("dr-drill-role-arns", config_map_refs)
+
+
+if __name__ == "__main__":
+    unittest.main()

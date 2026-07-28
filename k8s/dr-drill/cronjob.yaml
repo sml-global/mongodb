@@ -1,0 +1,35 @@
+# k8s/dr-drill/cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-drill-weekly
+  namespace: dr-drill-uat
+spec:
+  # Weekly, Sunday 03:00 UTC -- low-traffic window in the UAT environment.
+  schedule: "0 3 * * 0"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: dr-drill-runner
+          containers:
+            - name: dr-drill-runner
+              image: oms/dr-drill-runner:latest
+              # Real expected drill-role ARNs, sourced from the
+              # dr-drill-role-arns ConfigMap created by
+              # scripts/bootstrap-dr-drill-role-arns-configmap.sh (values are
+              # the actual Terraform-output role ARNs -- never hardcoded
+              # here). Re-run that script any time after `terraform apply`.
+              envFrom:
+                - configMapRef:
+                    name: dr-drill-role-arns
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  echo "Running weekly DR drills against UAT..."
+                  /scripts/dr-drill-mongodb-restore.sh
+                  /scripts/dr-drill-postgresql-restore.sh
+                  /scripts/dr-drill-clickhouse-backup-restore.sh
+          restartPolicy: Never
