@@ -38,6 +38,12 @@ variable "public_subnet_cidrs" {
   type        = list(string)
 }
 
+variable "database_subnet_cidrs" {
+  description = "Database subnet CIDR blocks for Aurora, one per AZ. Empty list for CNPG-only environments (dev)."
+  type        = list(string)
+  default     = []
+}
+
 variable "nat_gateway_count" {
   description = "Number of NAT gateways."
   type        = number
