@@ -96,7 +96,9 @@ if __name__ == "__main__":
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `python3 -m unittest tests.network_cidr.test_cidr_allocation -v`
-Expected: `ModuleNotFoundError` / `FileNotFoundError` — `scripts/validate_cidr_allocations.py` does not exist yet.
+Expected: `FileNotFoundError` (verified by direct test — `importlib.util`'s `exec_module`
+attempts to open the file's source and raises `FileNotFoundError`, not `ModuleNotFoundError`,
+when the path doesn't exist) — `scripts/validate_cidr_allocations.py` does not exist yet.
 
 - [ ] **Step 3: Write the validator implementation**
 
