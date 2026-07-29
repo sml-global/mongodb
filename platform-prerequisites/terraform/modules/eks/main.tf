@@ -96,6 +96,7 @@ resource "aws_eks_addon" "managed" {
   resolve_conflicts_on_create = each.value.resolve_conflicts
   resolve_conflicts_on_update = each.value.resolve_conflicts
   service_account_role_arn    = each.value.service_account_role ? var.addon_role_arn : null
+  configuration_values        = each.value.configuration_values
 
   depends_on = [aws_eks_node_group.primary]
 }
