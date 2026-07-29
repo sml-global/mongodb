@@ -406,6 +406,123 @@ git commit -m "feat: add database subnet tier to network module for Aurora DB su
 
 ---
 
+### Task 2.5: Add S3 Gateway VPC Endpoint to the Network Module
+
+> **Inserted after Task 2's review**, following a genuine gap found by direct verification
+> (not present in the original plan): `docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html`
+> confirms Gateway VPC Endpoints for S3 are free and remove the NAT Gateway hop for S3 traffic.
+> This repo's MongoDB PBM backups (`pbm_bucket_name`) and PostgreSQL/CNPG WAL archive backups
+> (`cnpg_backup_bucket_name`) both push real, non-trivial volume to S3 today — real traffic,
+> not a hypothetical. Without this endpoint, that traffic routes private/database subnet → NAT
+> Gateway → Internet Gateway → S3's public endpoint, incurring NAT Gateway per-GB data
+> processing charges for no benefit (the endpoint is free and simpler).
+
+**Files:**
+- Modify: `platform-prerequisites/terraform/modules/network/main.tf`
+- Modify: `platform-prerequisites/terraform/modules/network/outputs.tf`
+- Test: `tests/network_cidr/test_s3_gateway_endpoint.py`
+
+**Interfaces:**
+- Consumes: `aws_route_table.private`, `aws_route_table.database` (both from Task 2, unchanged).
+- Produces: `module.network.s3_vpc_endpoint_id` output — not consumed by any other task in
+  this plan, informational only.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/network_cidr/test_s3_gateway_endpoint.py`:
+
+```python
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+NETWORK_MAIN = REPO_ROOT / "platform-prerequisites/terraform/modules/network/main.tf"
+NETWORK_OUTPUTS = REPO_ROOT / "platform-prerequisites/terraform/modules/network/outputs.tf"
+
+
+class S3GatewayEndpointTests(unittest.TestCase):
+    def test_s3_gateway_endpoint_resource_exists(self):
+        text = NETWORK_MAIN.read_text(encoding="utf-8")
+        self.assertIn('resource "aws_vpc_endpoint" "s3"', text)
+        self.assertIn('vpc_endpoint_type = "Gateway"', text)
+
+    def test_s3_endpoint_attaches_to_private_and_database_route_tables(self):
+        text = NETWORK_MAIN.read_text(encoding="utf-8")
+        self.assertIn("aws_route_table.private", text)
+        self.assertIn("aws_route_table.database", text)
+
+    def test_s3_endpoint_id_output_exists(self):
+        text = NETWORK_OUTPUTS.read_text(encoding="utf-8")
+        self.assertIn('output "s3_vpc_endpoint_id"', text)
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `python3 -m unittest tests.network_cidr.test_s3_gateway_endpoint -v`
+Expected: FAIL — none of these exist yet.
+
+- [ ] **Step 3: Add the Gateway VPC Endpoint resource**
+
+In `platform-prerequisites/terraform/modules/network/main.tf`, add after the last
+`resource "aws_route_table_association" "database"` block:
+
+```hcl
+data "aws_region" "current" {}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.this.id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  vpc_endpoint_type = "Gateway"
+
+  route_table_ids = concat(
+    [for rt in aws_route_table.private : rt.id],
+    [for rt in aws_route_table.database : rt.id],
+  )
+
+  tags = {
+    Name = "${var.name_prefix}-s3-endpoint"
+  }
+}
+```
+
+Note: `aws_route_table.database` is an empty map when `database_subnet_cidrs` is `[]` (Dev,
+per Task 2), so `concat(..., [for rt in aws_route_table.database : rt.id])` correctly
+produces an empty list contribution in that case — no conditional needed.
+
+- [ ] **Step 4: Add the output**
+
+In `platform-prerequisites/terraform/modules/network/outputs.tf`, add:
+
+```hcl
+output "s3_vpc_endpoint_id" {
+  description = "Gateway VPC endpoint ID for S3 (removes the NAT Gateway hop for S3-bound traffic, e.g. PBM/CNPG backups)."
+  value       = aws_vpc_endpoint.s3.id
+}
+```
+
+- [ ] **Step 5: Run the test to verify it passes**
+
+Run: `python3 -m unittest tests.network_cidr.test_s3_gateway_endpoint -v`
+Expected: PASS (all 3 tests).
+
+- [ ] **Step 6: Re-run Task 1 and Task 2's tests to confirm no regression**
+
+Run: `python3 -m unittest tests.network_cidr.test_cidr_allocation tests.network_cidr.test_network_module_database_tier -v`
+Expected: all previously-passing tests still PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add platform-prerequisites/terraform/modules/network/main.tf platform-prerequisites/terraform/modules/network/outputs.tf tests/network_cidr/test_s3_gateway_endpoint.py
+git commit -m "feat: add S3 Gateway VPC Endpoint to avoid NAT Gateway costs for backup traffic"
+```
+
+---
+
 ### Task 3: Enable EKS VPC CNI Prefix Delegation
 
 **Files:**
