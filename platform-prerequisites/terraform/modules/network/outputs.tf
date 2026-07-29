@@ -22,3 +22,8 @@ output "database_subnet_ids" {
   description = "Database subnet IDs for Aurora DB subnet groups. Empty list when no database tier exists."
   value       = [for subnet in aws_subnet.database : subnet.id]
 }
+
+output "s3_vpc_endpoint_id" {
+  description = "Gateway VPC endpoint ID for S3 (removes the NAT Gateway hop for S3-bound traffic, e.g. PBM/CNPG backups)."
+  value       = aws_vpc_endpoint.s3.id
+}
