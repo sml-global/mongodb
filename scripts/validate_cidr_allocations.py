@@ -8,7 +8,7 @@ import re
 import sys
 from pathlib import Path
 
-_VPC_CIDR_RE = re.compile(r'vpc_cidr\s*=\s*"([^"]+)"')
+_VPC_CIDR_RE = re.compile(r'\bvpc_cidr\s*=\s*"([^"]+)"')
 _LIST_VAR_RE = re.compile(r'(\w*subnet_cidrs)\s*=\s*\[([^\]]*)\]', re.DOTALL)
 _STRING_RE = re.compile(r'"([^"]+)"')
 
