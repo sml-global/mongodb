@@ -17,3 +17,8 @@ output "public_subnet_ids" {
   description = "Public subnet IDs for internet-facing load balancers when needed."
   value       = [for subnet in aws_subnet.public : subnet.id]
 }
+
+output "database_subnet_ids" {
+  description = "Database subnet IDs for Aurora DB subnet groups. Empty list when no database tier exists."
+  value       = [for subnet in aws_subnet.database : subnet.id]
+}

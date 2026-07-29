@@ -38,6 +38,17 @@ variable "public_subnet_cidrs" {
   }
 }
 
+variable "database_subnet_cidrs" {
+  description = "Database subnet CIDR blocks, one per AZ. Empty list means no database tier (CNPG environments)."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.database_subnet_cidrs) == 0 || length(var.database_subnet_cidrs) == length(var.availability_zones)
+    error_message = "database_subnet_cidrs must be empty or match availability_zones length."
+  }
+}
+
 variable "nat_gateway_count" {
   description = "Number of NAT gateways for private subnet egress."
   type        = number
