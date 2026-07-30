@@ -4,6 +4,7 @@ expected_account_id = "REPLACE_ME"
 environment         = "REPLACE_ME"
 name_prefix         = "oms-REPLACE_ME-postgresql"
 
+# All Aurora variables below can be omitted entirely for CNPG-only environments (dev/sit/sandbox); they default to empty and disable the Aurora resources.
 # From eks-platform's platform_contract output — copy manually, this root has no remote_state dependency.
 vpc_id               = "REPLACE_ME_VPC_ID"
 database_subnet_ids  = ["REPLACE_ME_SUBNET_ID_1", "REPLACE_ME_SUBNET_ID_2"]
