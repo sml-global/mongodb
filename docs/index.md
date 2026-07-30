@@ -52,6 +52,19 @@ Use the operational links above for execution. The approved documents are the
 decision record and implementation scope, not substitutes for the setup,
 runbook, or verification procedures.
 
+## Approved Network CIDR Redesign & Aurora Migration
+
+- [VPC Subnet Allocation and Boomi Networking Design](superpowers/specs/2026-07-29-vpc-subnet-and-boomi-routing-design.md)
+  defines the shared `10.200.0.0/16` CIDR allocation across dev/uat/prod/sit and the
+  Dev-SIT-CNPG / UAT-Prod-Aurora database engine split.
+- [Network CIDR Redesign & UAT Provisioning Implementation Plan](superpowers/plans/2026-07-29-network-and-uat-provisioning.md)
+  implements the design: new `prod` environment, migrated `uat`/`dev` CIDRs, Aurora Terraform
+  resources, and the [Sandbox Teardown Runbook](references/sandbox-teardown-runbook.md).
+- **Follow-up required:** `gitops/postgresql/overlays/uat/` (the existing CNPG deployment for
+  UAT) is superseded by this migration and needs an explicit, manual decommission step before
+  Aurora becomes UAT's live database — see the status note in
+  [PostgreSQL Platform Contract](references/postgresql-platform-contract.md).
+
 ## Why Provisioning Is Split
 
 The standard day-1 flow intentionally separates:

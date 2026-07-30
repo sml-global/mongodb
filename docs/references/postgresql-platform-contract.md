@@ -6,6 +6,17 @@
 **StorageClass:** gp3-postgresql  
 **Backup System:** Continuous WAL archival to AWS S3
 
+> **Scope update (2026-07-30):** this contract now applies to **Dev/SIT only**. UAT and
+> Prod are migrating from CNPG to AWS Aurora PostgreSQL (managed RDS) per
+> [VPC Subnet Allocation and Boomi Networking Design](superpowers/specs/2026-07-29-vpc-subnet-and-boomi-routing-design.md#database-engine-decision)
+> and the Aurora Terraform resources in
+> [platform-prerequisites/terraform/postgresql/main.tf](../../platform-prerequisites/terraform/postgresql/main.tf).
+> The existing `gitops/postgresql/overlays/uat/` CNPG deployment for UAT is superseded and
+> requires a manual decommission step (not yet performed as of this date) before Aurora
+> becomes UAT's live database — this is a real infrastructure change, not a docs-only update,
+> and should follow the same explicit-confirmation pattern as
+> [sandbox-teardown-runbook.md](sandbox-teardown-runbook.md).
+
 ---
 
 ## Ownership & Maintenance
