@@ -6,4 +6,5 @@ eks_platform_state_bucket       = "oms-terraform-state"
 eks_platform_state_key          = "oms/prod/eks-platform.tfstate"
 eks_platform_state_use_lockfile = true
 
+# Operator must populate before real prod workloads run.
 identities = {}
