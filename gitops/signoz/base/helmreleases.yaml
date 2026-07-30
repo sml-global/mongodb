@@ -22,6 +22,19 @@ spec:
           secretKeyRef:
             name: signoz-clickhouse
             key: password
+      # Dedicated ServiceAccount name so the live ClickHouse pod can be
+      # bound to its own least-privilege IAM identity via EKS Pod Identity
+      # (write-only s3:PutObject/ListBucket scoped to
+      # oms-signoz-clickhouse-backups -- see
+      # platform-prerequisites/terraform/dr-drill/main.tf
+      # signoz_clickhouse_backup_writer_role). `create: true` is the
+      # subchart default, so the chart creates this ServiceAccount itself;
+      # verified against the real upstream values.yaml (`serviceAccount:
+      # {create, name, annotations}`, resolved via the
+      # `clickhouse.serviceAccountName` named template), not fabricated.
+      # See docs/superpowers/specs/2026-07-28-phase4-day2-operations-design.md (D15).
+      serviceAccount:
+        name: signoz-clickhouse-workload
       # clickhouse-backup sidecar: enables application-consistent backups
       # (FREEZE TABLE-based) instead of raw EBS snapshots. Wired via the real
       # `extraContainers` hook exposed by the upstream clickhouse subchart
