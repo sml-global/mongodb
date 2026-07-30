@@ -88,19 +88,19 @@ Single source of truth for all deployed versions. Update this table when any com
 | **Provisioned by** | `scripts/provision.sh mongodb` |
 | **Verification** | [Verification Commands § MongoDB](verification-commands.md#mongodb-replica-set) |
 
-### PostgreSQL (Aurora)
+### PostgreSQL
 
 | Aspect | Detail |
 |---|---|
-| **What** | AWS Aurora PostgreSQL 18-compatible cluster with a single provisioned writer instance. |
-| **Why** | Primary application database for OMS — stores orders, inventory, customers, and operational data. Relational model suits transactional workloads with strong consistency. |
-| **How it helps** | Managed service with automatic backups, failover, and patching. Single writer is cost-effective for dev; scales to multi-AZ in production. |
-| **Namespace** | N/A (AWS managed service, not in Kubernetes) |
+| **What** | Dev/SIT: CloudNativePG (CNPG), a self-managed PostgreSQL operator running in-cluster, 3-node replica set, continuous WAL archival to S3. UAT/Prod: AWS Aurora PostgreSQL (managed RDS), engine kept in lockstep between the two, with `manage_master_user_password` (AWS Secrets Manager) instead of any stored password. |
+| **Why** | Primary application database for OMS — stores orders, inventory, customers, and operational data. CNPG keeps dev/SIT cost low; UAT/Prod use a real managed engine for production-representative validation ahead of go-live. |
+| **How it helps** | Dev/SIT: no AWS RDS cost, full operator control, same engine family as prod. UAT/Prod: automatic backups, failover, and patching via AWS, with UAT validating against the same engine version Prod will run. |
+| **Namespace** | Dev/SIT: `postgresql` (CNPG, in-cluster). UAT/Prod: N/A (AWS managed service, not in Kubernetes). |
 | **Owner** | Infra Architect / Platform team |
-| **Depends on** | VPC, private subnets, security groups (all provisioned by Terraform) |
+| **Depends on** | Dev/SIT: CNPG operator, `gp3-postgresql` StorageClass, S3 WAL archive bucket. UAT/Prod: VPC database subnet tier, security group, `aws_db_subnet_group` (all provisioned by the `postgresql` Terraform root). |
 | **Depended on by** | OMS application services |
-| **Provisioned by** | `scripts/provision.sh pg` |
-| **Verification** | [Verification Commands § PostgreSQL](verification-commands.md#postgresql-aurora) |
+| **Provisioned by** | Dev/SIT: `scripts/provision.sh postgresql` (GitOps). UAT/Prod: `platform-prerequisites/terraform/postgresql` (Terraform, `aws_rds_cluster`). |
+| **Verification** | [Verification Commands § PostgreSQL](verification-commands.md#postgresql) |
 
 ### SigNoz
 
