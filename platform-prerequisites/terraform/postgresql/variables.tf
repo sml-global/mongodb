@@ -40,33 +40,38 @@ variable "tags" {
 }
 
 variable "vpc_id" {
-  description = "VPC ID from the eks-platform platform_contract output, for the Aurora security group."
+  description = "VPC ID from the eks-platform platform_contract output, for the Aurora security group. Empty string means no Aurora in this environment (CNPG-only)."
   type        = string
+  default     = ""
 }
 
 variable "database_subnet_ids" {
-  description = "Database subnet IDs from eks-platform's platform_contract.database_subnet_ids output."
+  description = "Database subnet IDs from eks-platform's platform_contract.database_subnet_ids output. Empty list means no Aurora in this environment (CNPG-only)."
   type        = list(string)
+  default     = []
 
   validation {
-    condition     = length(var.database_subnet_ids) >= 2
-    error_message = "database_subnet_ids must include at least two subnets (AWS RDS/Aurora hard requirement: a DB subnet group must span at least two Availability Zones)."
+    condition     = length(var.database_subnet_ids) == 0 || length(var.database_subnet_ids) >= 2
+    error_message = "database_subnet_ids must be empty or include at least two subnets (AWS RDS/Aurora hard requirement: a DB subnet group must span at least two Availability Zones)."
   }
 }
 
 variable "allowed_source_security_group_id" {
-  description = "Security group ID (typically the EKS node/workload security group) allowed to reach Aurora on the PostgreSQL port."
+  description = "Security group ID (typically the EKS node/workload security group) allowed to reach Aurora on the PostgreSQL port. Empty string means no Aurora in this environment (CNPG-only)."
   type        = string
+  default     = ""
 }
 
 variable "aurora_engine_version" {
-  description = "Aurora PostgreSQL engine version, kept in lockstep between uat and prod per the Database Engine Decision in the design spec."
+  description = "Aurora PostgreSQL engine version, kept in lockstep between uat and prod per the Database Engine Decision in the design spec. Empty string means no Aurora in this environment (CNPG-only)."
   type        = string
+  default     = ""
 }
 
 variable "aurora_instance_class" {
-  description = "Aurora DB instance class (for example db.r6g.large)."
+  description = "Aurora DB instance class (for example db.r6g.large). Empty string means no Aurora in this environment (CNPG-only)."
   type        = string
+  default     = ""
 }
 
 variable "aurora_instance_count" {
@@ -81,11 +86,13 @@ variable "aurora_instance_count" {
 }
 
 variable "aurora_database_name" {
-  description = "Initial database name created in the Aurora cluster."
+  description = "Initial database name created in the Aurora cluster. Empty string means no Aurora in this environment (CNPG-only)."
   type        = string
+  default     = ""
 }
 
 variable "aurora_master_username" {
-  description = "Aurora master username. The password is managed by AWS Secrets Manager (manage_master_user_password), never set here."
+  description = "Aurora master username. The password is managed by AWS Secrets Manager (manage_master_user_password), never set here. Empty string means no Aurora in this environment (CNPG-only)."
   type        = string
+  default     = ""
 }

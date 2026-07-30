@@ -20,6 +20,7 @@ resource "aws_iam_role_policy" "cnpg_backup_access" {
 }
 
 resource "aws_db_subnet_group" "aurora" {
+  count      = length(var.database_subnet_ids) > 0 ? 1 : 0
   name       = "${var.name_prefix}-aurora"
   subnet_ids = var.database_subnet_ids
 
@@ -27,6 +28,7 @@ resource "aws_db_subnet_group" "aurora" {
 }
 
 resource "aws_security_group" "aurora" {
+  count       = length(var.database_subnet_ids) > 0 ? 1 : 0
   name_prefix = "${var.name_prefix}-aurora-"
   description = "Restricts PostgreSQL traffic to the approved workload security group only."
   vpc_id      = var.vpc_id
@@ -49,14 +51,15 @@ resource "aws_security_group" "aurora" {
 }
 
 resource "aws_rds_cluster" "aurora" {
+  count                       = length(var.database_subnet_ids) > 0 ? 1 : 0
   cluster_identifier          = "${var.name_prefix}-aurora"
   engine                      = "aurora-postgresql"
   engine_version              = var.aurora_engine_version
   database_name               = var.aurora_database_name
   master_username             = var.aurora_master_username
   manage_master_user_password = true
-  db_subnet_group_name        = aws_db_subnet_group.aurora.name
-  vpc_security_group_ids      = [aws_security_group.aurora.id]
+  db_subnet_group_name        = aws_db_subnet_group.aurora[0].name
+  vpc_security_group_ids      = [aws_security_group.aurora[0].id]
   storage_encrypted           = true
   kms_key_id                  = var.cluster_kms_key_arn
   backup_retention_period     = 7
@@ -69,12 +72,12 @@ resource "aws_rds_cluster" "aurora" {
 }
 
 resource "aws_rds_cluster_instance" "aurora" {
-  count              = var.aurora_instance_count
+  count              = length(var.database_subnet_ids) > 0 ? var.aurora_instance_count : 0
   identifier         = "${var.name_prefix}-aurora-${count.index + 1}"
-  cluster_identifier = aws_rds_cluster.aurora.id
+  cluster_identifier = aws_rds_cluster.aurora[0].id
   instance_class     = var.aurora_instance_class
-  engine             = aws_rds_cluster.aurora.engine
-  engine_version     = aws_rds_cluster.aurora.engine_version
+  engine             = aws_rds_cluster.aurora[0].engine
+  engine_version     = aws_rds_cluster.aurora[0].engine_version
 
   tags = var.tags
 }
