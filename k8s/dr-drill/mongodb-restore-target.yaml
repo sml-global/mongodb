@@ -36,8 +36,22 @@ spec:
               command: ["mongosh", "--eval", "db.adminCommand('ping')"]
             initialDelaySeconds: 5
             periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
         - name: pbm-agent
           image: percona/percona-backup-mongodb:2.4
           env:
             - name: PBM_MONGODB_URI
               value: "mongodb://localhost:27017"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
