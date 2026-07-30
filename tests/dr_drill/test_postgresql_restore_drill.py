@@ -92,6 +92,23 @@ class PostgresqlRestoreDrillBehaviorTests(unittest.TestCase):
         self.assertIn("barmanObjectStore",
                       manifest["spec"]["externalClusters"][0])
 
+    def test_applied_manifest_attaches_the_dr_drill_service_account(self):
+        # So s3Credentials.inheritFromIAMRole below has an identity to
+        # inherit from -- Cluster.spec.serviceAccountName (verified against
+        # cloudnative-pg.io/docs/devel/cloudnative-pg.v1), not fabricated.
+        self._install_happy_path_mocks()
+        self._run()
+        manifest = self._applied_manifest()
+        self.assertEqual(manifest["spec"]["serviceAccountName"],
+                          "dr-drill-postgresql-runner")
+
+    def test_creates_a_matching_service_account_in_the_drill_namespace(self):
+        # ServiceAccounts are namespace-scoped; the CNPG-managed pod's own
+        # (dynamic, timestamped) namespace needs its own SA of this name.
+        self._install_happy_path_mocks()
+        self._run()
+        self.assertIn("create serviceaccount dr-drill-postgresql-runner", self._log())
+
     def test_never_targets_production_namespace(self):
         self._install_happy_path_mocks()
         self._run()

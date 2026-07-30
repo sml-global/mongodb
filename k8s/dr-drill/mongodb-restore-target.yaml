@@ -20,6 +20,12 @@ spec:
       labels:
         app: mongodb-restore-target
     spec:
+      # Grants the pbm-agent container an AWS identity (EKS Pod Identity) to
+      # reach the oms-pbm-backups S3 bucket. Requires a ServiceAccount of
+      # this name to exist in the drill's own (dynamic) namespace --
+      # created by scripts/dr-drill-mongodb-restore.sh alongside the
+      # namespace itself.
+      serviceAccountName: dr-drill-mongodb-runner
       containers:
         - name: mongodb
           image: percona/percona-server-mongodb:6.0

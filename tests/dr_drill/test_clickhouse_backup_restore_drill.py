@@ -200,5 +200,19 @@ class ClickhouseHelmReleaseBackupConfigTests(unittest.TestCase):
         self.assertNotEqual(bucket, "oms-pbm-backups")
 
 
+class ClickhouseRestoreTargetManifestTests(unittest.TestCase):
+    """Structural (parsed-field) assertions on the throwaway restore-target
+    Deployment, matching the convention in tests/signoz/test_gitops_manifests.py."""
+
+    @classmethod
+    def setUpClass(cls):
+        manifest_path = REPO_ROOT / "k8s" / "dr-drill" / "clickhouse-restore-target.yaml"
+        cls.deployment = yaml.safe_load(manifest_path.read_text())
+
+    def test_pod_template_uses_the_dedicated_service_account(self):
+        pod_spec = self.deployment["spec"]["template"]["spec"]
+        self.assertEqual(pod_spec["serviceAccountName"], "dr-drill-clickhouse-runner")
+
+
 if __name__ == "__main__":
     unittest.main()

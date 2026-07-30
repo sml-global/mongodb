@@ -39,6 +39,10 @@ fi
 echo "✅ Identity verified: running as ${ASSUMED_IDENTITY_ARN}"
 
 kubectl create namespace "${DRILL_NAMESPACE}"
+# ServiceAccounts are namespace-scoped, so the CNPG-managed restore-target
+# pod needs one of this name inside its own (dynamic) namespace, not just
+# the one bootstrap-dr-drill-role-arns-configmap.sh created in dr-drill-uat.
+kubectl create serviceaccount dr-drill-postgresql-runner -n "${DRILL_NAMESPACE}"
 
 cat <<EOF | kubectl apply -n "${DRILL_NAMESPACE}" -f -
 apiVersion: postgresql.cnpg.io/v1
@@ -47,6 +51,13 @@ metadata:
   name: dr-drill-restore-target
 spec:
   instances: 1
+  # Attaches the cluster-managed pods to our own ServiceAccount (EKS Pod
+  # Identity) instead of CNPG's default per-cluster generated one, so
+  # s3Credentials.inheritFromIAMRole below has an identity to inherit from.
+  # Real CNPG API field (verified against cloudnative-pg.io/docs/devel/
+  # cloudnative-pg.v1 -- Cluster.spec.serviceAccountName, mutually
+  # exclusive with serviceAccountTemplate), not fabricated.
+  serviceAccountName: dr-drill-postgresql-runner
   storage:
     size: 10Gi
     storageClass: gp3-mongodb
