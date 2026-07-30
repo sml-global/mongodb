@@ -1430,7 +1430,7 @@ terraform apply sandbox-mongodb-destroy.tfplan
 ## Step 2: Destroy consumers — `postgresql`
 
 ```bash
-cd ../postgresql
+cd platform-prerequisites/terraform/postgresql
 terraform init -reconfigure
 terraform plan -destroy -var-file=../environments/sandbox/postgresql.tfvars -out=sandbox-postgresql-destroy.tfplan
 terraform apply sandbox-postgresql-destroy.tfplan
@@ -1447,7 +1447,7 @@ those exact roles (`operator_iam_role_arn`, `postgresql_operator_iam_role_arn`).
 their own teardown mid-way through.
 
 ```bash
-cd ../workload-identity
+cd platform-prerequisites/terraform/workload-identity
 terraform init -reconfigure
 terraform plan -destroy -var-file=../environments/sandbox/workload-identity.tfvars -out=sandbox-workload-identity-destroy.tfplan
 terraform apply sandbox-workload-identity-destroy.tfplan
@@ -1461,7 +1461,7 @@ permanently in the module (it protects the future Production EFS filesystem) —
 edit the module file. Instead, override it for this one destroy operation only:
 
 ```bash
-cd ../eks-platform
+cd platform-prerequisites/terraform/eks-platform
 terraform init -reconfigure
 
 terraform plan -destroy \
@@ -1480,7 +1480,7 @@ docs point to "Remove a resource from state" for precisely this case) and is the
 that will work here:
 
 ```bash
-cd ../eks-platform
+cd platform-prerequisites/terraform/eks-platform
 terraform state show 'module.efs[0].aws_efs_file_system.this'   # confirm the exact file system ID
 terraform state rm 'module.efs[0].aws_efs_file_system.this'
 aws efs delete-file-system --file-system-id <FILE_SYSTEM_ID_FROM_ABOVE> --region us-east-1
