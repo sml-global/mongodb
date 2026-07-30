@@ -10,7 +10,6 @@ PG_MAIN = REPO_ROOT / "platform-prerequisites/terraform/postgresql/main.tf"
 class AuroraOptionalForCnpgEnvironmentsTests(unittest.TestCase):
     def test_aurora_variables_have_safe_defaults(self):
         text = PG_VARS.read_text(encoding="utf-8")
-        self.assertIn("default     = []", text)
         for name in [
             "vpc_id",
             "database_subnet_ids",
@@ -22,11 +21,12 @@ class AuroraOptionalForCnpgEnvironmentsTests(unittest.TestCase):
         ]:
             start = text.index(f'variable "{name}"')
             end = text.index("}", start)
-            block = text[start:end]
+            # Normalized to tolerate terraform fmt's column alignment, not just one fixed spacing.
+            block = " ".join(text[start:end].split())
             if name == "database_subnet_ids":
-                self.assertIn("default     = []", block, f"{name} missing empty-list default")
+                self.assertIn("default = []", block, f"{name} missing empty-list default")
             else:
-                self.assertIn('default     = ""', block, f"{name} missing empty-string default")
+                self.assertIn('default = ""', block, f"{name} missing empty-string default")
 
     def test_database_subnet_ids_validation_allows_empty(self):
         text = PG_VARS.read_text(encoding="utf-8")
