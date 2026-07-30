@@ -124,15 +124,21 @@ class DrDrillRoleArnsBootstrapScriptBehaviorTests(unittest.TestCase):
         result = subprocess.run(
             ["bash", str(BOOTSTRAP_SCRIPT)],
             env=self.env, capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("dr-drill-role-arns", self._log())
         self.assertIn("DR_DRILL_MONGODB_ROLE_ARN", self._log())
 
-    def test_creates_three_dedicated_service_accounts_with_irsa_annotations(self):
+    def test_creates_three_dedicated_service_accounts_with_pod_identity(self):
         # Regression test for a critical bug (C1) caught in whole-branch
-        # review: a single ServiceAccount cannot bind three different IRSA
-        # roles. Each drill needs its own dedicated, IRSA-annotated SA.
+        # review: a single ServiceAccount cannot bind three different IAM
+        # roles. Each drill needs its own dedicated ServiceAccount. Updated
+        # for the IRSA -> EKS Pod Identity migration (see commit 4beefb7):
+        # Pod Identity binds a role to a ServiceAccount via a separate AWS-side
+        # association (Terraform), not a ServiceAccount annotation -- so the
+        # bootstrap script now creates plain ServiceAccounts with no
+        # role-arn annotation at all.
         self._mock("terraform", (
             'if [[ "$*" == *"dr_drill_mongodb_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-mongodb-restore-role"; fi\n'
             'if [[ "$*" == *"dr_drill_postgresql_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-postgresql-restore-role"; fi\n'
@@ -142,17 +148,19 @@ class DrDrillRoleArnsBootstrapScriptBehaviorTests(unittest.TestCase):
         result = subprocess.run(
             ["bash", str(BOOTSTRAP_SCRIPT)],
             env=self.env, capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         log = self._log()
-        for sa_name, role_arn in (
-            ("dr-drill-mongodb-runner", "dr-drill-mongodb-restore-role"),
-            ("dr-drill-postgresql-runner", "dr-drill-postgresql-restore-role"),
-            ("dr-drill-clickhouse-runner", "dr-drill-clickhouse-backup-role"),
+        for sa_name in (
+            "dr-drill-mongodb-runner",
+            "dr-drill-postgresql-runner",
+            "dr-drill-clickhouse-runner",
         ):
             self.assertIn(sa_name, log, f"must create ServiceAccount {sa_name}")
-            self.assertIn(role_arn, log,
-                          f"must annotate {sa_name} with its own role ARN ({role_arn})")
+        # No IRSA-style role-arn annotation flag anywhere in the invocation
+        # log -- Pod Identity needs none.
+        self.assertNotIn("eks.amazonaws.com/role-arn", log)
 
 
 class DrDrillCronJobStructureTests(unittest.TestCase):
