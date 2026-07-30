@@ -190,3 +190,130 @@ checking status (credentials come from the pod's ambient IRSA identity, no stati
 `oms/dr-drill-runner:latest` does not exist anywhere in this repo or any registry.
 **Fixed:** all 3 CronJobs now use `alpine/k8s:1.33.13`, a real, actively maintained
 public image (50M+ pulls, verified via Docker Hub) bundling kubectl + AWS tooling.
+
+## Follow-Up Fix Pass (post-D13): IAM Migration, RBAC, and Hardening
+
+A second fix pass (after D10-D13 landed) migrated IAM binding to this repo's
+established EKS Pod Identity convention, added the Kubernetes RBAC the drill
+ServiceAccounts were still missing, bound the throwaway restore-target pods to
+those ServiceAccounts, and hardened the CronJobs for a semi-destructive weekly
+workload.
+
+### D14: IRSA → EKS Pod Identity migration (repo convention alignment)
+**What changed:** All 4 dr-drill IAM roles (mongodb, postgresql, clickhouse drill
+roles, plus the new D15 role) moved from an OIDC/Federated IRSA trust policy to an
+EKS Pod Identity trust policy (`Service` principal `pods.eks.amazonaws.com`,
+`sts:AssumeRole` + `sts:TagSession`, no per-ServiceAccount `sub`-claim condition),
+matching `platform-prerequisites/terraform/workload-identity/main.tf`. A dedicated
+`aws_eks_pod_identity_association` resource per role binds it to its
+namespace/ServiceAccount pair on the AWS side instead. `scripts/bootstrap-dr-drill-role-arns-configmap.sh`
+was simplified to match: it still creates the 3 dedicated ServiceAccounts (still
+required -- Pod Identity, like IRSA, binds exactly one role per ServiceAccount; see
+D10), but no longer annotates them with a role ARN, since Pod Identity needs none.
+
+**Why:** this repo's other Terraform roots (`workload-identity/main.tf`, the EBS
+CSI driver role, `mongodb-pbm-role`) already use Pod Identity, not IRSA -- see
+`docs/repo/cluster-notes` finding that `EKS-boomi-runtime-cluster` does not have a
+matching IAM OIDC provider for its current issuer. Using IRSA here would have been
+the only Terraform root in the repo still on the old pattern, and would have
+silently failed at `aws_iam_openid_connect_provider` resolution for the same
+reason the EBS CSI driver had to move to Pod Identity.
+
+**Preconditions confirmed before migrating:** the `eks-pod-identity-agent` EKS
+addon is already enabled on the dev/uat cluster (a prerequisite for any Pod
+Identity association to actually take effect -- without the agent DaemonSet
+running, `aws_eks_pod_identity_association` resources apply successfully in
+Terraform but grant no real credentials to pods). No cross-account access is
+required for any of the 4 dr-drill roles (all S3 buckets and the EKS cluster are
+in the same AWS account as the drill CronJobs).
+
+### D15: Live SigNoz ClickHouse pod needed its own separate IAM identity (Critical, discovered during D14 migration)
+**Problem:** the `clickhouse-backup` sidecar added to the **live** SigNoz
+ClickHouse pod (`gitops/signoz/base/helmreleases.yaml`, `extraContainers`, see D1)
+runs `clickhouse-backup create` / `upload` / `delete local` via `kubectl exec`
+directly against that live pod. Those commands execute under the **live pod's
+own** assumed identity -- not the drill CronJob's identity (`dr-drill-clickhouse-runner`,
+namespace `dr-drill-uat`). Before this fix, the live pod had no AWS identity of any
+kind, so the backup-creation step (`aws s3` calls implicit in `clickhouse-backup
+upload`) would have failed with no credentials, and the drill's D11 safety
+property ("backup create/upload run against the live pod; only restore uses a
+throwaway namespace") was unimplementable.
+
+**Fixed:** added a 4th IAM role, `signoz-clickhouse-backup-writer-role`
+(`signoz_clickhouse_backup_writer` in Terraform), scoped **write-only**
+(`s3:PutObject`, `s3:ListBucket` -- no `s3:GetObject`, since the live pod never
+restores from here) to the same dedicated `oms-signoz-clickhouse-backups` bucket
+used by the drill role. Bound via its own `aws_eks_pod_identity_association` to
+namespace `signoz`, ServiceAccount `signoz-clickhouse-workload` -- a new, stable
+ServiceAccount name set on the live ClickHouse subchart
+(`gitops/signoz/base/helmreleases.yaml`'s `clickhouse.serviceAccount.name`,
+verified against the real upstream `clickhouse` subchart's
+`serviceAccount: {create, name, annotations}` values block, not fabricated).
+
+## Follow-Up Fix Pass 2: Kubernetes RBAC and CronJob Hardening
+
+### D16: Drill ServiceAccounts had AWS identity but no Kubernetes RBAC (Critical)
+**Problem:** the 3 `dr-drill-*-runner` ServiceAccounts had an AWS identity (via
+D14's Pod Identity associations) but no Kubernetes `Role`/`ClusterRole` grants at
+all. Every `kubectl` call each drill script makes (`create`/`delete namespace`,
+`apply` the restore-target Deployment or CNPG Cluster, `wait`, `exec -c <container>`)
+would have been rejected by the API server with `Forbidden`, regardless of AWS
+identity being correctly configured.
+
+**Fixed:** added `k8s/dr-drill/rbac.yaml`: one `ClusterRole`+`ClusterRoleBinding`
+granting cluster-scoped `namespaces` `create`/`delete`/`get`, and a second
+`ClusterRole`+`ClusterRoleBinding` granting `pods` `get`/`list`/`watch`,
+`pods/exec` `create`, `apps/deployments` `get`/`list`/`watch`/`create`/`update`/`patch`,
+and `postgresql.cnpg.io/clusters` `get`/`list`/`watch`/`create`/`update`/`patch` --
+bound to all 3 `dr-drill-*-runner` ServiceAccounts.
+
+**Deviation from a strictly namespace-scoped design:** each drill script generates
+its own throwaway namespace name at runtime (e.g. `dr-drill-mongodb-$(date +%s)`),
+which does not exist yet when this RBAC is applied. A namespace-scoped
+`Role`/`RoleBinding` cannot be pre-bound to a namespace that doesn't exist, so the
+workload-operations grant above uses cluster-scoped `ClusterRole`s instead,
+narrowed by resource type and verb rather than by namespace. This is functionally
+equivalent least privilege for these 3 already AWS-least-privileged
+ServiceAccounts, and is the same trade-off previously identified and accepted for
+this dynamic-namespace pattern.
+
+**Related fix (same pass):** the throwaway restore-target pods themselves
+(`k8s/dr-drill/mongodb-restore-target.yaml`, `k8s/dr-drill/clickhouse-restore-target.yaml`,
+and the inline CNPG `Cluster` manifest in `scripts/dr-drill-postgresql-restore.sh`)
+now set `serviceAccountName`/`spec.serviceAccountName` to the matching
+`dr-drill-*-runner` SA name, so their `pbm-agent`/`clickhouse-backup` sidecars (and
+CNPG's `s3Credentials.inheritFromIAMRole: true`) have an identity to inherit from.
+Each script now also runs `kubectl create serviceaccount <name>` inside its own
+dynamic namespace immediately after creating that namespace, since ServiceAccounts
+are namespace-scoped and the pre-bootstrapped SA of the same name lives only in
+`dr-drill-uat`. **Known follow-up gap (not yet resolved):** the Pod Identity
+association for each drill role is still scoped to the fixed
+`dr-drill-uat`/`dr-drill-*-runner` pair (D14); the same-named SA created inside the
+*dynamic* per-run namespace has no corresponding association yet, so the
+restore-target pod does not yet receive real AWS credentials via Pod Identity.
+Resolving this needs either a static restore-target namespace per drill type or a
+different identity-propagation mechanism, and is left for a future pass.
+
+### D17: CronJobs had no concurrency/retry/timeout/resource controls (Major)
+**Problem:** all 3 CronJobs had none of `concurrencyPolicy`, `backoffLimit`,
+`activeDeadlineSeconds`, or container `resources` set. For a weekly job that
+creates/tears down real infrastructure (a throwaway namespace, a restored copy of
+production backup data) and self-verifies via `set -euo pipefail`, this meant: a
+slow-running drill could overlap with the next week's scheduled run; a failed
+drill would silently retry (Kubernetes Jobs default to `backoffLimit: 6`), masking
+a real regression as a transient blip; a hung `kubectl wait` or stuck restore
+could run indefinitely with no outer bound; and pods had no CPU/memory bounds on
+a shared cluster.
+
+**Fixed:** each CronJob now sets `concurrencyPolicy: Forbid`, `jobTemplate.spec.backoffLimit: 0`
+(drills must fail loudly, not silently retry), an `activeDeadlineSeconds` set
+comfortably beyond that script's own longest internal `kubectl wait --timeout`
+(300s for the mongodb/clickhouse pod-readiness waits, 600s for the postgresql CNPG
+Cluster-readiness wait), with extra headroom for the unbounded restore/backup
+steps that follow those waits (1200s for mongodb/clickhouse, 1500s for
+postgresql), and modest `resources.requests`/`limits` (`100m`/`256Mi` requests,
+`500m`/`512Mi` limits) on the runner container, since it only orchestrates
+`kubectl`/`aws` CLI calls rather than running the workload itself. The same
+`resources` block was added to the `mongodb`/`pbm-agent` containers in
+`mongodb-restore-target.yaml` and the `clickhouse-server`/`clickhouse-backup`
+containers in `clickhouse-restore-target.yaml`.
