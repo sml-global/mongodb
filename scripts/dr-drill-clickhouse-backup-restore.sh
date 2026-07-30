@@ -80,6 +80,11 @@ kubectl exec -n signoz "${LIVE_CLICKHOUSE_POD}" -- clickhouse-backup delete loca
 # NEVER restore onto the live signoz pod -- that would overwrite production
 # data. This mirrors the MongoDB/PostgreSQL drills' throwaway-target pattern.
 kubectl create namespace "${DRILL_NAMESPACE}"
+# Matches k8s/dr-drill/clickhouse-restore-target.yaml's serviceAccountName --
+# ServiceAccounts are namespace-scoped, so the restore-target pod needs one
+# of this name inside its own (dynamic) namespace, not just the one
+# bootstrap-dr-drill-role-arns-configmap.sh created in dr-drill-uat.
+kubectl create serviceaccount dr-drill-clickhouse-runner -n "${DRILL_NAMESPACE}"
 
 echo "Deploying throwaway single-node ClickHouse for restore target..."
 kubectl apply -n "${DRILL_NAMESPACE}" -f "$(dirname "$0")/../k8s/dr-drill/clickhouse-restore-target.yaml"

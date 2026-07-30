@@ -14,6 +14,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "dr-drill-mongodb-restore.sh"
 DRILL_ROLE_ARN = "arn:aws:iam::123456789012:role/dr-drill-mongodb-restore-role"
@@ -181,6 +183,28 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         self.assertLess(config_idx, status_idx,
                         "pbm config must run before pbm status/list/restore")
         self.assertIn("oms-pbm-backups", log)
+
+    def test_creates_a_matching_service_account_in_the_drill_namespace(self):
+        # ServiceAccounts are namespace-scoped; the restore-target pod's own
+        # (dynamic, timestamped) namespace needs its own SA of this name to
+        # match k8s/dr-drill/mongodb-restore-target.yaml's serviceAccountName.
+        self._install_happy_path_mocks()
+        self._run()
+        self.assertIn("create serviceaccount dr-drill-mongodb-runner", self._log())
+
+
+class MongoDbRestoreTargetManifestTests(unittest.TestCase):
+    """Structural (parsed-field) assertions on the throwaway restore-target
+    Deployment, matching the convention in tests/signoz/test_gitops_manifests.py."""
+
+    @classmethod
+    def setUpClass(cls):
+        manifest_path = REPO_ROOT / "k8s" / "dr-drill" / "mongodb-restore-target.yaml"
+        cls.deployment = yaml.safe_load(manifest_path.read_text())
+
+    def test_pod_template_uses_the_dedicated_service_account(self):
+        pod_spec = self.deployment["spec"]["template"]["spec"]
+        self.assertEqual(pod_spec["serviceAccountName"], "dr-drill-mongodb-runner")
 
 
 if __name__ == "__main__":
