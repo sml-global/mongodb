@@ -15,6 +15,11 @@ complete teardown with zero leftover resources before Production is provisioned.
 - Confirm you are targeting `sandbox`, not `prod`, `uat`, or `dev` — every command below
   operates on `platform-prerequisites/terraform/environments/sandbox/*.tfvars`.
 
+**CONFIRM before proceeding:** every step below is destructive and irreversible once applied.
+Do not run Step 1 until you have verified: (1) your AWS credentials target account
+`632674123947`, (2) no one else depends on the current `sandbox` environment, and (3) you
+intend to destroy it now, not just review the plan. Stop here if any of these are not true.
+
 ## Step 1: Destroy consumers first — `mongodb`
 
 ```bash
