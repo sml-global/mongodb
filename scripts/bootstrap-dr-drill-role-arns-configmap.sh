@@ -5,20 +5,27 @@ set -euo pipefail
 #
 # Reads the dr-drill IAM role ARNs from Terraform outputs
 # (platform-prerequisites/terraform/dr-drill) and:
-#   1. Creates/annotates the THREE dedicated ServiceAccounts
-#      (dr-drill-mongodb-runner, dr-drill-postgresql-runner,
-#      dr-drill-clickhouse-runner) with their IRSA role-arn annotation --
-#      this is what actually binds each CronJob's pod to its own
-#      least-privilege role (a ServiceAccount carries exactly one IRSA
-#      role annotation, which is why there are three CronJobs/SAs, not one
-#      running all three scripts -- see k8s/dr-drill/cronjob.yaml header).
+#   1. Creates the THREE dedicated ServiceAccounts (dr-drill-mongodb-runner,
+#      dr-drill-postgresql-runner, dr-drill-clickhouse-runner). No IRSA
+#      role-arn annotation is needed -- these use EKS Pod Identity, which
+#      binds a role to a namespace/ServiceAccount pair on the AWS side via
+#      `aws_eks_pod_identity_association` (see
+#      platform-prerequisites/terraform/dr-drill/main.tf); the ServiceAccount
+#      object itself just needs to exist with the right name. There are
+#      still three separate ServiceAccounts (not one) because Pod Identity,
+#      like IRSA before it, binds exactly one role per ServiceAccount -- see
+#      k8s/dr-drill/cronjob.yaml header.
 #   2. Creates/updates the 'dr-drill-role-arns' ConfigMap the CronJobs read
 #      via envFrom, used only for each script's defense-in-depth identity
-#      *check* (D7) -- the actual privilege grant comes from #1.
+#      *check* (D7) -- the actual privilege grant comes from the Pod
+#      Identity association in Terraform.
 #
 # Idempotent -- safe to re-run any time after `terraform apply`. Run this
 # manually as part of the provisioning workflow; it has no GitOps/Flux
 # ordering dependency because none of this is reconciled by Flux.
+#
+# RBAC (namespace/pod/deployment/CNPG-cluster permissions for these
+# ServiceAccounts) is applied separately via k8s/dr-drill/rbac.yaml.
 #
 # Usage:
 #   scripts/bootstrap-dr-drill-role-arns-configmap.sh
@@ -33,12 +40,9 @@ CLICKHOUSE_ARN=$(terraform -chdir="$TF_DIR" output -raw dr_drill_clickhouse_role
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-echo "Creating/annotating dedicated ServiceAccounts (one IRSA role each)..."
-for pair in "dr-drill-mongodb-runner:${MONGODB_ARN}" "dr-drill-postgresql-runner:${POSTGRESQL_ARN}" "dr-drill-clickhouse-runner:${CLICKHOUSE_ARN}"; do
-  sa_name="${pair%%:*}"
-  role_arn="${pair#*:}"
+echo "Creating dedicated ServiceAccounts (Pod Identity association, no annotation needed)..."
+for sa_name in dr-drill-mongodb-runner dr-drill-postgresql-runner dr-drill-clickhouse-runner; do
   kubectl create serviceaccount "${sa_name}" --namespace "$NAMESPACE" --dry-run=client -o yaml \
-    | kubectl annotate --local -f - "eks.amazonaws.com/role-arn=${role_arn}" -o yaml \
     | kubectl apply -f -
 done
 
@@ -49,4 +53,5 @@ kubectl create configmap dr-drill-role-arns \
   --from-literal=DR_DRILL_CLICKHOUSE_ROLE_ARN="$CLICKHOUSE_ARN" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-echo "✅ 3 ServiceAccounts (IRSA-annotated) and dr-drill-role-arns ConfigMap up to date in namespace $NAMESPACE"
+echo "✅ 3 ServiceAccounts (Pod Identity) and dr-drill-role-arns ConfigMap up to date in namespace $NAMESPACE"
+
