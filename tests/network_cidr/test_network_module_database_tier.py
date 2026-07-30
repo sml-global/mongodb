@@ -25,7 +25,9 @@ class DatabaseSubnetTierTests(unittest.TestCase):
         eks_platform_main = REPO_ROOT / "platform-prerequisites/terraform/eks-platform/main.tf"
         eks_platform_outputs = REPO_ROOT / "platform-prerequisites/terraform/eks-platform/outputs.tf"
         self.assertIn("database_subnet_cidrs = var.database_subnet_cidrs", eks_platform_main.read_text(encoding="utf-8"))
-        self.assertIn("database_subnet_ids = module.network.database_subnet_ids", eks_platform_outputs.read_text(encoding="utf-8"))
+        # Normalized to tolerate terraform fmt's column alignment (variable spacing), not just a single space.
+        normalized_outputs = " ".join(eks_platform_outputs.read_text(encoding="utf-8").split())
+        self.assertIn("database_subnet_ids = module.network.database_subnet_ids", normalized_outputs)
 
 
 if __name__ == "__main__":
