@@ -3,10 +3,10 @@ expected_account_id  = "815402439714"
 environment          = "dev"
 name_prefix          = "oms-dev-eks"
 
-vpc_cidr             = "10.70.0.0/16"
+vpc_cidr             = "10.200.208.0/21"
 availability_zones   = ["ap-east-1a", "ap-east-1b"]
-private_subnet_cidrs = ["10.70.0.0/20", "10.70.16.0/20"]
-public_subnet_cidrs  = ["10.70.128.0/20", "10.70.144.0/20"]
+private_subnet_cidrs = ["10.200.208.0/23", "10.200.210.0/23"]
+public_subnet_cidrs  = ["10.200.212.0/26", "10.200.212.64/26"]
 nat_gateway_count    = 1
 nat_mode             = "single"
 
@@ -44,6 +44,7 @@ addons = {
     addon_version        = "v1.20.4-eksbuild.1"
     resolve_conflicts    = "OVERWRITE"
     service_account_role = false
+    configuration_values = jsonencode({ env = { ENABLE_PREFIX_DELEGATION = "true", WARM_PREFIX_TARGET = "1" } })
   }
   coredns = {
     enabled              = true
