@@ -82,6 +82,22 @@ resource "aws_eks_pod_identity_association" "dr_drill_mongodb" {
   role_arn        = aws_iam_role.dr_drill_mongodb_restore_role.arn
 }
 
+# The orchestrator pod above (dr-drill-uat) only does the `aws sts
+# get-caller-identity` identity guard check -- the actual `pbm restore` S3
+# reads happen inside the `pbm-agent` container of the throwaway
+# restore-target pod, which runs in its OWN fixed namespace
+# (dr-drill-mongodb-restore-target, see scripts/dr-drill-mongodb-restore.sh)
+# under the SAME ServiceAccount name. Pod Identity associations require an
+# exact static namespace+ServiceAccount match (no wildcards), so this
+# fixed, reusable namespace needs its own association -- reusing the same
+# least-privilege read-only role above (no new IAM role needed).
+resource "aws_eks_pod_identity_association" "dr_drill_mongodb_restore_target" {
+  cluster_name    = var.cluster_name
+  namespace       = "dr-drill-mongodb-restore-target"
+  service_account = "dr-drill-mongodb-runner"
+  role_arn        = aws_iam_role.dr_drill_mongodb_restore_role.arn
+}
+
 # --- PostgreSQL WAL/PITR restore drill role (read-only) ---
 # Bound to its OWN dedicated ServiceAccount (dr-drill-postgresql-runner).
 
@@ -114,6 +130,19 @@ resource "aws_iam_role_policy" "dr_drill_postgresql_restore" {
 resource "aws_eks_pod_identity_association" "dr_drill_postgresql" {
   cluster_name    = var.cluster_name
   namespace       = "dr-drill-uat"
+  service_account = "dr-drill-postgresql-runner"
+  role_arn        = aws_iam_role.dr_drill_postgresql_restore_role.arn
+}
+
+# Same rationale as dr_drill_mongodb_restore_target above: the actual WAL/
+# PITR S3 reads happen inside the CNPG-managed Postgres pod running in its
+# OWN fixed namespace (dr-drill-postgresql-restore-target), under the SAME
+# ServiceAccount name (spec.serviceAccountName on the CNPG Cluster manifest
+# in scripts/dr-drill-postgresql-restore.sh) -- not in the orchestrator pod,
+# which only does the identity guard check. Reuses the same read-only role.
+resource "aws_eks_pod_identity_association" "dr_drill_postgresql_restore_target" {
+  cluster_name    = var.cluster_name
+  namespace       = "dr-drill-postgresql-restore-target"
   service_account = "dr-drill-postgresql-runner"
   role_arn        = aws_iam_role.dr_drill_postgresql_restore_role.arn
 }
@@ -157,6 +186,22 @@ resource "aws_iam_role_policy" "dr_drill_clickhouse_backup" {
 resource "aws_eks_pod_identity_association" "dr_drill_clickhouse" {
   cluster_name    = var.cluster_name
   namespace       = "dr-drill-uat"
+  service_account = "dr-drill-clickhouse-runner"
+  role_arn        = aws_iam_role.dr_drill_clickhouse_backup_role.arn
+}
+
+# Same rationale again: the orchestrator pod above only does `aws s3 ls`
+# verification of the just-created backup; the actual restore-side S3
+# GetObject reads happen inside the `clickhouse-backup` container of the
+# throwaway restore-target pod, which runs in its OWN fixed namespace
+# (dr-drill-clickhouse-restore-target) under the SAME ServiceAccount name.
+# Reuses the same read+write, own-bucket-only role (no new IAM role
+# needed) -- this is safe because the restore-target pod also only ever
+# touches the dedicated oms-signoz-clickhouse-backups bucket, same as the
+# orchestrator.
+resource "aws_eks_pod_identity_association" "dr_drill_clickhouse_restore_target" {
+  cluster_name    = var.cluster_name
+  namespace       = "dr-drill-clickhouse-restore-target"
   service_account = "dr-drill-clickhouse-runner"
   role_arn        = aws_iam_role.dr_drill_clickhouse_backup_role.arn
 }

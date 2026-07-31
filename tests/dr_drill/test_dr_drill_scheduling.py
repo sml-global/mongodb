@@ -17,6 +17,7 @@ identity guard (`aws sts get-caller-identity`) built into each drill script
 in Tasks 1-3, and ultimately by the drills actually passing in UAT.
 """
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -86,6 +87,60 @@ class DrDrillTerraformValidationTests(unittest.TestCase):
             "dr_drill_clickhouse_role_arn",
         ):
             self.assertIn(f'output "{output_name}"', main_tf)
+
+    def test_pod_identity_associations_exist_for_all_three_fixed_restore_target_namespaces(self):
+        # The 3 restore-target pods (pbm-agent / CNPG Postgres / clickhouse-
+        # backup) each do the actual S3 GetObject/PutObject calls -- distinct
+        # from the orchestrator CronJob pod (dr-drill-uat), which only runs
+        # `aws sts get-caller-identity` guard checks (and, for clickhouse,
+        # `aws s3 ls` verification). EKS Pod Identity requires an exact
+        # static namespace+ServiceAccount match, so each fixed restore-target
+        # namespace needs its own association, reusing the already-defined
+        # least-privilege IAM roles (no new roles needed).
+        main_tf = (TF_DIR / "main.tf").read_text()
+        expected = {
+            "dr_drill_mongodb_restore_target": (
+                "dr-drill-mongodb-restore-target", "dr-drill-mongodb-runner",
+                "aws_iam_role.dr_drill_mongodb_restore_role.arn",
+            ),
+            "dr_drill_postgresql_restore_target": (
+                "dr-drill-postgresql-restore-target", "dr-drill-postgresql-runner",
+                "aws_iam_role.dr_drill_postgresql_restore_role.arn",
+            ),
+            "dr_drill_clickhouse_restore_target": (
+                "dr-drill-clickhouse-restore-target", "dr-drill-clickhouse-runner",
+                "aws_iam_role.dr_drill_clickhouse_backup_role.arn",
+            ),
+        }
+        for resource_name, (namespace, service_account, role_arn_ref) in expected.items():
+            match = re.search(
+                r'resource\s+"aws_eks_pod_identity_association"\s+"%s"\s*\{(.*?)\n\}'
+                % re.escape(resource_name),
+                main_tf, re.DOTALL,
+            )
+            self.assertIsNotNone(
+                match, f"aws_eks_pod_identity_association.{resource_name} must be defined")
+            block = match.group(1)
+            self.assertIn(f'namespace       = "{namespace}"', block)
+            self.assertIn(f'service_account = "{service_account}"', block)
+            self.assertIn(f'role_arn        = {role_arn_ref}', block)
+
+    def test_restore_target_associations_reuse_existing_iam_roles_not_new_ones(self):
+        # These 3 new associations must NOT define their own aws_iam_role --
+        # they intentionally reuse the same least-privilege roles already
+        # bound to the orchestrator ServiceAccounts in dr-drill-uat.
+        main_tf = (TF_DIR / "main.tf").read_text()
+        role_resource_names = set(re.findall(r'resource\s+"aws_iam_role"\s+"(\w+)"', main_tf))
+        self.assertEqual(
+            role_resource_names,
+            {
+                "dr_drill_mongodb_restore_role",
+                "dr_drill_postgresql_restore_role",
+                "dr_drill_clickhouse_backup_role",
+                "signoz_clickhouse_backup_writer_role",
+            },
+            "no new aws_iam_role resources should have been added",
+        )
 
 
 class DrDrillRoleArnsBootstrapScriptBehaviorTests(unittest.TestCase):
