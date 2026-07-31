@@ -60,10 +60,9 @@ runbook, or verification procedures.
 - [Network CIDR Redesign & UAT Provisioning Implementation Plan](superpowers/plans/2026-07-29-network-and-uat-provisioning.md)
   implements the design: new `prod` environment, migrated `uat`/`dev` CIDRs, Aurora Terraform
   resources, and the [Sandbox Teardown Runbook](references/sandbox-teardown-runbook.md).
-- **Follow-up required:** `gitops/postgresql/overlays/uat/` (the existing CNPG deployment for
-  UAT) is superseded by this migration and needs an explicit, manual decommission step before
-  Aurora becomes UAT's live database — see the status note in
-  [PostgreSQL Platform Contract](references/postgresql-platform-contract.md).
+- **Resolved:** `gitops/postgresql/overlays/uat/` (the superseded CNPG deployment for UAT) has
+  been deleted — see [PostgreSQL Platform Contract](references/postgresql-platform-contract.md)
+  and Issue #6 for the Dev/SIT orchestration wiring that replaced it.
 
 ## Why Provisioning Is Split
 

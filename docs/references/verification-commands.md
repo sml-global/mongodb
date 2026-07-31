@@ -348,10 +348,10 @@ kill $PF_PID 2>/dev/null
 **Dev/SIT (CNPG, in-cluster):**
 
 ```bash
-kubectl -n postgresql get cluster postgresql
+kubectl -n postgresql get cluster oms-postgresql
 # Expect: status=Ready
 
-kubectl -n postgresql exec -it postgresql-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+kubectl -n postgresql exec -it oms-postgresql-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
 # Expect: 2 healthy streaming replicas
 ```
 

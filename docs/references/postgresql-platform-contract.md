@@ -11,11 +11,6 @@
 > [VPC Subnet Allocation and Boomi Networking Design](superpowers/specs/2026-07-29-vpc-subnet-and-boomi-routing-design.md#database-engine-decision)
 > and the Aurora Terraform resources in
 > [platform-prerequisites/terraform/postgresql/main.tf](../../platform-prerequisites/terraform/postgresql/main.tf).
-> The existing `gitops/postgresql/overlays/uat/` CNPG deployment for UAT is superseded and
-> requires a manual decommission step (not yet performed as of this date) before Aurora
-> becomes UAT's live database — this is a real infrastructure change, not a docs-only update,
-> and should follow the same explicit-confirmation pattern as
-> [sandbox-teardown-runbook.md](sandbox-teardown-runbook.md).
 
 ---
 
@@ -39,7 +34,7 @@
 - **Operator:** CloudNativePG (CNPG)
 - **Version:** Defined in `config/environment-schema/fragments/40-postgresql.manifest` (POSTGRESQL_VERSION)
 - **Namespace:** postgresql (created automatically by HelmRelease with `createNamespace: true`)
-- **StorageClass:** gp3-postgresql (defined in k8s/base/storage-classes.yaml)
+- **StorageClass:** gp3-postgresql (defined in k8s/base/storageclass-gp3-postgresql.yaml)
 - **Backup System:** Continuous WAL archival to AWS S3 with point-in-time recovery (PITR)
 - **Replica Set:** 3-node configuration (configurable per environment via schema fragment)
 
@@ -88,12 +83,12 @@ GitOps deploys CloudNativePG Operator and PostgreSQL Cluster custom resource:
 
 ```bash
 cd /Users/frank/sml/oms/mongodb
-bash scripts/provision.sh postgresql
+bash scripts/provision.sh pg
 ```
 
 **GitOps Artifacts:**
 - **Base Configuration:** `gitops/postgresql/base/` (kustomization.yaml, helm values, namespace)
-- **Overlay (UAT):** `gitops/postgresql/overlays/uat/` (environment-specific values)
+- **Overlay (Dev/SIT):** `gitops/postgresql/overlays/dev/` (Cluster CR, kept separate from base to avoid a CRD race — see design spec D2)
 - **Deployment:** HelmRelease CRD for `cloudnative-pg` chart
 - **Cluster Resource:** Cluster custom resource named `postgresql` with:
   - IRSA enabled via `inheritFromIAMRole: true`
@@ -108,10 +103,10 @@ bash scripts/provision.sh postgresql
 kubectl get pods -n postgresql
 
 # Check PostgreSQL cluster status
-kubectl -n postgresql get cluster postgresql
+kubectl -n postgresql get cluster oms-postgresql
 
 # Check replica set health
-kubectl -n postgresql exec -it postgresql-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+kubectl -n postgresql exec -it oms-postgresql-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
 
 # Run smoke tests
 bash scripts/verify-platform-health.sh --smoke-test
@@ -151,7 +146,7 @@ POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"postgresql"}
 kubectl -n "$POSTGRESQL_NAMESPACE" get cluster "$POSTGRESQL_CLUSTER_NAME" -o yaml
 
 # Get replica health
-kubectl -n "$POSTGRESQL_NAMESPACE" exec "${POSTGRESQL_CLUSTER_NAME}-1" -- \
+kubectl -n "$POSTGRESQL_NAMESPACE" exec "oms-${POSTGRESQL_CLUSTER_NAME}-1" -- \
   psql -U postgres -c "SELECT * FROM pg_stat_replication;" 
 
 # Get recent events
@@ -361,7 +356,7 @@ if ! kubectl -n "$POSTGRESQL_NAMESPACE" get pod "$PRIMARY_POD" --no-headers | gr
 fi
 
 # Check: At least 2 replicas are connected
-CONNECTED_REPLICAS=$(kubectl -n "$POSTGRESQL_NAMESPACE" exec "${POSTGRESQL_CLUSTER_NAME}-1" -- \
+CONNECTED_REPLICAS=$(kubectl -n "$POSTGRESQL_NAMESPACE" exec "oms-${POSTGRESQL_CLUSTER_NAME}-1" -- \
   psql -U postgres -c "SELECT COUNT(*) FROM pg_stat_replication WHERE state='streaming';" --tuples-only)
 if [[ $CONNECTED_REPLICAS -lt 2 ]]; then
   echo "ERROR: Fewer than 2 replicas connected. Destruction blocked."
@@ -369,7 +364,7 @@ if [[ $CONNECTED_REPLICAS -lt 2 ]]; then
 fi
 
 # Check: No active WAL archival failures
-ARCHIVAL_FAILED=$(kubectl -n "$POSTGRESQL_NAMESPACE" exec "${POSTGRESQL_CLUSTER_NAME}-1" -- \
+ARCHIVAL_FAILED=$(kubectl -n "$POSTGRESQL_NAMESPACE" exec "oms-${POSTGRESQL_CLUSTER_NAME}-1" -- \
   psql -U postgres -c "SELECT failed_count FROM pg_stat_archiver WHERE failed_count > 0;" --tuples-only | wc -l)
 if [[ $ARCHIVAL_FAILED -gt 0 ]]; then
   echo "ERROR: Active WAL archival failures detected. Destruction blocked."
@@ -495,7 +490,7 @@ kubectl get namespace postgresql
 
 #### 2. StorageClass: `gp3-postgresql`
 
-**Status:** Defined in `k8s/base/storage-classes.yaml`
+**Status:** Defined in `k8s/base/storageclass-gp3-postgresql.yaml`
 
 **Verification:**
 ```bash

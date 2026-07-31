@@ -99,7 +99,7 @@ Single source of truth for all deployed versions. Update this table when any com
 | **Owner** | Infra Architect / Platform team |
 | **Depends on** | Dev/SIT: CNPG operator, `gp3-postgresql` StorageClass, S3 WAL archive bucket. UAT/Prod: VPC database subnet tier, security group, `aws_db_subnet_group` (all provisioned by the `postgresql` Terraform root). |
 | **Depended on by** | OMS application services |
-| **Provisioned by** | Dev/SIT: `scripts/provision.sh postgresql` (GitOps). UAT/Prod: `platform-prerequisites/terraform/postgresql` (Terraform, `aws_rds_cluster`). |
+| **Provisioned by** | Dev/SIT: `scripts/provision.sh pg` (GitOps). UAT/Prod: `platform-prerequisites/terraform/postgresql` (Terraform, `aws_rds_cluster`). |
 | **Verification** | [Verification Commands § PostgreSQL](verification-commands.md#postgresql) |
 
 ### SigNoz
