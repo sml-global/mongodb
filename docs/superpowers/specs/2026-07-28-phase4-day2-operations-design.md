@@ -284,15 +284,16 @@ now set `serviceAccountName`/`spec.serviceAccountName` to the matching
 `dr-drill-*-runner` SA name, so their `pbm-agent`/`clickhouse-backup` sidecars (and
 CNPG's `s3Credentials.inheritFromIAMRole: true`) have an identity to inherit from.
 Each script now also runs `kubectl create serviceaccount <name>` inside its own
-dynamic namespace immediately after creating that namespace, since ServiceAccounts
+namespace immediately after creating that namespace, since ServiceAccounts
 are namespace-scoped and the pre-bootstrapped SA of the same name lives only in
-`dr-drill-uat`. **Known follow-up gap (not yet resolved):** the Pod Identity
-association for each drill role is still scoped to the fixed
-`dr-drill-uat`/`dr-drill-*-runner` pair (D14); the same-named SA created inside the
-*dynamic* per-run namespace has no corresponding association yet, so the
-restore-target pod does not yet receive real AWS credentials via Pod Identity.
-Resolving this needs either a static restore-target namespace per drill type or a
-different identity-propagation mechanism, and is left for a future pass.
+`dr-drill-uat`. **Follow-up gap, resolved in D18:** at the time of this pass, the
+Pod Identity association for each drill role was still scoped to the fixed
+`dr-drill-uat`/`dr-drill-*-runner` pair (D14); the same-named SA created inside
+the *dynamic, timestamped* per-run namespace had no corresponding association,
+so the restore-target pod did not yet receive real AWS credentials via Pod
+Identity. See D18 for the fix (switch to fixed, reusable namespaces), which also
+superseded this section's "cluster-scoped ClusterRole" RBAC design in favor of
+namespace-scoped grants.
 
 ### D17: CronJobs had no concurrency/retry/timeout/resource controls (Major)
 **Problem:** all 3 CronJobs had none of `concurrencyPolicy`, `backoffLimit`,
@@ -317,3 +318,60 @@ postgresql), and modest `resources.requests`/`limits` (`100m`/`256Mi` requests,
 `resources` block was added to the `mongodb`/`pbm-agent` containers in
 `mongodb-restore-target.yaml` and the `clickhouse-server`/`clickhouse-backup`
 containers in `clickhouse-restore-target.yaml`.
+
+### D18: Dynamic timestamped namespaces are incompatible with EKS Pod Identity — switched to fixed, reusable namespaces (resolves D16's follow-up gap)
+**Problem:** D16 shipped with a real, acknowledged gap: each drill script's
+default restore-target namespace was timestamped at runtime
+(`dr-drill-mongodb-$(date +%s)`), but `aws_eks_pod_identity_association` (D14)
+requires an exact, static `namespace`+`service_account` string pair — verified
+against AWS's EKS Pod Identity documentation, which describes no wildcard or
+pattern-based association mechanism. A namespace that doesn't exist until
+runtime, and whose name is different every run, can never be pre-associated in
+Terraform. This meant the restore-target pod's `pbm-agent`/CNPG-managed
+postgres/`clickhouse-backup` containers — the ones actually reading from S3 —
+still had no real AWS credentials, even after D16's `serviceAccountName`
+wiring, defeating the drills' core purpose.
+
+**Options considered:**
+1. Switch to fixed, reusable namespaces per drill type, so Terraform can
+   target them statically.
+2. Keep dynamic timestamped namespaces, and have each script create/delete its
+   own `aws_eks_pod_identity_association` at runtime via the AWS CLI/API.
+
+Option 2 was rejected: it would require granting the `dr-drill-*-runner`
+ServiceAccounts `eks:CreatePodIdentityAssociation` (and delete) IAM permission —
+letting a drill pod bind arbitrary IAM roles to arbitrary namespace/ServiceAccount
+pairs cluster-wide is a genuine privilege-escalation surface, not merely a
+style concern. It would also move AWS control-plane state management out of
+Terraform and into a bash script, and AWS's own documentation notes Pod
+Identity associations are only *eventually consistent* ("potential delays of
+several seconds"), which is unsuitable to race against on every drill run.
+
+**Fixed (Option 1):** each drill now defaults to one fixed, reusable namespace
+(`dr-drill-mongodb-restore-target`, `dr-drill-postgresql-restore-target`,
+`dr-drill-clickhouse-restore-target`), synchronously deleted and recreated
+(`kubectl delete namespace ... --wait=true --timeout=120s`) both as a safety net
+at script start (in case a previous run's cleanup was interrupted) and in the
+exit trap — never left `Terminating` into the next scheduled run. Per-run
+uniqueness/audit-trail, previously implied by the timestamp, now comes from the
+CronJob's own Job/pod names and start timestamps instead.
+
+`platform-prerequisites/terraform/dr-drill/main.tf` gained 3 new
+`aws_eks_pod_identity_association` resources targeting these fixed namespaces
+(reusing the existing 3 IAM roles — no new roles needed), alongside the D14
+associations for the orchestrator pods in `dr-drill-uat` (kept, since the
+orchestrator still runs its own identity-guard check).
+
+**RBAC narrowed accordingly** (`k8s/dr-drill/rbac.yaml`, superseding D16's
+cluster-scoped-only design): only namespace lifecycle
+(`create`/`delete`/`get` on `namespaces`) remains cluster-scoped, since managing
+namespaces is inherently cluster-scoped in Kubernetes. The actual workload
+permissions (`pods`, `pods/exec`, `deployments`, `postgresql.cnpg.io/clusters`)
+now live in a `dr-drill-workload-operator` `ClusterRole` that is never bound
+cluster-wide — each script self-applies a namespace-scoped `RoleBinding` for it
+against its own fixed namespace immediately after recreating it. The runner
+ServiceAccounts are separately granted only the `bind` verb, `resourceNames`-
+restricted to that one named `ClusterRole`, via a
+`dr-drill-workload-operator-binder` `ClusterRole` — this mirrors the Kubernetes
+RBAC documentation's own "role-grantor"/restrictions-on-role-binding-creation
+pattern verbatim, not a fabricated mechanism.
