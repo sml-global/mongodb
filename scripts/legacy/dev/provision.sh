@@ -86,6 +86,7 @@ case "$SCOPE" in
     run_platform mongodb
     run_platform pg
     run_k8s mongodb
+    run_k8s postgresql
     ;;
   mongodb|mongo)
     run_platform mongodb
@@ -93,6 +94,7 @@ case "$SCOPE" in
     ;;
   pg)
     run_platform pg
+    run_k8s postgresql
     ;;
   signoz)
     run_k8s signoz
