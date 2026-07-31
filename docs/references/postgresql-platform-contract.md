@@ -34,7 +34,7 @@
 - **Operator:** CloudNativePG (CNPG)
 - **Version:** Defined in `config/environment-schema/fragments/40-postgresql.manifest` (POSTGRESQL_VERSION)
 - **Namespace:** postgresql (created automatically by HelmRelease with `createNamespace: true`)
-- **StorageClass:** gp3-postgresql (defined in k8s/base/storageclass-gp3-postgresql.yaml)
+- **StorageClass:** gp3-postgresql (defined in gitops/postgresql/base/storageclass-gp3-postgresql.yaml)
 - **Backup System:** Continuous WAL archival to AWS S3 with point-in-time recovery (PITR)
 - **Replica Set:** 3-node configuration (configurable per environment via schema fragment)
 
@@ -90,7 +90,7 @@ bash scripts/provision.sh pg
 - **Base Configuration:** `gitops/postgresql/base/` (kustomization.yaml, helm values, namespace)
 - **Overlay (Dev/SIT):** `gitops/postgresql/overlays/dev/` (Cluster CR, kept separate from base to avoid a CRD race — see design spec D2)
 - **Deployment:** HelmRelease CRD for `cloudnative-pg` chart
-- **Cluster Resource:** Cluster custom resource named `postgresql` with:
+- **Cluster Resource:** Cluster custom resource named `oms-postgresql` with:
   - IRSA enabled via `inheritFromIAMRole: true`
   - ServiceAccount: `oms-postgresql-workload` (annotated with IRSA role ARN)
   - WAL archival configuration (S3 bucket path, KMS key reference)
@@ -490,7 +490,7 @@ kubectl get namespace postgresql
 
 #### 2. StorageClass: `gp3-postgresql`
 
-**Status:** Defined in `k8s/base/storageclass-gp3-postgresql.yaml`
+**Status:** Defined in `gitops/postgresql/base/storageclass-gp3-postgresql.yaml`
 
 **Verification:**
 ```bash
@@ -566,7 +566,7 @@ terraform validate      # Valid HCL configuration
   - Key policy grants IRSA role permission to Decrypt and GenerateDataKey
 
 - **Phase 3 Kubernetes Storage:** Must be provisioned first
-  - StorageClass `gp3-postgresql` defined in k8s/base/
+  - StorageClass `gp3-postgresql` defined in gitops/postgresql/base/
 
 ### Required By
 
@@ -617,7 +617,7 @@ Per the Dev/SIT-vs-UAT/Prod split (see the Scope Update above and
   `scripts/provision.sh pg` (which calls the `postgresql` scope in
   `scripts/provision-k8s-components.sh`).
 
-2. **scripts/verify-platform-health.sh --smoke-test**
+1. **scripts/verify-platform-health.sh --smoke-test**
    - Verifies PostgreSQL is accessible
    - Validates WAL archival is functioning
 
