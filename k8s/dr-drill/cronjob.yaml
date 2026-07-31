@@ -1,0 +1,152 @@
+# k8s/dr-drill/cronjob.yaml
+#
+# THREE separate CronJobs, one per drill, each with its own dedicated
+# ServiceAccount. This is required, not stylistic: EKS Pod Identity binds
+# exactly one IAM role to a namespace+ServiceAccount pair, and each drill
+# script's identity guard (D7) fails closed unless the assumed role matches
+# its own dedicated least-privilege role. A single CronJob running all three
+# scripts under one ServiceAccount could satisfy at most one of the three
+# identity checks -- caught in whole-branch review before ever being run.
+#
+# ServiceAccounts (dr-drill-mongodb-runner, dr-drill-postgresql-runner,
+# dr-drill-clickhouse-runner) are created (no IRSA-style annotation needed --
+# see D14) by scripts/bootstrap-dr-drill-role-arns-configmap.sh, which also
+# provisions the fixed drill namespaces and their RBAC once, out-of-band
+# (D18/D19) -- never hardcoded here (D9: Terraform never creates Kubernetes
+# objects in this repo).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-drill-mongodb-weekly
+  namespace: dr-drill-uat
+spec:
+  # Weekly, Sunday 03:00 UTC -- low-traffic window in the UAT environment.
+  schedule: "0 3 * * 0"
+  # Semi-destructive drill (creates/tears down a throwaway namespace,
+  # restores real backup data): never let an overlapping run start, and
+  # never silently retry a failed attempt.
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      # No retries -- a failed drill must surface as a failure, not be
+      # silently re-attempted (could mask a real backup/restore regression).
+      backoffLimit: 0
+      # Script's own longest internal wait is `kubectl wait --timeout=300s`
+      # for the restore-target pod; the PBM restore itself has no internal
+      # timeout. Outer bound set well beyond that to allow for image pull +
+      # namespace churn + the restore/verification steps, while still
+      # guaranteeing the Job can't run away indefinitely.
+      activeDeadlineSeconds: 1200
+      template:
+        spec:
+          serviceAccountName: dr-drill-mongodb-runner
+          containers:
+            - name: dr-drill-mongodb-runner
+              image: alpine/k8s:1.33.13
+              envFrom:
+                - configMapRef:
+                    name: dr-drill-role-arns
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  /scripts/dr-drill-mongodb-restore.sh
+              # This container just orchestrates kubectl/aws-cli calls -- it
+              # is not the MongoDB/PBM workload itself, so modest requests
+              # are sufficient.
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-drill-postgresql-weekly
+  namespace: dr-drill-uat
+spec:
+  schedule: "0 3 * * 0"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # Script's own longest internal wait is `kubectl wait --timeout=600s`
+      # for the CNPG Cluster to become Ready; outer bound set well beyond
+      # that (+50%+ headroom) to also cover namespace churn and the
+      # verification step.
+      activeDeadlineSeconds: 1500
+      template:
+        spec:
+          serviceAccountName: dr-drill-postgresql-runner
+          containers:
+            - name: dr-drill-postgresql-runner
+              image: alpine/k8s:1.33.13
+              envFrom:
+                - configMapRef:
+                    name: dr-drill-role-arns
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  /scripts/dr-drill-postgresql-restore.sh
+              # This container just orchestrates kubectl/aws-cli calls -- it
+              # is not the PostgreSQL workload itself, so modest requests
+              # are sufficient.
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          restartPolicy: Never
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dr-drill-clickhouse-weekly
+  namespace: dr-drill-uat
+spec:
+  schedule: "0 3 * * 0"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # Script's own longest internal wait is `kubectl wait --timeout=300s`
+      # for the restore-target pod; backup create/upload/download/restore
+      # against the live pod have no internal timeout. Outer bound set well
+      # beyond the 300s wait to cover those steps too.
+      activeDeadlineSeconds: 1200
+      template:
+        spec:
+          serviceAccountName: dr-drill-clickhouse-runner
+          containers:
+            - name: dr-drill-clickhouse-runner
+              image: alpine/k8s:1.33.13
+              envFrom:
+                - configMapRef:
+                    name: dr-drill-role-arns
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  /scripts/dr-drill-clickhouse-backup-restore.sh
+              # This container just orchestrates kubectl/aws-cli calls -- it
+              # is not the ClickHouse workload itself, so modest requests
+              # are sufficient.
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          restartPolicy: Never
+

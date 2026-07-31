@@ -1,0 +1,132 @@
+# k8s/dr-drill/rbac.yaml
+#
+# RBAC for the dr-drill-*-runner ServiceAccounts. These ServiceAccounts
+# already carry AWS identity via EKS Pod Identity
+# (platform-prerequisites/terraform/dr-drill/main.tf) -- this file grants the
+# separate, additional Kubernetes API permissions each drill script needs
+# (deploy+wait+exec into the throwaway restore-target pod, apply the CNPG
+# Cluster manifest).
+#
+# NAMESPACE-SCOPED, NOT CLUSTER-SCOPED, AND APPLIED ONCE (NOT PER-RUN):
+# each drill targets one of 3 FIXED, reusable namespaces
+# (dr-drill-mongodb-restore-target, dr-drill-postgresql-restore-target,
+# dr-drill-clickhouse-restore-target -- see the scripts' DRILL_NAMESPACE
+# defaults). These namespaces, and this file's RBAC, are provisioned ONCE by
+# scripts/bootstrap-dr-drill-role-arns-configmap.sh and never deleted --
+# only the workload object inside each namespace (a Deployment, or the CNPG
+# Cluster for postgresql) is deleted and recreated on every drill run. See
+# design spec addendum D19 for why: a namespace-scoped RoleBinding granting
+# "create rolebindings in this namespace" would itself be destroyed along
+# with the namespace it's meant to protect, if the namespace were deleted
+# every run (a bootstrapping paradox) -- so neither the namespace nor its
+# RBAC may be recreated per-run.
+#
+# This design also removes two over-broad grants a prior revision of this
+# file had (both now deleted from this file entirely):
+#   - a `dr-drill-namespace-manager` ClusterRole/ClusterRoleBinding granting
+#     namespace create/delete/get CLUSTER-WIDE, when only 3 fixed
+#     namespaces (created once, out-of-band, by the bootstrap script) were
+#     ever needed;
+#   - a `dr-drill-workload-operator-binder` ClusterRole/ClusterRoleBinding
+#     granting `rolebindings:create` + `clusterroles:bind` CLUSTER-WIDE
+#     (restricted only by `resourceNames` on the ClusterRole being bound,
+#     not on the target namespace) -- this let any one of the 3 runner
+#     ServiceAccounts self-grant the workload-operator permissions
+#     (pods/exec, Deployment writes, CNPG Cluster writes) in ANY namespace
+#     in the cluster, not just its own intended restore-target namespace.
+# Neither the runner ServiceAccounts nor the drill scripts they run as ever
+# need to create or bind RBAC objects at all now: the 3 RoleBindings below
+# are defined statically, once, and applied by the bootstrap script (which
+# runs with the operator's own privileged kubectl context, not a drill
+# runner's identity).
+#
+# The 3 ServiceAccounts themselves are NOT defined here -- they are owned by
+# scripts/bootstrap-dr-drill-role-arns-configmap.sh (created idempotently
+# from Terraform's role ARN outputs), one pair per drill (one SA in
+# dr-drill-uat for the orchestrator pod, one of the same name in the fixed
+# restore-target namespace for the restore-target pod itself -- see that
+# script and platform-prerequisites/terraform/dr-drill/main.tf).
+---
+# Cluster-scoped ClusterRole holding the actual workload permissions each
+# drill's orchestrator needs against its own fixed restore-target namespace:
+# pods get/list/watch (`kubectl wait --for=condition=ready pod ...`),
+# pods/exec (`kubectl exec ... -c <container> -- ...`), Deployment apply
+# (throwaway mongodb-restore-target.yaml / clickhouse-restore-target.yaml),
+# and CNPG Cluster apply (dr-drill-postgresql-restore.sh's inline manifest).
+# Defined once as a ClusterRole (not 3 duplicated Roles) to stay DRY, but --
+# per the 3 RoleBindings below -- never bound cluster-wide: each RoleBinding
+# scopes it to exactly one fixed namespace. A RoleBinding may reference a
+# ClusterRole to scope that ClusterRole's rules to just the RoleBinding's
+# own namespace -- see https://kubernetes.io/docs/reference/access-authn-authz/rbac/
+# #rolebinding-and-clusterrolebinding ("even though the following RoleBinding
+# refers to a ClusterRole, 'dave' will only be able to read Secrets in the
+# 'development' namespace, because the RoleBinding's namespace is
+# 'development'").
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dr-drill-workload-operator
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+# Grants the MongoDB orchestrator ServiceAccount (dr-drill-uat namespace)
+# dr-drill-workload-operator permissions scoped ONLY to the
+# dr-drill-mongodb-restore-target namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dr-drill-workload-operator
+  namespace: dr-drill-mongodb-restore-target
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dr-drill-workload-operator
+subjects:
+  - kind: ServiceAccount
+    name: dr-drill-mongodb-runner
+    namespace: dr-drill-uat
+---
+# Grants the PostgreSQL orchestrator ServiceAccount (dr-drill-uat namespace)
+# dr-drill-workload-operator permissions scoped ONLY to the
+# dr-drill-postgresql-restore-target namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dr-drill-workload-operator
+  namespace: dr-drill-postgresql-restore-target
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dr-drill-workload-operator
+subjects:
+  - kind: ServiceAccount
+    name: dr-drill-postgresql-runner
+    namespace: dr-drill-uat
+---
+# Grants the ClickHouse orchestrator ServiceAccount (dr-drill-uat namespace)
+# dr-drill-workload-operator permissions scoped ONLY to the
+# dr-drill-clickhouse-restore-target namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dr-drill-workload-operator
+  namespace: dr-drill-clickhouse-restore-target
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dr-drill-workload-operator
+subjects:
+  - kind: ServiceAccount
+    name: dr-drill-clickhouse-runner
+    namespace: dr-drill-uat
