@@ -104,10 +104,63 @@ class PostgresqlRestoreDrillBehaviorTests(unittest.TestCase):
 
     def test_creates_a_matching_service_account_in_the_drill_namespace(self):
         # ServiceAccounts are namespace-scoped; the CNPG-managed pod's own
-        # (dynamic, timestamped) namespace needs its own SA of this name.
+        # fixed namespace needs its own SA of this name.
         self._install_happy_path_mocks()
         self._run()
         self.assertIn("create serviceaccount dr-drill-postgresql-runner", self._log())
+
+    def test_uses_the_fixed_reusable_namespace_by_default(self):
+        # EKS Pod Identity associations require an exact static
+        # namespace+ServiceAccount match (no wildcards) -- a dynamically
+        # timestamped namespace could never be granted AWS credentials via
+        # Terraform ahead of time. Regression guard against reintroducing
+        # dr-drill-postgresql-$(date +%s).
+        self._install_happy_path_mocks()
+        self._run()
+        log = self._log()
+        self.assertIn("create namespace dr-drill-postgresql-restore-target", log)
+        for line in log.splitlines():
+            if "namespace" in line:
+                self.assertNotRegex(line, r"dr-drill-postgresql-\d{9,}",
+                                     "must not use a timestamped namespace name")
+
+    def test_deletes_the_namespace_at_start_before_recreating_it(self):
+        self._install_happy_path_mocks()
+        self._run()
+        log = self._log()
+        delete_idx = log.index("delete namespace dr-drill-postgresql-restore-target")
+        create_idx = log.index("create namespace dr-drill-postgresql-restore-target")
+        self.assertLess(delete_idx, create_idx,
+                         "namespace must be deleted (start-of-run safety net) "
+                         "before it is recreated")
+        self.assertIn("--wait=true", log)
+
+    def test_self_applies_a_namespace_scoped_rolebinding_for_the_workload_operator_role(self):
+        # The fixed namespace is deleted+recreated every run, wiping any
+        # RBAC objects that lived inside the previous run's copy of it.
+        applied_all_path = self.bin_dir / "applied-all.yaml"
+        self._mock("kubectl", (
+            'if [ "$1" = "apply" ] && [[ "$*" == *"-f -"* ]]; then\n'
+            f'  cat >> "{applied_all_path}"\n'
+            f'  echo "---" >> "{applied_all_path}"\n'
+            '  exit 0\n'
+            'fi\n'
+            'if [ "$1" = "wait" ]; then exit 0; fi\n'
+            'if [ "$1" = "exec" ]; then echo "500"; exit 0; fi\n'
+            'exit 0\n'
+        ))
+        self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [d for d in yaml.safe_load_all(applied_all_path.read_text()) if d]
+        role_bindings = [d for d in docs if d.get("kind") == "RoleBinding"]
+        self.assertEqual(len(role_bindings), 1)
+        manifest = role_bindings[0]
+        self.assertEqual(manifest["metadata"]["namespace"], "dr-drill-postgresql-restore-target")
+        self.assertEqual(manifest["roleRef"]["kind"], "ClusterRole")
+        self.assertEqual(manifest["roleRef"]["name"], "dr-drill-workload-operator")
+        self.assertEqual(manifest["subjects"][0]["name"], "dr-drill-postgresql-runner")
+        self.assertEqual(manifest["subjects"][0]["namespace"], "dr-drill-uat")
 
     def test_never_targets_production_namespace(self):
         self._install_happy_path_mocks()

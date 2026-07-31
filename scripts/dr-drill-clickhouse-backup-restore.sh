@@ -26,9 +26,18 @@ set -euo pipefail
 # bucket (oms-pbm-backups).
 #
 # Usage:
-#   scripts/dr-drill-clickhouse-backup-restore.sh [<drill-namespace>]
+#   scripts/dr-drill-clickhouse-backup-restore.sh [drill-namespace]
+#
+# Defaults to the fixed, reusable namespace dr-drill-clickhouse-restore-target
+# (override only for local/manual testing). EKS Pod Identity associations
+# require an exact static namespace+ServiceAccount match (no wildcards --
+# verified against AWS EKS Pod Identity documentation), so a dynamically
+# timestamped namespace could never be granted AWS credentials via
+# Terraform ahead of time. Per-run uniqueness/audit-trail comes from the
+# CronJob's own execution history (Job/pod names, pod start timestamps),
+# not from the namespace name.
 
-DRILL_NAMESPACE="${1:-dr-drill-clickhouse-$(date +%s)}"
+DRILL_NAMESPACE="${1:-dr-drill-clickhouse-restore-target}"
 BACKUP_NAME="dr-drill-$(date +%s)"
 S3_BACKUP_PATH="s3://oms-signoz-clickhouse-backups/${BACKUP_NAME}"
 DRILL_IAM_ROLE_ARN="${DR_DRILL_CLICKHOUSE_ROLE_ARN:?Set DR_DRILL_CLICKHOUSE_ROLE_ARN (dr-drill-clickhouse-backup-role, read+write scoped to oms-signoz-clickhouse-backups only)}"
@@ -36,7 +45,7 @@ DRILL_ROLE_NAME="$(basename "${DRILL_IAM_ROLE_ARN}")"
 
 cleanup() {
   echo "Tearing down drill namespace ${DRILL_NAMESPACE}..."
-  kubectl delete namespace "${DRILL_NAMESPACE}" --ignore-not-found --wait=false
+  kubectl delete namespace "${DRILL_NAMESPACE}" --wait=true --ignore-not-found=true --timeout=120s
 }
 trap cleanup EXIT
 
@@ -53,6 +62,12 @@ if [[ "${ASSUMED_IDENTITY_ARN}" != *"${DRILL_ROLE_NAME}"* ]]; then
   exit 1
 fi
 echo "✅ Identity verified: running as ${ASSUMED_IDENTITY_ARN}"
+
+# Safety net: a previous run's cleanup may have failed or been interrupted,
+# potentially leaving the fixed namespace stuck mid-teardown. Block until it
+# is fully gone before recreating it, so this run always starts clean.
+echo "Ensuring ${DRILL_NAMESPACE} is clean before starting..."
+kubectl delete namespace "${DRILL_NAMESPACE}" --wait=true --ignore-not-found=true --timeout=120s
 
 # --- Step 1: Create an application-consistent backup from the LIVE pod ---
 # Safe: clickhouse-backup create/upload only reads and freezes the live
@@ -82,9 +97,35 @@ kubectl exec -n signoz "${LIVE_CLICKHOUSE_POD}" -- clickhouse-backup delete loca
 kubectl create namespace "${DRILL_NAMESPACE}"
 # Matches k8s/dr-drill/clickhouse-restore-target.yaml's serviceAccountName --
 # ServiceAccounts are namespace-scoped, so the restore-target pod needs one
-# of this name inside its own (dynamic) namespace, not just the one
+# of this name inside its own (fixed) namespace, not just the one
 # bootstrap-dr-drill-role-arns-configmap.sh created in dr-drill-uat.
 kubectl create serviceaccount dr-drill-clickhouse-runner -n "${DRILL_NAMESPACE}"
+
+# The namespace was just (re)created above, which wipes any RBAC objects
+# that lived inside the previous run's copy of it. Re-grant this script's
+# own orchestrator ServiceAccount (dr-drill-clickhouse-runner, dr-drill-uat)
+# the namespace-scoped workload permissions it needs here by binding the
+# persistent dr-drill-workload-operator ClusterRole (k8s/dr-drill/rbac.yaml)
+# to just this namespace. Allowed without already holding those permissions
+# because dr-drill-uat's ServiceAccount also holds the `bind` verb on that
+# specific ClusterRole (see rbac.yaml's dr-drill-workload-operator-binder --
+# verified against kubernetes.io/docs/reference/access-authn-authz/rbac/
+# #restrictions-on-role-binding-creation-or-update).
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dr-drill-workload-operator
+  namespace: ${DRILL_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dr-drill-workload-operator
+subjects:
+  - kind: ServiceAccount
+    name: dr-drill-clickhouse-runner
+    namespace: dr-drill-uat
+EOF
 
 echo "Deploying throwaway single-node ClickHouse for restore target..."
 kubectl apply -n "${DRILL_NAMESPACE}" -f "$(dirname "$0")/../k8s/dr-drill/clickhouse-restore-target.yaml"
