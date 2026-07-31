@@ -102,65 +102,48 @@ class PostgresqlRestoreDrillBehaviorTests(unittest.TestCase):
         self.assertEqual(manifest["spec"]["serviceAccountName"],
                           "dr-drill-postgresql-runner")
 
-    def test_creates_a_matching_service_account_in_the_drill_namespace(self):
-        # ServiceAccounts are namespace-scoped; the CNPG-managed pod's own
-        # fixed namespace needs its own SA of this name.
-        self._install_happy_path_mocks()
-        self._run()
-        self.assertIn("create serviceaccount dr-drill-postgresql-runner", self._log())
-
     def test_uses_the_fixed_reusable_namespace_by_default(self):
         # EKS Pod Identity associations require an exact static
         # namespace+ServiceAccount match (no wildcards) -- a dynamically
         # timestamped namespace could never be granted AWS credentials via
         # Terraform ahead of time. Regression guard against reintroducing
-        # dr-drill-postgresql-$(date +%s).
+        # dr-drill-postgresql-$(date +%s). The namespace itself is now
+        # provisioned once by bootstrap-dr-drill-role-arns-configmap.sh, not
+        # by this script (see D18/D19) -- so we assert on the namespace the
+        # script applies the Cluster manifest into, not a `create namespace`
+        # call (which no longer happens here).
         self._install_happy_path_mocks()
         self._run()
         log = self._log()
-        self.assertIn("create namespace dr-drill-postgresql-restore-target", log)
+        self.assertIn("apply -n dr-drill-postgresql-restore-target -f -", log)
         for line in log.splitlines():
-            if "namespace" in line:
-                self.assertNotRegex(line, r"dr-drill-postgresql-\d{9,}",
-                                     "must not use a timestamped namespace name")
+            self.assertNotRegex(line, r"dr-drill-postgresql-\d{9,}",
+                                 "must not use a timestamped namespace name")
 
-    def test_deletes_the_namespace_at_start_before_recreating_it(self):
+    def test_deletes_the_cluster_at_start_before_recreating_it(self):
+        # Namespace + RBAC are persistent (bootstrapped once); only the
+        # throwaway CNPG Cluster itself is cycled per run.
         self._install_happy_path_mocks()
         self._run()
         log = self._log()
-        delete_idx = log.index("delete namespace dr-drill-postgresql-restore-target")
-        create_idx = log.index("create namespace dr-drill-postgresql-restore-target")
-        self.assertLess(delete_idx, create_idx,
-                         "namespace must be deleted (start-of-run safety net) "
+        delete_idx = log.index("delete cluster dr-drill-restore-target")
+        apply_idx = log.index("apply -n dr-drill-postgresql-restore-target -f -")
+        self.assertLess(delete_idx, apply_idx,
+                         "cluster must be deleted (start-of-run safety net) "
                          "before it is recreated")
         self.assertIn("--wait=true", log)
 
-    def test_self_applies_a_namespace_scoped_rolebinding_for_the_workload_operator_role(self):
-        # The fixed namespace is deleted+recreated every run, wiping any
-        # RBAC objects that lived inside the previous run's copy of it.
-        applied_all_path = self.bin_dir / "applied-all.yaml"
-        self._mock("kubectl", (
-            'if [ "$1" = "apply" ] && [[ "$*" == *"-f -"* ]]; then\n'
-            f'  cat >> "{applied_all_path}"\n'
-            f'  echo "---" >> "{applied_all_path}"\n'
-            '  exit 0\n'
-            'fi\n'
-            'if [ "$1" = "wait" ]; then exit 0; fi\n'
-            'if [ "$1" = "exec" ]; then echo "500"; exit 0; fi\n'
-            'exit 0\n'
-        ))
-        self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
-        result = self._run()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        docs = [d for d in yaml.safe_load_all(applied_all_path.read_text()) if d]
-        role_bindings = [d for d in docs if d.get("kind") == "RoleBinding"]
-        self.assertEqual(len(role_bindings), 1)
-        manifest = role_bindings[0]
-        self.assertEqual(manifest["metadata"]["namespace"], "dr-drill-postgresql-restore-target")
-        self.assertEqual(manifest["roleRef"]["kind"], "ClusterRole")
-        self.assertEqual(manifest["roleRef"]["name"], "dr-drill-workload-operator")
-        self.assertEqual(manifest["subjects"][0]["name"], "dr-drill-postgresql-runner")
-        self.assertEqual(manifest["subjects"][0]["namespace"], "dr-drill-uat")
+    def test_waits_for_cnpg_pvcs_to_be_gone_before_recreating_the_cluster(self):
+        # CNPG PVCs carry a real ownerReference back to their Cluster, so
+        # deleting the Cluster triggers standard Kubernetes cascading GC --
+        # but GC is asynchronous, so the script must poll for the PVCs to
+        # actually be gone before recreating the Cluster, or the drill could
+        # silently reuse stale local data instead of proving a real restore
+        # from the S3 WAL archive.
+        self._install_happy_path_mocks()
+        self._run()
+        log = self._log()
+        self.assertIn("get pvc -n dr-drill-postgresql-restore-target -l cnpg.io/cluster=dr-drill-restore-target", log)
 
     def test_never_targets_production_namespace(self):
         self._install_happy_path_mocks()
@@ -187,32 +170,35 @@ class PostgresqlRestoreDrillBehaviorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("identity", (result.stdout + result.stderr).lower())
 
-    def test_tears_down_drill_namespace_even_on_failure(self):
+    def test_tears_down_restore_target_cluster_even_on_failure(self):
         self._mock_kubectl(wait_exit=1)
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
         self._run()
-        self.assertIn("kubectl delete namespace", self._log())
+        self.assertIn("kubectl delete cluster", self._log())
 
     def test_records_a_nonnegative_rto(self):
         self._install_happy_path_mocks()
         result = self._run()
         self.assertRegex(result.stdout, r"RTO=\d+s")
 
-    def test_exec_targets_the_correct_statefulset_ordinal_zero_pod(self):
-        # Regression test for a real bug caught in task review: CNPG's
-        # Cluster is backed by a StatefulSet, whose pod ordinals start at 0.
+    def test_exec_targets_the_correct_pod_ordinal_one(self):
+        # Regression test: CNPG does NOT use StatefulSet resources -- it
+        # manages PVCs directly and numbers instance pods starting at 1, not
+        # 0 (verified against the official CNPG FAQ, "Why isn't CloudNativePG
+        # using StatefulSets?", and its own worked example of a single-
+        # instance cluster named "pg-italy" whose only pod is "pg-italy-1").
         # With `instances: 1` (this drill's throwaway target), the only pod
-        # is "dr-drill-restore-target-0" -- never "-1". The mock does not
-        # special-case the pod name, so this only passes if the script
-        # actually execs into the pod name the manifest implies.
+        # is "dr-drill-restore-target-1". The mock does not special-case the
+        # pod name, so this only passes if the script actually execs into
+        # the pod name the manifest implies.
         self._install_happy_path_mocks()
         self._run()
         exec_lines = [l for l in self._log().splitlines() if "kubectl exec" in l]
         self.assertTrue(exec_lines, "script must kubectl exec into the restore-target pod")
         for line in exec_lines:
-            self.assertIn("dr-drill-restore-target-0", line,
-                          "must exec into ordinal-0 pod (StatefulSet, instances: 1), "
-                          "not '-1' or any other ordinal")
+            self.assertIn("dr-drill-restore-target-1", line,
+                          "must exec into pod ordinal 1 (CNPG numbers from 1, "
+                          "not 0 -- it does not use StatefulSets)")
             self.assertIn("psql", line)
 
 

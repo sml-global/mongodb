@@ -14,22 +14,53 @@ set -euo pipefail
 #   scripts/dr-drill-postgresql-restore.sh [drill-namespace]
 #
 # Defaults to the fixed, reusable namespace dr-drill-postgresql-restore-target
-# (override only for local/manual testing). EKS Pod Identity associations
-# require an exact static namespace+ServiceAccount match (no wildcards --
-# verified against AWS EKS Pod Identity documentation), so a dynamically
-# timestamped namespace could never be granted AWS credentials via
-# Terraform ahead of time. Per-run uniqueness/audit-trail comes from the
-# CronJob's own execution history (Job/pod names, pod start timestamps),
-# not from the namespace name.
+# (override only for local/manual testing), provisioned ONCE (namespace,
+# ServiceAccount, RBAC) by scripts/bootstrap-dr-drill-role-arns-configmap.sh
+# -- see D18/D19. EKS Pod Identity associations require an exact static
+# namespace+ServiceAccount match (no wildcards -- verified against AWS EKS
+# Pod Identity documentation), so a dynamically timestamped namespace could
+# never be granted AWS credentials via Terraform ahead of time; a
+# per-run-deleted namespace would also destroy its own namespace-scoped RBAC
+# every run (a bootstrapping paradox -- see rbac.yaml header). This script
+# therefore only cycles the throwaway restore-target CNPG Cluster inside
+# that persistent namespace, never the namespace itself. Per-run
+# uniqueness/audit-trail comes from the CronJob's own execution history
+# (Job/pod names, pod start timestamps), not from the namespace name.
 
 DRILL_NAMESPACE="${1:-dr-drill-postgresql-restore-target}"
 DRILL_IAM_ROLE_ARN="${DR_DRILL_POSTGRESQL_ROLE_ARN:?Set DR_DRILL_POSTGRESQL_ROLE_ARN (dr-drill-postgresql-restore-role, read-only)}"
 DRILL_ROLE_NAME="$(basename "${DRILL_IAM_ROLE_ARN}")"
 RECOVERY_TARGET_TIME="${RECOVERY_TARGET_TIME:-latest}"
+CLUSTER_NAME="dr-drill-restore-target"
+
+# Verified via CNPG operator source code (pkg/utils/ownership.go's
+# SetAsOwnedBy, pkg/reconciler/persistentvolumeclaim/build.go's Build(), and
+# internal/cmd/plugin/destroy/destroy.go's opt-in removeOwnerReference()
+# step): every PVC CNPG creates for a Cluster carries a real Kubernetes
+# ownerReference (Controller: true) back to that Cluster, so deleting the
+# Cluster triggers standard Kubernetes cascading garbage collection of its
+# PVCs by default. GC is asynchronous, though, so wait_for_pvcs_gone below
+# is a defense-in-depth poll, not a substitute for that ownerReference-based
+# cleanup -- it guards against a race where this script tries to recreate
+# the Cluster before GC has actually finished removing the old PVCs.
+wait_for_pvcs_gone() {
+  echo "Waiting for ${CLUSTER_NAME}'s PVCs to be garbage-collected in ${DRILL_NAMESPACE}..."
+  for _ in $(seq 1 60); do
+    if [ -z "$(kubectl get pvc -n "${DRILL_NAMESPACE}" -l "cnpg.io/cluster=${CLUSTER_NAME}" -o name)" ]; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "PVCs for ${CLUSTER_NAME} were not garbage-collected within the expected time -- deleting explicitly."
+  kubectl delete pvc -n "${DRILL_NAMESPACE}" -l "cnpg.io/cluster=${CLUSTER_NAME}" \
+    --wait=true --ignore-not-found=true --timeout=120s
+}
 
 cleanup() {
-  echo "Tearing down drill namespace ${DRILL_NAMESPACE}..."
-  kubectl delete namespace "${DRILL_NAMESPACE}" --wait=true --ignore-not-found=true --timeout=120s
+  echo "Tearing down restore-target CNPG Cluster in ${DRILL_NAMESPACE}..."
+  kubectl delete cluster "${CLUSTER_NAME}" -n "${DRILL_NAMESPACE}" \
+    --wait=true --ignore-not-found=true --timeout=180s
+  wait_for_pvcs_gone
 }
 trap cleanup EXIT
 
@@ -48,48 +79,21 @@ fi
 echo "✅ Identity verified: running as ${ASSUMED_IDENTITY_ARN}"
 
 # Safety net: a previous run's cleanup may have failed or been interrupted,
-# potentially leaving the fixed namespace stuck mid-teardown. Block until it
-# is fully gone before recreating it, so this run always starts clean.
-echo "Ensuring ${DRILL_NAMESPACE} is clean before starting..."
-kubectl delete namespace "${DRILL_NAMESPACE}" --wait=true --ignore-not-found=true --timeout=120s
-
-kubectl create namespace "${DRILL_NAMESPACE}"
-# ServiceAccounts are namespace-scoped, so the CNPG-managed restore-target
-# pod needs one of this name inside its own (fixed) namespace, not just
-# the one bootstrap-dr-drill-role-arns-configmap.sh created in dr-drill-uat.
-kubectl create serviceaccount dr-drill-postgresql-runner -n "${DRILL_NAMESPACE}"
-
-# The namespace was just (re)created above, which wipes any RBAC objects
-# that lived inside the previous run's copy of it. Re-grant this script's
-# own orchestrator ServiceAccount (dr-drill-postgresql-runner, dr-drill-uat)
-# the namespace-scoped workload permissions it needs here by binding the
-# persistent dr-drill-workload-operator ClusterRole (k8s/dr-drill/rbac.yaml)
-# to just this namespace. Allowed without already holding those permissions
-# because dr-drill-uat's ServiceAccount also holds the `bind` verb on that
-# specific ClusterRole (see rbac.yaml's dr-drill-workload-operator-binder --
-# verified against kubernetes.io/docs/reference/access-authn-authz/rbac/
-# #restrictions-on-role-binding-creation-or-update).
-kubectl apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: dr-drill-workload-operator
-  namespace: ${DRILL_NAMESPACE}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: dr-drill-workload-operator
-subjects:
-  - kind: ServiceAccount
-    name: dr-drill-postgresql-runner
-    namespace: dr-drill-uat
-EOF
+# potentially leaving a stale Cluster (or its PVCs) stuck mid-teardown.
+# Block until both are fully gone before recreating, so this run always
+# starts clean. The namespace, ServiceAccount, and RBAC are provisioned once
+# (out-of-band) by scripts/bootstrap-dr-drill-role-arns-configmap.sh, not by
+# this script.
+echo "Ensuring the restore-target Cluster in ${DRILL_NAMESPACE} is clean before starting..."
+kubectl delete cluster "${CLUSTER_NAME}" -n "${DRILL_NAMESPACE}" \
+  --wait=true --ignore-not-found=true --timeout=180s
+wait_for_pvcs_gone
 
 cat <<EOF | kubectl apply -n "${DRILL_NAMESPACE}" -f -
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: dr-drill-restore-target
+  name: ${CLUSTER_NAME}
 spec:
   instances: 1
   # Attaches the cluster-managed pods to our own ServiceAccount (EKS Pod
@@ -116,7 +120,7 @@ spec:
 EOF
 
 RESTORE_START=$(date +%s)
-kubectl wait --for=condition=Ready cluster/dr-drill-restore-target -n "${DRILL_NAMESPACE}" --timeout=600s || {
+kubectl wait --for=condition=Ready "cluster/${CLUSTER_NAME}" -n "${DRILL_NAMESPACE}" --timeout=600s || {
   echo "FATAL: restored cluster did not become Ready within 600s"
   exit 1
 }
@@ -125,10 +129,13 @@ RTO_SECONDS=$((RESTORE_END - RESTORE_START))
 echo "Restore completed. RTO: ${RTO_SECONDS}s"
 
 echo "Verifying data integrity post-restore..."
-# CNPG Clusters are backed by a StatefulSet; pod ordinals start at 0, not 1.
-# With `instances: 1` (a throwaway single-node drill target), the only pod
-# is "<cluster-name>-0".
-ROW_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" dr-drill-restore-target-0 -- \
+# CNPG does NOT use a StatefulSet -- it manages PVCs directly and numbers
+# instance pods starting at 1, not 0 (verified against the official CNPG
+# FAQ: "CloudNativePG does not rely on StatefulSet resources", and the
+# Labels and Annotations doc's own examples, e.g. "cluster-example-1" as the
+# primary of a Cluster named "cluster-example"). With `instances: 1` (a
+# throwaway single-node drill target), the only pod is "<cluster-name>-1".
+ROW_COUNT=$(kubectl exec -n "${DRILL_NAMESPACE}" "${CLUSTER_NAME}-1" -- \
   psql -U postgres -d oms -tAc "SELECT COUNT(*) FROM orders;")
 if [ -z "${ROW_COUNT}" ] || [ "${ROW_COUNT}" -eq 0 ]; then
   echo "FATAL: post-restore row count is zero -- data integrity check failed"
