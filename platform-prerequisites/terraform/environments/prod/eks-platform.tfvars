@@ -1,14 +1,19 @@
-aws_region           = "ap-east-1"
-expected_account_id  = "815402439714"
-environment          = "dev"
-name_prefix          = "oms-dev-eks"
+# Production EKS Platform Terraform Configuration
+# Replaces the temporary `sandbox` validation environment in this same AWS account.
+# Sandbox MUST be fully torn down first — see docs/superpowers/plans/2026-07-29-network-and-uat-provisioning.md Task 8.
 
-vpc_cidr             = "10.200.208.0/21"
-availability_zones   = ["ap-east-1a", "ap-east-1b"]
-private_subnet_cidrs = ["10.200.208.0/23", "10.200.210.0/23"]
-public_subnet_cidrs  = ["10.200.212.0/26", "10.200.212.64/26"]
-nat_gateway_count    = 1
-nat_mode             = "single"
+name_prefix          = "oms-prod-eks"
+environment          = "prod"
+aws_region           = "ap-east-1"
+expected_account_id  = "632674123947"
+
+vpc_cidr              = "10.200.0.0/17"
+availability_zones    = ["ap-east-1a", "ap-east-1b", "ap-east-1c"]
+private_subnet_cidrs  = ["10.200.0.0/19", "10.200.32.0/19", "10.200.64.0/19"]
+public_subnet_cidrs   = ["10.200.96.0/26", "10.200.96.64/26", "10.200.96.128/26"]
+database_subnet_cidrs = ["10.200.97.0/24", "10.200.98.0/24", "10.200.99.0/24"]
+nat_gateway_count     = 3
+nat_mode              = "one-per-az"
 
 kubernetes_version      = "1.33"
 authentication_mode     = "API"
@@ -16,27 +21,28 @@ endpoint_public_access  = false
 endpoint_private_access = true
 deletion_protection     = true
 
-node_instance_type    = "m6i.large"
-node_min_size         = 1
-node_desired_size     = 2
-node_max_size         = 3
-node_root_volume_size = 80
+node_instance_type    = "m6i.xlarge"
+node_min_size         = 3
+node_desired_size     = 3
+node_max_size         = 9
+node_root_volume_size = 100
 node_spot_enabled     = false
 
-cluster_kms_key_arn     = "arn:aws:kms:ap-east-1:815402439714:key/11111111-1111-1111-1111-111111111111"
+# Placeholder — operator must replace with the real KMS key ARN before apply.
+cluster_kms_key_arn     = "arn:aws:kms:ap-east-1:632674123947:key/REPLACE-ME-PROD-CLUSTER-KEY"
 cluster_oidc_thumbprint = "9e99a48a9960b14926bb7f3b02e22da0afd40a4d"
-cluster_oidc_issuer_url = "https://oidc.eks.ap-east-1.amazonaws.com/id/DEVEXAMPLEOIDC"
-enable_load_balancer_controller = false
+cluster_oidc_issuer_url = "https://oidc.eks.ap-east-1.amazonaws.com/id/REPLACE-ME-PROD-OIDC"
+enable_load_balancer_controller = true
 
 efs_enabled         = true
 efs_throughput_mode = "bursting"
 
 backup_enabled            = true
-backup_retention_days     = 14
-backup_kms_key_arn        = "arn:aws:kms:ap-east-1:815402439714:key/22222222-2222-2222-2222-222222222222"
-backup_service_role_arn   = "arn:aws:iam::815402439714:role/service-role/AWSBackupDefaultServiceRole"
-vault_min_retention_days  = 14
-vault_max_retention_days  = 120
+backup_retention_days     = 35
+backup_kms_key_arn        = "arn:aws:kms:ap-east-1:632674123947:key/REPLACE-ME-PROD-BACKUP-KEY"
+backup_service_role_arn   = "arn:aws:iam::632674123947:role/service-role/AWSBackupDefaultServiceRole"
+vault_min_retention_days  = 35
+vault_max_retention_days  = 365
 
 addons = {
   vpc-cni = {

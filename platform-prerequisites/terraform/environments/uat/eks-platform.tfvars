@@ -3,12 +3,13 @@ expected_account_id  = "672172129937"
 environment          = "uat"
 name_prefix          = "oms-uat-eks"
 
-vpc_cidr             = "10.80.0.0/16"
-availability_zones   = ["ap-east-1a", "ap-east-1b"]
-private_subnet_cidrs = ["10.80.0.0/20", "10.80.16.0/20"]
-public_subnet_cidrs  = ["10.80.128.0/20", "10.80.144.0/20"]
-nat_gateway_count    = 1
-nat_mode             = "single"
+vpc_cidr              = "10.200.216.0/21"
+availability_zones    = ["ap-east-1a", "ap-east-1b"]
+private_subnet_cidrs  = ["10.200.216.0/23", "10.200.218.0/23"]
+public_subnet_cidrs   = ["10.200.220.0/26", "10.200.220.64/26"]
+database_subnet_cidrs = ["10.200.220.128/25", "10.200.221.0/25"]
+nat_gateway_count     = 1
+nat_mode              = "single"
 
 kubernetes_version      = "1.33"
 authentication_mode     = "API"
@@ -44,6 +45,7 @@ addons = {
     addon_version        = "v1.20.4-eksbuild.1"
     resolve_conflicts    = "OVERWRITE"
     service_account_role = false
+    configuration_values = jsonencode({ env = { ENABLE_PREFIX_DELEGATION = "true", WARM_PREFIX_TARGET = "1" } })
   }
   coredns = {
     enabled              = true

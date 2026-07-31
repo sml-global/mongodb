@@ -8,6 +8,7 @@ output "platform_contract" {
     vpc_cidr               = module.network.vpc_cidr
     private_subnet_ids     = module.network.private_subnet_ids
     public_subnet_ids      = module.network.public_subnet_ids
+    database_subnet_ids    = module.network.database_subnet_ids
     cluster_name           = module.eks.cluster_name
     cluster_arn            = module.eks.cluster_arn
     cluster_endpoint       = module.eks.cluster_endpoint
