@@ -137,7 +137,7 @@ bash scripts/provision.sh all --destroy
 **Seam Read:** Extract guard configuration from environment
 ```bash
 POSTGRESQL_NAMESPACE=${POSTGRESQL_NAMESPACE:-"postgresql"}
-POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"postgresql"}
+POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"oms-postgresql"}
 ```
 
 **Parse:** Query Kubernetes and PostgreSQL status
@@ -146,7 +146,7 @@ POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"postgresql"}
 kubectl -n "$POSTGRESQL_NAMESPACE" get cluster "$POSTGRESQL_CLUSTER_NAME" -o yaml
 
 # Get replica health
-kubectl -n "$POSTGRESQL_NAMESPACE" exec "oms-${POSTGRESQL_CLUSTER_NAME}-1" -- \
+kubectl -n "$POSTGRESQL_NAMESPACE" exec "${POSTGRESQL_CLUSTER_NAME}-1" -- \
   psql -U postgres -c "SELECT * FROM pg_stat_replication;" 
 
 # Get recent events
@@ -322,7 +322,7 @@ All AWS credentials are injected via IRSA pod identity. No stored Kubernetes sec
 Extract configuration from environment:
 ```bash
 POSTGRESQL_NAMESPACE=${POSTGRESQL_NAMESPACE:-"postgresql"}
-POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"postgresql"}
+POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"oms-postgresql"}
 POSTGRESQL_WAL_BUCKET=${POSTGRESQL_WAL_BUCKET:-"oms-cnpg-wal-archive"}
 ```
 
@@ -356,7 +356,7 @@ if ! kubectl -n "$POSTGRESQL_NAMESPACE" get pod "$PRIMARY_POD" --no-headers | gr
 fi
 
 # Check: At least 2 replicas are connected
-CONNECTED_REPLICAS=$(kubectl -n "$POSTGRESQL_NAMESPACE" exec "oms-${POSTGRESQL_CLUSTER_NAME}-1" -- \
+CONNECTED_REPLICAS=$(kubectl -n "$POSTGRESQL_NAMESPACE" exec "${POSTGRESQL_CLUSTER_NAME}-1" -- \
   psql -U postgres -c "SELECT COUNT(*) FROM pg_stat_replication WHERE state='streaming';" --tuples-only)
 if [[ $CONNECTED_REPLICAS -lt 2 ]]; then
   echo "ERROR: Fewer than 2 replicas connected. Destruction blocked."
@@ -364,7 +364,7 @@ if [[ $CONNECTED_REPLICAS -lt 2 ]]; then
 fi
 
 # Check: No active WAL archival failures
-ARCHIVAL_FAILED=$(kubectl -n "$POSTGRESQL_NAMESPACE" exec "oms-${POSTGRESQL_CLUSTER_NAME}-1" -- \
+ARCHIVAL_FAILED=$(kubectl -n "$POSTGRESQL_NAMESPACE" exec "${POSTGRESQL_CLUSTER_NAME}-1" -- \
   psql -U postgres -c "SELECT failed_count FROM pg_stat_archiver WHERE failed_count > 0;" --tuples-only | wc -l)
 if [[ $ARCHIVAL_FAILED -gt 0 ]]; then
   echo "ERROR: Active WAL archival failures detected. Destruction blocked."
@@ -612,21 +612,12 @@ Per the Dev/SIT-vs-UAT/Prod split (see the Scope Update above and
 - **UAT/Prod (Aurora):** real configuration is Terraform-managed --
   `platform-prerequisites/terraform/postgresql/variables.tf` and the
   `environments/{uat,prod}/*.tfvars` files are authoritative.
-- **Dev/SIT (CNPG):** **no committed CNPG `Cluster` manifest for a live
-  Dev/SIT deployment was found anywhere in this repository** at the time of
-  this cleanup -- the only `postgresql.cnpg.io` `Cluster` manifest that
-  exists is the throwaway restore-target created inline by
-  `scripts/dr-drill-postgresql-restore.sh` for DR drills, which is not the
-  same thing as a live Dev/SIT database. If a real Dev/SIT CNPG deployment
-  exists, it is not tracked as IaC in this repo and this section cannot
-  document its actual hardcoded values; this is flagged as a follow-up to
-  verify separately, not assumed away.
+- **Dev/SIT (CNPG):** committed CNPG `Cluster` manifest is at
+  `gitops/postgresql/overlays/dev/cluster.yaml`, wired into provisioning via
+  `scripts/provision.sh pg` (which calls the `postgresql` scope in
+  `scripts/provision-k8s-components.sh`).
 
-3. **gitops/postgresql/overlays/uat/kustomization.yaml**
-   - Reads POSTGRESQL_VERSION for HelmRelease chart version
-   - Configures replica count and storage class
-
-4. **scripts/verify-platform-health.sh --smoke-test**
+2. **scripts/verify-platform-health.sh --smoke-test**
    - Verifies PostgreSQL is accessible
    - Validates WAL archival is functioning
 
