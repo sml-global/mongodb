@@ -3,12 +3,11 @@
 tests/signoz/test_environment_contract.py
 
 Test environment schema fragment validation for SigNoz.
-Tests: 4
+Tests: 3
 
 - test_signoz_schema_fragment_exists
-- test_signoz_fragment_registers_all_required_variables
 - test_signoz_fragment_has_eks_platform_requires_dependency
-- test_signoz_fragment_validates_variable_constraints
+- test_signoz_fragment_declares_no_dead_keys
 """
 
 import unittest
@@ -34,44 +33,37 @@ class TestSignozEnvironmentContract(unittest.TestCase):
         self.assertTrue(self.schema_path.exists(),
             f"Schema fragment not found: {self.schema_path}")
 
-    def test_signoz_fragment_registers_all_required_variables(self):
-        """Fragment must define all 6 required variables."""
-        required_vars = [
+    def test_signoz_fragment_has_eks_platform_requires_dependency(self):
+        """Fragment must declare @requires eks-platform dependency."""
+        self.assertIn("@requires eks-platform", self.schema_content,
+            "Fragment must declare @requires eks-platform dependency")
+
+    def test_signoz_fragment_declares_no_dead_keys(self):
+        """Regression test for Issue #4: SIGNOZ_NAMESPACE (a duplicate of the
+        row in base.manifest, with a conflicting fixed:signoz constraint that
+        would have rejected UAT's real value signoz-uat), SIGNOZ_VERSION,
+        SIGNOZ_K8S_INFRA_VERSION, SIGNOZ_STORAGE_CLASS, SIGNOZ_OTEL_ENDPOINT,
+        and SIGNOZ_CLICKHOUSE_SECRET_NAME were declared here since Phase 3
+        planning but never consumed anywhere in the codebase (verified via
+        repo-wide search); all were removed 2026-07-31. Guard against
+        reintroducing them as actual schema rows (the header comment
+        documenting their removal legitimately mentions these names in
+        prose, so check for the row syntax specifically)."""
+        rows = [
+            line for line in self.schema_content.splitlines()
+            if line and not line.startswith("#")
+        ]
+        row_keys = [row.split("|", 1)[0] for row in rows]
+        for dead_key in (
             "SIGNOZ_NAMESPACE",
             "SIGNOZ_VERSION",
             "SIGNOZ_K8S_INFRA_VERSION",
             "SIGNOZ_STORAGE_CLASS",
             "SIGNOZ_OTEL_ENDPOINT",
             "SIGNOZ_CLICKHOUSE_SECRET_NAME",
-        ]
-        for var in required_vars:
-            self.assertIn(var, self.schema_content,
-                f"Required variable {var} not found in schema fragment")
-
-    def test_signoz_fragment_has_eks_platform_requires_dependency(self):
-        """Fragment must declare @requires eks-platform dependency."""
-        self.assertIn("@requires eks-platform", self.schema_content,
-            "Fragment must declare @requires eks-platform dependency")
-
-    def test_signoz_fragment_validates_variable_constraints(self):
-        """Fragment must specify constraints for each variable."""
-        # SIGNOZ_NAMESPACE must have fixed constraint
-        self.assertIn("SIGNOZ_NAMESPACE|required|fixed:signoz", self.schema_content,
-            "SIGNOZ_NAMESPACE must be fixed to 'signoz'")
-        
-        # SIGNOZ_STORAGE_CLASS must have fixed constraint
-        self.assertIn("SIGNOZ_STORAGE_CLASS|required|fixed:gp3-mongodb", self.schema_content,
-            "SIGNOZ_STORAGE_CLASS must be fixed to 'gp3-mongodb'")
-        
-        # Other variables must have nonempty constraint
-        self.assertIn("SIGNOZ_VERSION|required|nonempty", self.schema_content,
-            "SIGNOZ_VERSION must have nonempty constraint")
-        self.assertIn("SIGNOZ_K8S_INFRA_VERSION|required|nonempty", self.schema_content,
-            "SIGNOZ_K8S_INFRA_VERSION must have nonempty constraint")
-        self.assertIn("SIGNOZ_OTEL_ENDPOINT|required|nonempty", self.schema_content,
-            "SIGNOZ_OTEL_ENDPOINT must have nonempty constraint")
-        self.assertIn("SIGNOZ_CLICKHOUSE_SECRET_NAME|required|nonempty", self.schema_content,
-            "SIGNOZ_CLICKHOUSE_SECRET_NAME must have nonempty constraint")
+        ):
+            self.assertNotIn(dead_key, row_keys,
+                f"{dead_key} should have been removed from this fragment")
 
 
 if __name__ == '__main__':

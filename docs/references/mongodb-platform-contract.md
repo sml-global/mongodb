@@ -572,32 +572,29 @@ terraform validate      # Valid HCL configuration
 
 ## Configuration Reference
 
-Configuration values are defined in the environment schema fragment and consumed by provisioning scripts:
+**Update (2026-07-31, Issue #4):** the environment-schema keys previously listed
+here (`MONGODB_VERSION`, `MONGODB_STORAGE_CLASS`, `MONGODB_REPLICA_COUNT`,
+`MONGODB_BACKUP_ENABLED`, `MONGODB_BACKUP_SCHEDULE`,
+`MONGODB_BACKUP_RETENTION_DAYS`) were never actually consumed by any script,
+Terraform module, or Kubernetes manifest -- verified via repo-wide search,
+including `scripts/lib/packages/30-mongodb/`. They were removed from
+`config/environment-schema/fragments/30-mongodb.manifest`. The real,
+authoritative configuration is hardcoded directly in the live manifest:
 
-**Fragment Location:** `config/environment-schema/fragments/10-mongodb.manifest`
+**Manifest Location:** `k8s/base/psmdb-cluster.yaml` (dev overlay:
+`k8s/overlays/dev/patch-psmdb.yaml`)
 
-**Configuration Parameters:**
+**Actual Configuration:**
 
-- `MONGODB_VERSION`: Percona Server for MongoDB version (e.g., "6.0.14")
-- `MONGODB_STORAGE_CLASS`: Kubernetes StorageClass for data volumes (default: "gp3-mongodb")
-- `MONGODB_REPLICA_COUNT`: Number of replicas in replica set (default: 3)
-- `MONGODB_BACKUP_ENABLED`: Enable Percona Backup Management (default: "true")
-- `MONGODB_BACKUP_SCHEDULE`: PBM backup schedule in cron format (default: "0 2 * * *" = 2 AM daily)
-- `MONGODB_BACKUP_RETENTION_DAYS`: Backup retention period in days (default: 30)
+- Image: `percona/percona-server-mongodb:7.0.12-7`
+- Replica set size: `3` (`spec.replsets[0].size`)
+- Storage class: `gp3-mongodb` (`volumeSpec.persistentVolumeClaim.storageClassName`)
+- Backup: enabled, daily full backup at `0 2 * * *` UTC, keeping the last `7`
+  backups (`spec.backup.tasks[0]` -- not a day-count retention window)
+- PITR: enabled, gzip-compressed oplog archival (`spec.backup.pitr`)
 
-**Consumed By:**
-
-1. **scripts/provision.sh mongodb**
-   - Sources environment fragment
-   - Passes values to Terraform and GitOps
-
-2. **platform-prerequisites/terraform/mongodb/variables.tf**
-   - Reads MongoDB operator role ARN
-   - Configures backup bucket and KMS key references
-
-3. **gitops/mongodb/overlays/uat/kustomization.yaml**
-   - Reads MONGODB_VERSION for HelmRelease chart version
-   - Configures replica count and storage class
+To change any of these values, edit the manifest directly (or the dev overlay
+patch) and re-apply -- there is no environment-variable indirection.
 
 4. **scripts/verify-platform-health.sh --smoke-test**
    - Verifies MongoDB is accessible
