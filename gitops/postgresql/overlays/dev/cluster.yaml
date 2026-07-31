@@ -12,7 +12,7 @@ spec:
     metadata:
       annotations: {}
   storage:
-    storageClass: gp3
+    storageClass: gp3-postgresql
     size: 50Gi
   backup:
     barmanObjectStore:
