@@ -202,10 +202,12 @@ class TestPostgreSQLDocumentationOrchestrationFixes(unittest.TestCase):
         self.assertNotIn("exec -it postgresql-1", content)
 
     def test_contract_references_gp3_postgresql_storageclass(self):
-        """Contract must reference the gp3-postgresql StorageClass in correct location"""
+        """Contract must reference the gp3-postgresql StorageClass at its real path"""
         content = (Path(__file__).parent.parent.parent / "docs" / "references" / "postgresql-platform-contract.md").read_text()
-        # After C1 fix, StorageClass is in gitops/postgresql/base/
-        self.assertIn("gp3-postgresql", content)
+        # After C1 fix, the StorageClass file lives under gitops/postgresql/base/,
+        # not k8s/base/ (MongoDB's kustomize base) or the old missing k8s/base/storage-classes.yaml.
+        self.assertIn("gitops/postgresql/base/storageclass-gp3-postgresql.yaml", content)
+        self.assertNotIn("k8s/base/storageclass-gp3-postgresql.yaml", content)
         self.assertNotIn("k8s/base/storage-classes.yaml", content)
 
     def test_contract_references_real_provisioning_command(self):
