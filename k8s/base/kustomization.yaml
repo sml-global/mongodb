@@ -5,6 +5,7 @@ namespace: mongodb
 
 resources:
   - storageclass-gp3-mongodb.yaml
+  - storageclass-gp3-postgresql.yaml
   - certificates.yaml
   - pdb.yaml
   - psmdb-cluster.yaml

@@ -1,0 +1,20 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-wffc-for-postgresql-storageclass
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: validate-gp3-postgresql-storageclass
+      match:
+        any:
+          - resources:
+              kinds:
+                - StorageClass
+              names:
+                - gp3-postgresql
+      validate:
+        message: "gp3-postgresql must use WaitForFirstConsumer."
+        pattern:
+          volumeBindingMode: WaitForFirstConsumer
