@@ -7,18 +7,20 @@ Usage:
   provision-k8s-components.sh <scope> [--bootstrap-platform-controllers]
 
 Scopes:
-  mongodb   Apply MongoDB operator, Kyverno policies, bootstrap secrets, and dev overlay.
-  mongo     Alias of mongodb.
-  signoz    Apply optional open-source SigNoz GitOps base only.
-  operators Apply only operator Helm layer.
-  policies  Apply only Kyverno policies.
-  overlay   Apply only MongoDB dev overlay.
-  all       Apply MongoDB scope, then SigNoz.
+  mongodb    Apply MongoDB operator, Kyverno policies, bootstrap secrets, and dev overlay.
+  mongo      Alias of mongodb.
+  postgresql Apply CNPG operator, Kyverno policies, and the dev Cluster overlay.
+  signoz     Apply optional open-source SigNoz GitOps base only.
+  operators  Apply only operator Helm layer.
+  policies   Apply only Kyverno policies.
+  overlay    Apply only MongoDB dev overlay.
+  all        Apply MongoDB scope, then SigNoz.
 
 Examples:
   scripts/provision-k8s-components.sh signoz
   scripts/provision-k8s-components.sh mongodb
   scripts/provision-k8s-components.sh mongo
+  scripts/provision-k8s-components.sh postgresql
   scripts/provision-k8s-components.sh mongodb --bootstrap-platform-controllers
 EOF
 }
@@ -26,6 +28,7 @@ EOF
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCOPE="${1:-}"
 MONGODB_CRD_NAME="perconaservermongodbs.psmdb.percona.com"
+POSTGRESQL_CRD_NAME="clusters.postgresql.cnpg.io"
 WAIT_TIMEOUT_SECONDS="${MONGODB_OPERATOR_READY_TIMEOUT_SECONDS:-180}"
 SIGNOZ_READY_TIMEOUT_SECONDS="${SIGNOZ_READY_TIMEOUT_SECONDS:-600}"
 BOOTSTRAP_PLATFORM_CONTROLLERS="false"
@@ -396,6 +399,11 @@ preflight_scope() {
         bootstrap_kyverno
         bootstrap_cert_manager
         ;;
+      postgresql)
+        bootstrap_ebs_csi_driver
+        bootstrap_flux_controllers
+        bootstrap_kyverno
+        ;;
       signoz|operators)
         bootstrap_flux_controllers
         ;;
@@ -418,6 +426,18 @@ preflight_scope() {
         "Install cert-manager first (Certificate CRD is missing), then rerun this command."
       record_missing_crd "issuers.cert-manager.io" \
         "Install cert-manager first (Issuer CRD is missing), then rerun this command."
+      if ! kubectl get csidriver ebs.csi.aws.com >/dev/null 2>&1; then
+        MISSING_CRDS+=("ebs.csi.aws.com|Install the AWS EBS CSI driver addon first, then rerun this command.")
+      fi
+      ensure_no_missing_crds "$1"
+      ;;
+    postgresql)
+      record_missing_crd "helmreleases.helm.toolkit.fluxcd.io" \
+        "Install Flux source/helm controllers first (HelmRelease CRD is missing), then rerun this command."
+      record_missing_crd "helmrepositories.source.toolkit.fluxcd.io" \
+        "Install Flux source/helm controllers first (HelmRepository CRD is missing), then rerun this command."
+      record_missing_crd "clusterpolicies.kyverno.io" \
+        "Install Kyverno first (ClusterPolicy CRD is missing), then rerun this command."
       if ! kubectl get csidriver ebs.csi.aws.com >/dev/null 2>&1; then
         MISSING_CRDS+=("ebs.csi.aws.com|Install the AWS EBS CSI driver addon first, then rerun this command.")
       fi
@@ -523,6 +543,18 @@ apply_signoz() {
   done
 }
 
+apply_postgresql_operator() {
+  require_crd "helmreleases.helm.toolkit.fluxcd.io" \
+    "Install Flux source/helm controllers first (HelmRelease CRD is missing), then rerun this command."
+  require_crd "helmrepositories.source.toolkit.fluxcd.io" \
+    "Install Flux source/helm controllers first (HelmRepository CRD is missing), then rerun this command."
+  kubectl apply -k "$ROOT_DIR/gitops/postgresql/base"
+}
+
+apply_postgresql_overlay() {
+  kubectl apply -k "$ROOT_DIR/gitops/postgresql/overlays/dev"
+}
+
 wait_for_mongodb_crd() {
   local deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
 
@@ -537,6 +569,20 @@ wait_for_mongodb_crd() {
   done
 }
 
+wait_for_postgresql_crd() {
+  local deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+
+  echo "Waiting for PostgreSQL CRD $POSTGRESQL_CRD_NAME (timeout: ${WAIT_TIMEOUT_SECONDS}s)..."
+  while ! kubectl get crd "$POSTGRESQL_CRD_NAME" >/dev/null 2>&1; do
+    if (( SECONDS >= deadline )); then
+      echo "ERROR: PostgreSQL CRD '$POSTGRESQL_CRD_NAME' not found within ${WAIT_TIMEOUT_SECONDS}s." >&2
+      echo "Hint: ensure Flux and the CNPG operator HelmRelease are healthy before applying the overlay." >&2
+      exit 1
+    fi
+    sleep 5
+  done
+}
+
 case "$SCOPE" in
   mongodb|mongo)
     preflight_scope "$SCOPE"
@@ -545,6 +591,13 @@ case "$SCOPE" in
     apply_policies
     wait_for_mongodb_crd
     apply_overlay
+    ;;
+  postgresql)
+    preflight_scope "$SCOPE"
+    apply_postgresql_operator
+    apply_policies
+    wait_for_postgresql_crd
+    apply_postgresql_overlay
     ;;
   signoz)
     preflight_scope "$SCOPE"
@@ -575,7 +628,7 @@ case "$SCOPE" in
     exit 0
     ;;
   *)
-    echo "Error: unknown scope '$SCOPE'. Expected one of: mongodb, mongo, signoz, operators, policies, overlay, all" >&2
+    echo "Error: unknown scope '$SCOPE'. Expected one of: mongodb, mongo, postgresql, signoz, operators, policies, overlay, all" >&2
     usage
     exit 1
     ;;
