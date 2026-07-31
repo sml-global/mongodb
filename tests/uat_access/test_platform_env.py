@@ -96,6 +96,28 @@ exit 64
             "aws configure get region\n",
         )
 
+    def test_relational_constraint_is_vacuously_true_for_unset_optional_key(self):
+        # Regression test for Issue #4 (layer 3): _platform_env_check_cidr_contained_by
+        # (and the same pattern in _platform_env_check_integer_order and
+        # _platform_env_check_cidr_nonoverlap) used to hard-fail with
+        # "references unknown key" whenever an optional key referenced by a
+        # constraint (e.g. EKS_CONNECTED_CIDR, declared optional in
+        # 20-eks-platform.manifest) was legitimately unset -- which is the
+        # normal case for both dev.env and uat.env today. A constraint on a
+        # key that isn't set cannot be meaningfully evaluated and must be
+        # skipped (vacuous truth), not treated as an error.
+        result = self.run_shell(
+            self.SOURCE_PREFIX
+            + "load_platform_env uat "
+            + "&& _platform_env_check_cidr_contained_by "
+            + "EKS_CONNECTED_CIDR,EKS_VPC_CIDR "
+            + '&& echo VACUOUSLY_TRUE'
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("VACUOUSLY_TRUE", result.stdout)
+        self.assertNotIn("unknown key", result.stderr)
+
     def test_dev_account_fails_closed(self):
         result = self.run_shell(
             self.SOURCE_PREFIX + "load_platform_env uat && verify_aws_identity_and_region",
