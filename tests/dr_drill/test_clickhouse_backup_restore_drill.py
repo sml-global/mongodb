@@ -159,17 +159,16 @@ class ClickhouseBackupRestoreDrillBehaviorTests(unittest.TestCase):
         self._install_happy_path_mocks()
         self._run()
         log = self._log()
-        self.assertIn("kubectl create namespace", log)
         self.assertIn("clickhouse-restore-target.yaml", log)
         self.assertIn("kubectl wait", log)
-        self.assertIn("kubectl delete namespace", log)
+        self.assertIn("kubectl delete deployment clickhouse-restore-target", log)
 
-    def test_tears_down_drill_namespace_even_on_failure(self):
+    def test_tears_down_restore_target_deployment_even_on_failure(self):
         self._mock_kubectl(exec_row_count="")
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
         self._run()
-        self.assertIn("kubectl delete namespace", self._log(),
-                      "cleanup trap must run kubectl delete namespace even "
+        self.assertIn("kubectl delete deployment clickhouse-restore-target", self._log(),
+                      "cleanup trap must delete the restore-target Deployment even "
                       "when the drill fails partway through")
 
     def test_uses_the_fixed_reusable_namespace_by_default(self):
@@ -177,58 +176,27 @@ class ClickhouseBackupRestoreDrillBehaviorTests(unittest.TestCase):
         # namespace+ServiceAccount match (no wildcards) -- a dynamically
         # timestamped namespace could never be granted AWS credentials via
         # Terraform ahead of time. Regression guard against reintroducing
-        # dr-drill-clickhouse-$(date +%s).
+        # dr-drill-clickhouse-$(date +%s). The namespace itself is now
+        # provisioned once by bootstrap-dr-drill-role-arns-configmap.sh, not
+        # by this script (see D18/D19).
         self._install_happy_path_mocks()
         self._run()
         log = self._log()
-        self.assertIn("create namespace dr-drill-clickhouse-restore-target", log)
+        self.assertIn("apply -n dr-drill-clickhouse-restore-target -f", log)
         for line in log.splitlines():
-            if "namespace" in line:
-                self.assertNotRegex(line, r"dr-drill-clickhouse-\d{9,}",
-                                     "must not use a timestamped namespace name")
+            self.assertNotRegex(line, r"dr-drill-clickhouse-\d{9,}",
+                                 "must not use a timestamped namespace name")
 
-    def test_deletes_the_namespace_at_start_before_recreating_it(self):
+    def test_deletes_the_deployment_at_start_before_recreating_it(self):
         self._install_happy_path_mocks()
         self._run()
         log = self._log()
-        delete_idx = log.index("delete namespace dr-drill-clickhouse-restore-target")
-        create_idx = log.index("create namespace dr-drill-clickhouse-restore-target")
-        self.assertLess(delete_idx, create_idx,
-                         "namespace must be deleted (start-of-run safety net) "
+        delete_idx = log.index("delete deployment clickhouse-restore-target")
+        apply_idx = log.index("apply -n dr-drill-clickhouse-restore-target -f")
+        self.assertLess(delete_idx, apply_idx,
+                         "Deployment must be deleted (start-of-run safety net) "
                          "before it is recreated")
         self.assertIn("--wait=true", log)
-
-    def test_self_applies_a_namespace_scoped_rolebinding_for_the_workload_operator_role(self):
-        # The fixed namespace is deleted+recreated every run, wiping any
-        # RBAC objects that lived inside the previous run's copy of it.
-        applied_manifest_path = self.bin_dir / "applied-rolebinding.yaml"
-        self._mock("kubectl", (
-            'if [ "$1" = "get" ]; then\n'
-            '  if [[ "$*" == *"-n signoz "* ]] || [[ "$*" == *"-n signoz" ]]; then echo "signoz-clickhouse-0"; fi\n'
-            '  if [[ "$*" == *"clickhouse-restore-target"* ]]; then echo "clickhouse-restore-target-abc"; fi\n'
-            '  exit 0\n'
-            'fi\n'
-            'if [ "$1" = "apply" ] && [[ "$*" == *"-f -"* ]]; then cat > "' + str(applied_manifest_path) + '"; exit 0; fi\n'
-            'if [ "$1" = "apply" ]; then exit 0; fi\n'
-            'if [ "$1" = "exec" ]; then\n'
-            '  if [[ "$*" == *"count()"* ]]; then echo "123456"; fi\n'
-            '  exit 0\n'
-            'fi\n'
-            'exit 0\n'
-        ))
-        self._mock("aws", (
-            'if [ "$1" = "sts" ]; then echo "' + DRILL_ROLE_ARN + '"; else exit 0; fi'
-        ))
-        result = self._run()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        manifest = yaml.safe_load(applied_manifest_path.read_text())
-        self.assertEqual(manifest["kind"], "RoleBinding")
-        self.assertEqual(manifest["metadata"]["namespace"], "dr-drill-clickhouse-restore-target")
-        self.assertEqual(manifest["roleRef"]["kind"], "ClusterRole")
-        self.assertEqual(manifest["roleRef"]["name"], "dr-drill-workload-operator")
-        self.assertEqual(manifest["subjects"][0]["name"], "dr-drill-clickhouse-runner")
-        self.assertEqual(manifest["subjects"][0]["namespace"], "dr-drill-uat")
-
 
 class ClickhouseHelmReleaseBackupConfigTests(unittest.TestCase):
     """Structural (not substring) assertions on the HelmRelease values,

@@ -15,21 +15,27 @@ set -euo pipefail
 #   scripts/dr-drill-mongodb-restore.sh [drill-namespace]
 #
 # Defaults to the fixed, reusable namespace dr-drill-mongodb-restore-target
-# (override only for local/manual testing). EKS Pod Identity associations
-# require an exact static namespace+ServiceAccount match (no wildcards --
-# verified against AWS EKS Pod Identity documentation), so a dynamically
-# timestamped namespace could never be granted AWS credentials via
-# Terraform ahead of time. Per-run uniqueness/audit-trail comes from the
-# CronJob's own execution history (Job/pod names, pod start timestamps),
-# not from the namespace name.
+# (override only for local/manual testing), provisioned ONCE (namespace,
+# ServiceAccount, RBAC) by scripts/bootstrap-dr-drill-role-arns-configmap.sh
+# -- see D18/D19. EKS Pod Identity associations require an exact static
+# namespace+ServiceAccount match (no wildcards -- verified against AWS EKS
+# Pod Identity documentation), so a dynamically timestamped namespace could
+# never be granted AWS credentials via Terraform ahead of time; a
+# per-run-deleted namespace would also destroy its own namespace-scoped RBAC
+# every run (a bootstrapping paradox -- see rbac.yaml header). This script
+# therefore only cycles the throwaway restore-target Deployment inside that
+# persistent namespace, never the namespace itself. Per-run uniqueness/
+# audit-trail comes from the CronJob's own execution history (Job/pod
+# names, pod start timestamps), not from the namespace name.
 
 DRILL_NAMESPACE="${1:-dr-drill-mongodb-restore-target}"
 DRILL_IAM_ROLE_ARN="${DR_DRILL_MONGODB_ROLE_ARN:?Set DR_DRILL_MONGODB_ROLE_ARN (dr-drill-mongodb-restore-role, read-only)}"
 DRILL_ROLE_NAME="$(basename "${DRILL_IAM_ROLE_ARN}")"
 
 cleanup() {
-  echo "Tearing down drill namespace ${DRILL_NAMESPACE}..."
-  kubectl delete namespace "${DRILL_NAMESPACE}" --wait=true --ignore-not-found=true --timeout=120s
+  echo "Tearing down restore-target Deployment in ${DRILL_NAMESPACE}..."
+  kubectl delete deployment mongodb-restore-target -n "${DRILL_NAMESPACE}" \
+    --wait=true --ignore-not-found=true --timeout=120s
 }
 trap cleanup EXIT
 
@@ -48,43 +54,13 @@ fi
 echo "✅ Identity verified: running as ${ASSUMED_IDENTITY_ARN}"
 
 # Safety net: a previous run's cleanup may have failed or been interrupted,
-# potentially leaving the fixed namespace stuck mid-teardown. Block until it
-# is fully gone before recreating it, so this run always starts clean.
-echo "Ensuring ${DRILL_NAMESPACE} is clean before starting..."
-kubectl delete namespace "${DRILL_NAMESPACE}" --wait=true --ignore-not-found=true --timeout=120s
-
-kubectl create namespace "${DRILL_NAMESPACE}"
-# Matches k8s/dr-drill/mongodb-restore-target.yaml's serviceAccountName --
-# ServiceAccounts are namespace-scoped, so the restore-target pod needs one
-# of this name inside its own (fixed) namespace, not just the one
-# bootstrap-dr-drill-role-arns-configmap.sh created in dr-drill-uat.
-kubectl create serviceaccount dr-drill-mongodb-runner -n "${DRILL_NAMESPACE}"
-
-# The namespace was just (re)created above, which wipes any RBAC objects
-# that lived inside the previous run's copy of it. Re-grant this script's
-# own orchestrator ServiceAccount (dr-drill-mongodb-runner, dr-drill-uat)
-# the namespace-scoped workload permissions it needs here by binding the
-# persistent dr-drill-workload-operator ClusterRole (k8s/dr-drill/rbac.yaml)
-# to just this namespace. Allowed without already holding those permissions
-# because dr-drill-uat's ServiceAccount also holds the `bind` verb on that
-# specific ClusterRole (see rbac.yaml's dr-drill-workload-operator-binder --
-# verified against kubernetes.io/docs/reference/access-authn-authz/rbac/
-# #restrictions-on-role-binding-creation-or-update).
-kubectl apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: dr-drill-workload-operator
-  namespace: ${DRILL_NAMESPACE}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: dr-drill-workload-operator
-subjects:
-  - kind: ServiceAccount
-    name: dr-drill-mongodb-runner
-    namespace: dr-drill-uat
-EOF
+# potentially leaving a stale Deployment stuck mid-teardown. Block until it
+# is fully gone before recreating it, so this run always starts clean. The
+# namespace, ServiceAccount, and RBAC are provisioned once (out-of-band) by
+# scripts/bootstrap-dr-drill-role-arns-configmap.sh, not by this script.
+echo "Ensuring the restore-target Deployment in ${DRILL_NAMESPACE} is clean before starting..."
+kubectl delete deployment mongodb-restore-target -n "${DRILL_NAMESPACE}" \
+  --wait=true --ignore-not-found=true --timeout=120s
 
 echo "Deploying throwaway single-node MongoDB for restore target..."
 kubectl apply -n "${DRILL_NAMESPACE}" -f "$(dirname "$0")/../k8s/dr-drill/mongodb-restore-target.yaml"

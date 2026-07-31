@@ -1,78 +1,67 @@
 # k8s/dr-drill/rbac.yaml
 #
-# RBAC for the 3 dr-drill-*-runner ServiceAccounts (created in the
-# dr-drill-uat namespace by scripts/bootstrap-dr-drill-role-arns-configmap.sh).
-# These ServiceAccounts already carry AWS identity via EKS Pod Identity
+# RBAC for the dr-drill-*-runner ServiceAccounts. These ServiceAccounts
+# already carry AWS identity via EKS Pod Identity
 # (platform-prerequisites/terraform/dr-drill/main.tf) -- this file grants the
 # separate, additional Kubernetes API permissions each drill script needs
-# (kubectl create/delete namespace, deploy+wait+exec into the throwaway
-# restore-target pod, apply the CNPG Cluster manifest).
+# (deploy+wait+exec into the throwaway restore-target pod, apply the CNPG
+# Cluster manifest).
 #
-# NAMESPACE-SCOPED, NOT CLUSTER-SCOPED: each drill now targets one of 3
-# FIXED, reusable namespaces (dr-drill-mongodb-restore-target,
-# dr-drill-postgresql-restore-target, dr-drill-clickhouse-restore-target --
-# see the scripts' DRILL_NAMESPACE defaults), not a dynamically timestamped
-# one. EKS Pod Identity associations require an exact static
-# namespace+ServiceAccount match (no wildcards), which is what forced this
-# move away from dynamic namespaces in the first place -- and it also lets
-# the workload permissions below be scoped down from cluster-wide to just
-# these 3 namespaces. See design spec addendum documenting this RBAC
-# (docs/superpowers/specs/2026-07-28-phase4-day2-operations-design.md).
+# NAMESPACE-SCOPED, NOT CLUSTER-SCOPED, AND APPLIED ONCE (NOT PER-RUN):
+# each drill targets one of 3 FIXED, reusable namespaces
+# (dr-drill-mongodb-restore-target, dr-drill-postgresql-restore-target,
+# dr-drill-clickhouse-restore-target -- see the scripts' DRILL_NAMESPACE
+# defaults). These namespaces, and this file's RBAC, are provisioned ONCE by
+# scripts/bootstrap-dr-drill-role-arns-configmap.sh and never deleted --
+# only the workload object inside each namespace (a Deployment, or the CNPG
+# Cluster for postgresql) is deleted and recreated on every drill run. See
+# design spec addendum D19 for why: a namespace-scoped RoleBinding granting
+# "create rolebindings in this namespace" would itself be destroyed along
+# with the namespace it's meant to protect, if the namespace were deleted
+# every run (a bootstrapping paradox) -- so neither the namespace nor its
+# RBAC may be recreated per-run.
+#
+# This design also removes two over-broad grants a prior revision of this
+# file had (both now deleted from this file entirely):
+#   - a `dr-drill-namespace-manager` ClusterRole/ClusterRoleBinding granting
+#     namespace create/delete/get CLUSTER-WIDE, when only 3 fixed
+#     namespaces (created once, out-of-band, by the bootstrap script) were
+#     ever needed;
+#   - a `dr-drill-workload-operator-binder` ClusterRole/ClusterRoleBinding
+#     granting `rolebindings:create` + `clusterroles:bind` CLUSTER-WIDE
+#     (restricted only by `resourceNames` on the ClusterRole being bound,
+#     not on the target namespace) -- this let any one of the 3 runner
+#     ServiceAccounts self-grant the workload-operator permissions
+#     (pods/exec, Deployment writes, CNPG Cluster writes) in ANY namespace
+#     in the cluster, not just its own intended restore-target namespace.
+# Neither the runner ServiceAccounts nor the drill scripts they run as ever
+# need to create or bind RBAC objects at all now: the 3 RoleBindings below
+# are defined statically, once, and applied by the bootstrap script (which
+# runs with the operator's own privileged kubectl context, not a drill
+# runner's identity).
 #
 # The 3 ServiceAccounts themselves are NOT defined here -- they are owned by
 # scripts/bootstrap-dr-drill-role-arns-configmap.sh (created idempotently
-# from Terraform's role ARN outputs). This file only grants them permissions
-# via subjects referencing those existing names.
+# from Terraform's role ARN outputs), one pair per drill (one SA in
+# dr-drill-uat for the orchestrator pod, one of the same name in the fixed
+# restore-target namespace for the restore-target pod itself -- see that
+# script and platform-prerequisites/terraform/dr-drill/main.tf).
 ---
-# Cluster-scoped: drill scripts create and tear down their own fixed
-# namespace on every run (`kubectl create namespace`, plus a synchronous,
-# blocking `kubectl delete namespace ... --wait=true` both at the start of
-# each run, as a safety net, and in the exit trap).
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: dr-drill-namespace-manager
-rules:
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["create", "delete", "get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: dr-drill-namespace-manager
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: dr-drill-namespace-manager
-subjects:
-  - kind: ServiceAccount
-    name: dr-drill-mongodb-runner
-    namespace: dr-drill-uat
-  - kind: ServiceAccount
-    name: dr-drill-postgresql-runner
-    namespace: dr-drill-uat
-  - kind: ServiceAccount
-    name: dr-drill-clickhouse-runner
-    namespace: dr-drill-uat
----
-# Cluster-scoped ClusterRole object holding the actual workload permissions
-# each drill needs -- but, unlike before, it is NOT bound cluster-wide via a
-# ClusterRoleBinding. Instead each drill script binds it to just its own
-# fixed namespace via a namespace-scoped RoleBinding (each script `kubectl
-# apply`s that RoleBinding immediately after `kubectl create namespace` --
-# see e.g. scripts/dr-drill-mongodb-restore.sh). A RoleBinding may reference
-# a ClusterRole to scope that ClusterRole's rules to just the RoleBinding's
+# Cluster-scoped ClusterRole holding the actual workload permissions each
+# drill's orchestrator needs against its own fixed restore-target namespace:
+# pods get/list/watch (`kubectl wait --for=condition=ready pod ...`),
+# pods/exec (`kubectl exec ... -c <container> -- ...`), Deployment apply
+# (throwaway mongodb-restore-target.yaml / clickhouse-restore-target.yaml),
+# and CNPG Cluster apply (dr-drill-postgresql-restore.sh's inline manifest).
+# Defined once as a ClusterRole (not 3 duplicated Roles) to stay DRY, but --
+# per the 3 RoleBindings below -- never bound cluster-wide: each RoleBinding
+# scopes it to exactly one fixed namespace. A RoleBinding may reference a
+# ClusterRole to scope that ClusterRole's rules to just the RoleBinding's
 # own namespace -- see https://kubernetes.io/docs/reference/access-authn-authz/rbac/
 # #rolebinding-and-clusterrolebinding ("even though the following RoleBinding
 # refers to a ClusterRole, 'dave' will only be able to read Secrets in the
 # 'development' namespace, because the RoleBinding's namespace is
-# 'development'"). Defining the ruleset once here (as a ClusterRole, not 3
-# duplicated Roles) keeps it DRY while still being namespace-scoped once
-# bound: pods get/list/watch (`kubectl wait --for=condition=ready pod ...`),
-# pods/exec (`kubectl exec ... -c <container> -- ...`), Deployment apply
-# (throwaway mongodb-restore-target.yaml / clickhouse-restore-target.yaml),
-# and CNPG Cluster apply (dr-drill-postgresql-restore.sh's inline manifest).
+# 'development'").
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -91,50 +80,53 @@ rules:
     resources: ["clusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
-# Because each drill script deletes and recreates its own fixed namespace on
-# every run, every namespace-scoped object that lived inside it -- including
-# any RoleBinding -- is deleted along with it. Each script is therefore
-# responsible for re-applying its own namespace's RoleBinding (referencing
-# dr-drill-workload-operator above) right after recreating the namespace.
-#
-# By default, creating/updating a RoleBinding requires the caller to already
-# hold every permission contained in the referenced role at the same scope
-# (see https://kubernetes.io/docs/reference/access-authn-authz/rbac/
-# #restrictions-on-role-binding-creation-or-update) -- which none of the 3
-# runner ServiceAccounts do (that's the whole point of granting it via this
-# RoleBinding). The documented escape hatch is the `bind` verb on the
-# specific Role/ClusterRole being referenced, scoped here via `resourceNames`
-# to ONLY `dr-drill-workload-operator` -- this mirrors the Kubernetes docs'
-# own "role-grantor" example verbatim (rolebindings:create +
-# clusterroles:bind, resourceNames-restricted), not a fabricated pattern.
+# Grants the MongoDB orchestrator ServiceAccount (dr-drill-uat namespace)
+# dr-drill-workload-operator permissions scoped ONLY to the
+# dr-drill-mongodb-restore-target namespace.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: RoleBinding
 metadata:
-  name: dr-drill-workload-operator-binder
-rules:
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["rolebindings"]
-    verbs: ["get", "create"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles"]
-    resourceNames: ["dr-drill-workload-operator"]
-    verbs: ["bind"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: dr-drill-workload-operator-binder
+  name: dr-drill-workload-operator
+  namespace: dr-drill-mongodb-restore-target
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: dr-drill-workload-operator-binder
+  name: dr-drill-workload-operator
 subjects:
   - kind: ServiceAccount
     name: dr-drill-mongodb-runner
     namespace: dr-drill-uat
+---
+# Grants the PostgreSQL orchestrator ServiceAccount (dr-drill-uat namespace)
+# dr-drill-workload-operator permissions scoped ONLY to the
+# dr-drill-postgresql-restore-target namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dr-drill-workload-operator
+  namespace: dr-drill-postgresql-restore-target
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dr-drill-workload-operator
+subjects:
   - kind: ServiceAccount
     name: dr-drill-postgresql-runner
     namespace: dr-drill-uat
+---
+# Grants the ClickHouse orchestrator ServiceAccount (dr-drill-uat namespace)
+# dr-drill-workload-operator permissions scoped ONLY to the
+# dr-drill-clickhouse-restore-target namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dr-drill-workload-operator
+  namespace: dr-drill-clickhouse-restore-target
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dr-drill-workload-operator
+subjects:
   - kind: ServiceAccount
     name: dr-drill-clickhouse-runner
     namespace: dr-drill-uat

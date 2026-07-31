@@ -134,12 +134,12 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
                              "identity does not match DR_DRILL_MONGODB_ROLE_ARN")
         self.assertIn("identity", (result.stdout + result.stderr).lower())
 
-    def test_tears_down_drill_namespace_even_on_failure(self):
+    def test_tears_down_restore_target_deployment_even_on_failure(self):
         self._mock_kubectl(pbm_status_exit=1)
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
         self._run()
-        self.assertIn("kubectl delete namespace", self._log(),
-                      "cleanup trap must run kubectl delete namespace even "
+        self.assertIn("kubectl delete deployment mongodb-restore-target", self._log(),
+                      "cleanup trap must delete the restore-target Deployment even "
                       "when the drill fails partway through")
 
     def test_records_a_nonnegative_rto(self):
@@ -185,12 +185,14 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         self.assertIn("oms-pbm-backups", log)
 
     def test_creates_a_matching_service_account_in_the_drill_namespace(self):
-        # ServiceAccounts are namespace-scoped; the restore-target pod's own
-        # fixed namespace needs its own SA of this name to match
-        # k8s/dr-drill/mongodb-restore-target.yaml's serviceAccountName.
+        # ServiceAccounts are namespace-scoped, but they -- along with the
+        # fixed namespace and its RBAC -- are now provisioned ONCE by
+        # scripts/bootstrap-dr-drill-role-arns-configmap.sh, not by this
+        # script on every run (see D19). Regression guard against
+        # reintroducing per-run `kubectl create serviceaccount`.
         self._install_happy_path_mocks()
         self._run()
-        self.assertIn("create serviceaccount dr-drill-mongodb-runner", self._log())
+        self.assertNotIn("create serviceaccount", self._log())
 
     def test_uses_the_fixed_reusable_namespace_by_default(self):
         # EKS Pod Identity associations require an exact static
@@ -201,62 +203,45 @@ class MongoDbRestoreDrillBehaviorTests(unittest.TestCase):
         self._install_happy_path_mocks()
         self._run()
         log = self._log()
-        self.assertIn("create namespace dr-drill-mongodb-restore-target", log)
+        self.assertIn("-n dr-drill-mongodb-restore-target", log)
         for line in log.splitlines():
-            if "namespace" in line:
+            if "dr-drill-mongodb-restore-target" in line:
                 self.assertNotRegex(line, r"dr-drill-mongodb-\d{9,}",
                                      "must not use a timestamped namespace name")
 
-    def test_deletes_the_namespace_at_start_before_recreating_it(self):
+    def test_never_creates_or_deletes_the_namespace_itself(self):
+        # Regression guard for D19: the namespace is provisioned once,
+        # out-of-band, by scripts/bootstrap-dr-drill-role-arns-configmap.sh.
+        # Deleting/recreating it on every run would also destroy its own
+        # namespace-scoped RBAC every run (a bootstrapping paradox).
+        self._install_happy_path_mocks()
+        self._run()
+        log = self._log()
+        self.assertNotIn("create namespace", log)
+        self.assertNotIn("delete namespace", log)
+
+    def test_deletes_the_deployment_at_start_before_recreating_it(self):
         # Safety net: a previous run's cleanup may have failed/been
-        # interrupted, potentially leaving the fixed namespace stuck
-        # mid-teardown. The script must block on a clean delete before
+        # interrupted, potentially leaving the restore-target Deployment
+        # stuck mid-teardown. The script must block on a clean delete before
         # recreating it, not just in the exit trap.
         self._install_happy_path_mocks()
         self._run()
         log = self._log()
-        delete_idx = log.index("delete namespace dr-drill-mongodb-restore-target")
-        create_idx = log.index("create namespace dr-drill-mongodb-restore-target")
-        self.assertLess(delete_idx, create_idx,
-                         "namespace must be deleted (start-of-run safety net) "
+        delete_idx = log.index("delete deployment mongodb-restore-target")
+        apply_idx = log.index("apply -n dr-drill-mongodb-restore-target -f")
+        self.assertLess(delete_idx, apply_idx,
+                         "Deployment must be deleted (start-of-run safety net) "
                          "before it is recreated")
         self.assertIn("--wait=true", log)
 
-    def test_self_applies_a_namespace_scoped_rolebinding_for_the_workload_operator_role(self):
-        # The fixed namespace is deleted+recreated every run, wiping any
-        # RBAC objects that lived inside the previous run's copy of it. The
-        # script must re-grant its own orchestrator ServiceAccount the
-        # namespace-scoped workload permissions by binding the persistent
-        # dr-drill-workload-operator ClusterRole (k8s/dr-drill/rbac.yaml) to
-        # just this namespace every run.
-        applied_manifest_path = self.bin_dir / "applied-rolebinding.yaml"
-        self._mock("kubectl", (
-            'if [ "$1" = "get" ]; then echo "mongodb-restore-target-abc"; exit 0; fi\n'
-            'if [ "$1" = "apply" ] && [[ "$*" == *"-f -"* ]]; then cat > "' + str(applied_manifest_path) + '"; exit 0; fi\n'
-            'if [ "$1" = "apply" ]; then exit 0; fi\n'
-            'if [ "$1" = "exec" ]; then\n'
-            '  if [[ "$*" == *"pbm config"* ]]; then exit 0; fi\n'
-            '  if [[ "$*" == *"pbm status"* ]]; then exit 0; fi\n'
-            '  if [[ "$*" == *"pbm list"* ]]; then echo "2026-07-28T12:00:00Z"; exit 0; fi\n'
-            '  if [[ "$*" == *"pbm restore"* ]]; then exit 0; fi\n'
-            '  if [[ "$*" == *"mongosh"* ]]; then echo "42"; exit 0; fi\n'
-            '  exit 0\n'
-            'fi\n'
-            'exit 0\n'
-        ))
+    def test_tears_down_restore_target_deployment_even_on_failure(self):
+        self._mock_kubectl(pbm_status_exit=1)
         self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
-        result = self._run()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        manifest = yaml.safe_load(applied_manifest_path.read_text())
-        self.assertEqual(manifest["kind"], "RoleBinding")
-        self.assertEqual(manifest["metadata"]["namespace"], "dr-drill-mongodb-restore-target")
-        self.assertEqual(manifest["roleRef"]["kind"], "ClusterRole")
-        self.assertEqual(manifest["roleRef"]["name"], "dr-drill-workload-operator")
-        subjects = manifest["subjects"]
-        self.assertEqual(len(subjects), 1)
-        self.assertEqual(subjects[0]["name"], "dr-drill-mongodb-runner")
-        self.assertEqual(subjects[0]["namespace"], "dr-drill-uat")
-
+        self._run()
+        self.assertIn("kubectl delete deployment mongodb-restore-target", self._log(),
+                      "cleanup trap must run kubectl delete deployment even "
+                      "when the drill fails partway through")
 
 class MongoDbRestoreTargetManifestTests(unittest.TestCase):
     """Structural (parsed-field) assertions on the throwaway restore-target
