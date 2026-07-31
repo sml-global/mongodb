@@ -1,18 +1,19 @@
 # k8s/dr-drill/cronjob.yaml
 #
 # THREE separate CronJobs, one per drill, each with its own dedicated
-# ServiceAccount. This is required, not stylistic: IRSA binds exactly one
-# IAM role to a ServiceAccount's default assumed identity, and each drill
+# ServiceAccount. This is required, not stylistic: EKS Pod Identity binds
+# exactly one IAM role to a namespace+ServiceAccount pair, and each drill
 # script's identity guard (D7) fails closed unless the assumed role matches
 # its own dedicated least-privilege role. A single CronJob running all three
 # scripts under one ServiceAccount could satisfy at most one of the three
 # identity checks -- caught in whole-branch review before ever being run.
 #
 # ServiceAccounts (dr-drill-mongodb-runner, dr-drill-postgresql-runner,
-# dr-drill-clickhouse-runner) are created and IRSA-annotated by
-# scripts/bootstrap-dr-drill-role-arns-configmap.sh from the matching
-# Terraform output -- never hardcoded here (D9: Terraform never creates
-# Kubernetes objects in this repo).
+# dr-drill-clickhouse-runner) are created (no IRSA-style annotation needed --
+# see D14) by scripts/bootstrap-dr-drill-role-arns-configmap.sh, which also
+# provisions the fixed drill namespaces and their RBAC once, out-of-band
+# (D18/D19) -- never hardcoded here (D9: Terraform never creates Kubernetes
+# objects in this repo).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
