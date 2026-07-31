@@ -375,3 +375,76 @@ restricted to that one named `ClusterRole`, via a
 `dr-drill-workload-operator-binder` `ClusterRole` — this mirrors the Kubernetes
 RBAC documentation's own "role-grantor"/restrictions-on-role-binding-creation
 pattern verbatim, not a fabricated mechanism.
+
+### D19: D18's RBAC was still over-broad — namespaces and RBAC are now provisioned once, never recreated (Critical)
+**Problem:** an independent whole-branch review of D18 found the RBAC it shipped
+was still two Critical over-broad grants, both cluster-wide instead of scoped to
+the 3 intended drill namespaces:
+1. `dr-drill-namespace-manager` granted `delete`/`get` on **all namespaces in the
+   cluster**, not just the 3 drill ones — a compromised drill container (which
+   also runs third-party `pbm`/`clickhouse-backup`/`aws` binaries) could delete
+   `mongodb`, `signoz`, or any other namespace.
+2. `dr-drill-workload-operator-binder` granted `rolebindings:create` +
+   `clusterroles:bind` **cluster-wide** via a `ClusterRoleBinding` — restricting
+   `bind` to one named `ClusterRole` via `resourceNames` does not restrict which
+   *namespace* the resulting `RoleBinding` can be created in. Any of the 3 runner
+   ServiceAccounts could self-grant the `dr-drill-workload-operator` permissions
+   (`pods/exec`, Deployment writes, CNPG Cluster writes) in **any namespace**,
+   including `mongodb` or `signoz` — a genuine lateral-movement path, not a
+   theoretical one.
+
+**A naive fix was considered and rejected:** replacing the single cluster-wide
+"binder" with 3 separate namespace-scoped `Role`/`RoleBinding` pairs (one per
+fixed drill namespace) looks correct at first glance, but reintroduces the exact
+bootstrapping paradox D18 was meant to solve: a namespace-scoped `RoleBinding`
+granting "you may create RoleBindings here" must itself live *inside* that same
+namespace. Since D18's scripts still deleted and recreated the entire namespace
+every run, that RoleBinding would be destroyed along with it, leaving the runner
+unable to re-grant itself permission on the very next run.
+
+**Fixed:** the actual namespace lifecycle itself changed, not just the RBAC.
+Namespaces are no longer deleted/recreated per drill run at all:
+- `scripts/bootstrap-dr-drill-role-arns-configmap.sh` now provisions, **once,
+  idempotently**: the `dr-drill-uat` orchestrator namespace, the 3 fixed
+  restore-target namespaces, a ServiceAccount of the right name in both the
+  orchestrator namespace and each restore-target namespace, and
+  `k8s/dr-drill/rbac.yaml` itself. This script is expected to run with an
+  operator's own privileged `kubectl` context, not a drill runner's identity.
+- Each of the 3 drill scripts now only deletes and recreates the **workload
+  object** inside its already-existing, never-deleted namespace (a `Deployment`
+  for mongodb/clickhouse, the CNPG `Cluster` for postgresql) — never the
+  namespace, ServiceAccount, or RBAC.
+- `k8s/dr-drill/rbac.yaml` no longer grants any runner ServiceAccount
+  `namespaces: create/delete` or `rolebindings:create`/`clusterroles:bind` at
+  all — those capabilities are gone entirely, not merely narrowed. Instead it
+  defines 3 static, namespace-scoped `RoleBinding`s (one per fixed restore-target
+  namespace) directly, applied once by the bootstrap script. The shared
+  `dr-drill-workload-operator` `ClusterRole` (unchanged) is referenced by each
+  `RoleBinding` purely to stay DRY — each `RoleBinding`'s own namespace still
+  fully scopes the grant, per the Kubernetes docs' own
+  rolebinding-and-clusterrolebinding note.
+
+**Additional finding verified during this fix (not a bug, but corrects a
+previously-approved regression test):** the PostgreSQL drill's
+`kubectl exec ... dr-drill-restore-target-0` (added in an earlier, separately
+reviewed task, with its own regression test asserting ordinal `-0`) was itself
+wrong. CloudNativePG does **not** use `StatefulSet` resources — confirmed
+against CloudNativePG's own official FAQ ("Why isn't CloudNativePG using
+StatefulSets? CloudNativePG does not rely on StatefulSet resources, and instead
+manages the underlying PVCs directly...") — and CNPG numbers instance pods
+starting at **1**, not 0 (confirmed via the FAQ's own worked example: a
+single-instance cluster named `pg-italy` has exactly one pod, `pg-italy-1`).
+The script and its test were corrected to target `dr-drill-restore-target-1`.
+This was caught only because this fix cycle re-verified the claim from first
+principles against CNPG's real documentation rather than trusting the earlier,
+already-"approved" test.
+
+**Also addressed in this pass:** CNPG-managed PVCs carry a real Kubernetes
+`ownerReference` back to their `Cluster` (verified against the CNPG operator's
+own PVC-build and ownership-management source), so deleting the `Cluster`
+triggers standard cascading garbage collection of its PVCs — but that GC is
+asynchronous. `dr-drill-postgresql-restore.sh` now polls for those PVCs to
+actually be gone (falling back to an explicit `kubectl delete pvc` by label
+selector if GC hasn't finished within a bounded time) before recreating the
+`Cluster`, so each drill run genuinely restores from the S3 WAL archive rather
+than risking a silent reuse of a stale local volume.
