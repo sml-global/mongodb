@@ -1,24 +1,25 @@
-aws_region = "ap-east-1"
-vpc_id     = "vpc-xxxxxxxx" # eksctl-EKS-boomi-runtime-cluster-cluster/VPC (10.200.0.0/16)
+# PostgreSQL Terraform Configuration Sample — Aurora (uat/prod only; dev/sit use CNPG in-cluster, no tfvars needed here)
+aws_region          = "ap-east-1"
+expected_account_id = "REPLACE_ME"
+environment         = "REPLACE_ME"
+name_prefix         = "oms-REPLACE_ME-postgresql"
 
-# Use your existing private subnets for PostgreSQL. No subnet resources are created by this root.
-private_subnet_ids = [
-  "subnet-private-ap-east-1a", # SubnetPrivateAPEAST1A (10.200.96.0/19)
-  "subnet-private-ap-east-1b", # SubnetPrivateAPEAST1B (10.200.128.0/19)
-  "subnet-private-ap-east-1c"  # SubnetPrivateAPEAST1C (10.200.160.0/19)
-]
+# All Aurora variables below can be omitted entirely for CNPG-only environments (dev/sit/sandbox); they default to empty and disable the Aurora resources.
+# From eks-platform's platform_contract output — copy manually, this root has no remote_state dependency.
+vpc_id               = "REPLACE_ME_VPC_ID"
+database_subnet_ids  = ["REPLACE_ME_SUBNET_ID_1", "REPLACE_ME_SUBNET_ID_2"]
+allowed_source_security_group_id = "REPLACE_ME_WORKLOAD_SG_ID"
 
-# Preferred: allow inbound from your app/workload security group.
-allowed_source_security_group_id = "sg-cccccccc"
+# From workload-identity's applied state.
+cnpg_backup_bucket_name          = "REPLACE_ME"
+postgresql_operator_iam_role_arn = "REPLACE_ME"
+cluster_kms_key_arn              = "REPLACE_ME"
 
-# Keep empty unless temporary CIDR-based access is needed.
-allowed_cidr_blocks = []
+aurora_engine_version  = "REPLACE_ME"
+aurora_instance_class  = "db.r6g.large"
+aurora_instance_count  = 1
+aurora_database_name   = "oms"
+aurora_master_username = "oms_admin"
 
-db_identifier       = "pg18-dev"
-engine_version      = null
-instance_class      = "db.t4g.medium"
-writer_availability_zone = ""
+tags = { Environment = "REPLACE_ME", ManagedBy = "Terraform" }
 
-db_name            = "app"
-db_master_username = "pgadmin"
-db_master_password = "CHANGE_ME_STRONG_DEV_PASSWORD"

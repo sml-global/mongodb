@@ -343,32 +343,41 @@ kill $PF_PID 2>/dev/null
 
 **Pass criteria:** Pod 2/2 Running, no AWS auth/permission errors in the `cloudwatch-exporter` container logs, no scrape/export errors in the `otel-collector` container logs, accepted metric points counter on the SigNoz collector is nonzero. See [Architect Reference § Infrastructure And Database Monitoring](../guides/architect-reference.md#infrastructure-and-database-monitoring).
 
-## PostgreSQL (Aurora)
+## PostgreSQL
+
+**Dev/SIT (CNPG, in-cluster):**
 
 ```bash
-# Cluster status
+kubectl -n postgresql get cluster postgresql
+# Expect: status=Ready
+
+kubectl -n postgresql exec -it postgresql-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+# Expect: 2 healthy streaming replicas
+```
+
+**Pass criteria:** Cluster `Ready`, 3 healthy members (1 primary + 2 secondaries). See
+[PostgreSQL Platform Contract](postgresql-platform-contract.md).
+
+**UAT/Prod (Aurora, managed RDS):**
+
+```bash
+# Cluster status (replace <name_prefix> with the environment's prefix, e.g. oms-uat-postgresql-aurora)
 aws rds describe-db-clusters \
-  --db-cluster-identifier pg18-dev \
+  --db-cluster-identifier <name_prefix>-aurora \
   --query 'DBClusters[0].Status' \
   --output text
 # Expect: available
 
-# Writer instance status
-aws rds describe-db-instances \
-  --db-instance-identifier pg18-dev-writer \
-  --query 'DBInstances[0].DBInstanceStatus' \
-  --output text
-# Expect: available
-
-# Endpoint reachable (from allowed network)
+# Master credential is AWS-managed — never a static password
 aws rds describe-db-clusters \
-  --db-cluster-identifier pg18-dev \
-  --query 'DBClusters[0].Endpoint' \
+  --db-cluster-identifier <name_prefix>-aurora \
+  --query 'DBClusters[0].MasterUserSecret.SecretArn' \
   --output text
-# Note: actual TCP connectivity test requires access from within VPC
+# Expect: a Secrets Manager ARN, not empty
 ```
 
-**Pass criteria:** Cluster and writer instance both `available`.
+**Pass criteria:** Cluster `available`, `MasterUserSecret` present (confirms
+`manage_master_user_password` is active, no plaintext credential in use).
 
 ## SigNoz
 

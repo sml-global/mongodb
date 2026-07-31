@@ -1,13 +1,14 @@
 module "network" {
   source = "../modules/network"
 
-  name_prefix          = var.name_prefix
-  vpc_cidr             = var.vpc_cidr
-  availability_zones   = var.availability_zones
-  private_subnet_cidrs = var.private_subnet_cidrs
-  public_subnet_cidrs  = var.public_subnet_cidrs
-  nat_gateway_count    = var.nat_gateway_count
-  nat_mode             = var.nat_mode
+  name_prefix           = var.name_prefix
+  vpc_cidr              = var.vpc_cidr
+  availability_zones    = var.availability_zones
+  private_subnet_cidrs  = var.private_subnet_cidrs
+  public_subnet_cidrs   = var.public_subnet_cidrs
+  database_subnet_cidrs = var.database_subnet_cidrs
+  nat_gateway_count     = var.nat_gateway_count
+  nat_mode              = var.nat_mode
 }
 
 module "eks" {

@@ -90,5 +90,6 @@ variable "addons" {
     addon_version        = string
     resolve_conflicts    = optional(string, "OVERWRITE")
     service_account_role = optional(bool, false)
+    configuration_values = optional(string)
   }))
 }
