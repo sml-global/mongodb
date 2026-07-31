@@ -3,5 +3,6 @@ kind: Kustomization
 
 resources:
   - require-wffc-storageclass.yaml
+  - require-wffc-storageclass-postgresql.yaml
   - block-app-mongo-password-secrets.yaml
   - require-pbm-sidecar-resources.yaml
