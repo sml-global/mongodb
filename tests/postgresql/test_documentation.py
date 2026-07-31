@@ -145,23 +145,21 @@ class TestPostgreSQLPlatformContract(unittest.TestCase):
         self.assertIn("Phase 2", self.content,
                       "Missing 'Phase 2' reference for AWS prerequisites")
     
-    def test_23_component_overview_mentions_version_source(self):
-        """Component Overview must reference version configuration"""
-        self.assertIn("POSTGRESQL_VERSION", self.content,
-                      "Missing POSTGRESQL_VERSION configuration reference")
-    
-    def test_24_configuration_reference_complete(self):
-        """Configuration Reference must include all key parameters"""
-        required_params = [
-            "POSTGRESQL_VERSION",
-            "POSTGRESQL_STORAGE_CLASS",
-            "POSTGRESQL_REPLICA_COUNT",
-            "POSTGRESQL_WAL_ARCHIVAL_ENABLED"
-        ]
-        
-        for param in required_params:
-            self.assertIn(param, self.content,
-                          f"Missing configuration parameter: {param}")
+    def test_23_component_overview_mentions_engine_split(self):
+        """Component Overview must reference the Dev/SIT (CNPG) vs UAT/Prod
+        (Aurora) engine split (Issue #4: POSTGRESQL_VERSION was never a real
+        env-schema key or consumed anywhere)."""
+        self.assertIn("Aurora", self.content,
+                      "Missing Aurora engine-split reference")
+
+    def test_24_configuration_reference_documents_dead_key_removal(self):
+        """Configuration Reference must document the Issue #4 removal of the
+        dead env-schema keys (POSTGRESQL_STORAGE_CLASS, POSTGRESQL_REPLICA_COUNT,
+        POSTGRESQL_IMAGE_REPO, POSTGRESQL_OPERATOR_VERSION,
+        POSTGRESQL_BACKUP_ENABLED, POSTGRESQL_BACKUP_SCHEDULE), rather than
+        presenting them as live configuration."""
+        self.assertIn("Issue #4", self.content,
+                      "Missing Issue #4 cleanup reference")
     
     def test_25_contract_has_minimum_length(self):
         """Contract should be comprehensive (not a stub)"""

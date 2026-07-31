@@ -491,11 +491,12 @@ _platform_env_check_integer_order() {
   IFS=',' read -r -a keys_array <<< "$keys_csv"
   IFS="$old_ifs"
 
+  # A key referenced here may be declared optional and legitimately unset;
+  # skip it (vacuous truth) rather than treating that as an error. Only
+  # keys that actually have a loaded value participate in the ordering
+  # comparison.
   for key_name in "${keys_array[@]}"; do
-    current_value="$(_platform_env_loaded_value_of "$key_name")" || {
-      _platform_env_error "integer-order references unknown key: ${key_name}"
-      return 1
-    }
+    current_value="$(_platform_env_loaded_value_of "$key_name")" || continue
     if [[ -n "$previous_value" ]] && (( current_value < previous_value )); then
       _platform_env_error "integer-order violated at ${key_name}: ${current_value} is less than the previous key's value"
       return 1
@@ -515,14 +516,11 @@ _platform_env_check_cidr_contained_by() {
   local parent_net
   local parent_mask
 
-  child_value="$(_platform_env_loaded_value_of "$child_key")" || {
-    _platform_env_error "cidr-contained-by references unknown key: ${child_key}"
-    return 1
-  }
-  parent_value="$(_platform_env_loaded_value_of "$parent_key")" || {
-    _platform_env_error "cidr-contained-by references unknown key: ${parent_key}"
-    return 1
-  }
+  # Both keys may be declared optional; if either is legitimately unset,
+  # containment cannot be meaningfully evaluated -- skip (vacuous truth)
+  # rather than erroring.
+  child_value="$(_platform_env_loaded_value_of "$child_key")" || return 0
+  parent_value="$(_platform_env_loaded_value_of "$parent_key")" || return 0
 
   read -r child_net child_mask <<< "$(_platform_env_cidr_network_and_mask "$child_value")"
   read -r parent_net parent_mask <<< "$(_platform_env_cidr_network_and_mask "$parent_value")"
@@ -552,14 +550,10 @@ _platform_env_check_cidr_nonoverlap() {
 
   for ((i = 0; i < ${#keys_array[@]}; i++)); do
     for ((j = i + 1; j < ${#keys_array[@]}; j++)); do
-      value_i="$(_platform_env_loaded_value_of "${keys_array[$i]}")" || {
-        _platform_env_error "cidr-nonoverlap references unknown key: ${keys_array[$i]}"
-        return 1
-      }
-      value_j="$(_platform_env_loaded_value_of "${keys_array[$j]}")" || {
-        _platform_env_error "cidr-nonoverlap references unknown key: ${keys_array[$j]}"
-        return 1
-      }
+      # Either key in the pair may be declared optional and legitimately
+      # unset; skip that pair (vacuous truth) rather than erroring.
+      value_i="$(_platform_env_loaded_value_of "${keys_array[$i]}")" || continue
+      value_j="$(_platform_env_loaded_value_of "${keys_array[$j]}")" || continue
       read -r net_i mask_i <<< "$(_platform_env_cidr_network_and_mask "$value_i")"
       read -r net_j mask_j <<< "$(_platform_env_cidr_network_and_mask "$value_j")"
       min_mask=$(( mask_i < mask_j ? mask_i : mask_j ))

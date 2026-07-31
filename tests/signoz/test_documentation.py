@@ -176,23 +176,20 @@ class TestSigNozPlatformContract(unittest.TestCase):
         self.assertIn("Destruction", self.content,
                       "Missing 'Destruction' in Lifecycle")
     
-    def test_24_component_overview_mentions_version_source(self):
-        """Component Overview must reference version configuration"""
-        self.assertIn("SIGNOZ_VERSION", self.content,
-                      "Missing SIGNOZ_VERSION configuration reference")
-    
-    def test_25_configuration_reference_complete(self):
-        """Configuration Reference must include all key parameters"""
-        required_params = [
-            "SIGNOZ_VERSION",
-            "SIGNOZ_STORAGE_CLASS",
-            "SIGNOZ_REPLICA_COUNT",
-            "SIGNOZ_RETENTION_DAYS"
-        ]
-        
-        for param in required_params:
-            self.assertIn(param, self.content,
-                          f"Missing configuration parameter: {param}")
+    def test_24_component_overview_mentions_hardcoded_chart_version(self):
+        """Component Overview / Configuration Reference must point to the
+        real, hardcoded chart version (Issue #4: SIGNOZ_VERSION was never a
+        real env-schema key or consumed anywhere)."""
+        self.assertIn("0.130.1", self.content,
+                      "Missing hardcoded SigNoz chart version reference")
+
+    def test_25_configuration_reference_documents_real_manifest(self):
+        """Configuration Reference must point to the real manifest, not the
+        dead env-schema keys removed in Issue #4 (SIGNOZ_VERSION,
+        SIGNOZ_K8S_INFRA_VERSION, SIGNOZ_STORAGE_CLASS, SIGNOZ_OTEL_ENDPOINT,
+        SIGNOZ_CLICKHOUSE_SECRET_NAME -- none were ever consumed anywhere)."""
+        self.assertIn("gitops/signoz/base/helmreleases.yaml", self.content,
+                      "Missing pointer to the real HelmRelease manifest")
     
     def test_26_contract_has_minimum_length(self):
         """Contract should be comprehensive (not a stub)"""
