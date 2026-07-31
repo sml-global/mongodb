@@ -145,6 +145,37 @@ class PostgresqlRestoreDrillBehaviorTests(unittest.TestCase):
         log = self._log()
         self.assertIn("get pvc -n dr-drill-postgresql-restore-target -l cnpg.io/cluster=dr-drill-restore-target", log)
 
+    def test_falls_back_to_explicit_pvc_delete_when_gc_never_completes(self):
+        # Exercises the untested branch: if `kubectl get pvc` never reports
+        # empty (GC stuck/slow), the script must fall back to an explicit
+        # `kubectl delete pvc` by the same label selector rather than
+        # silently proceeding to recreate the Cluster onto a still-attached
+        # stale volume. Mocks `sleep` as a no-op so the real 60x2s poll loop
+        # doesn't make this test slow -- we're only proving the fallback
+        # path fires with the right selector, not timing the real wait.
+        self._mock("sleep", "exit 0")
+        self._mock("kubectl", (
+            'if [ "$1" = "apply" ]; then\n'
+            f'  cat > "{self.manifest_path}"\n'
+            'fi\n'
+            'if [ "$1" = "wait" ]; then exit 0; fi\n'
+            'if [ "$1" = "exec" ]; then echo "500"; exit 0; fi\n'
+            'if [ "$1" = "get" ] && [[ "$*" == *"pvc"* ]]; then\n'
+            '  echo "persistentvolumeclaim/dr-drill-restore-target-1"\n'
+            '  exit 0\n'
+            'fi\n'
+            'exit 0\n'
+        ))
+        self._mock("aws", f'echo "{DRILL_ROLE_ARN}"')
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self._log()
+        self.assertIn(
+            "delete pvc -n dr-drill-postgresql-restore-target -l cnpg.io/cluster=dr-drill-restore-target",
+            log,
+            "must fall back to an explicit PVC delete when GC never reports the PVCs gone",
+        )
+
     def test_never_targets_production_namespace(self):
         self._install_happy_path_mocks()
         self._run()

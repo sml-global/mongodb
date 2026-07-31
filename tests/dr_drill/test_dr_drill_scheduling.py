@@ -217,6 +217,48 @@ class DrDrillRoleArnsBootstrapScriptBehaviorTests(unittest.TestCase):
         # log -- Pod Identity needs none.
         self.assertNotIn("eks.amazonaws.com/role-arn", log)
 
+    def test_provisions_fixed_namespaces_and_rbac_before_the_configmap(self):
+        # Regression test for the D18/D19 provision-once model: this script
+        # is now the ONLY place that creates the 3 fixed restore-target
+        # namespaces, the ServiceAccounts inside them, and applies
+        # k8s/dr-drill/rbac.yaml -- and it must do so in an order where
+        # every namespace/SA a RoleBinding references already exists before
+        # rbac.yaml is applied. This exact area (RBAC provisioning) has
+        # regressed twice across review cycles, so lock the order in.
+        self._mock("terraform", (
+            'if [[ "$*" == *"dr_drill_mongodb_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-mongodb-restore-role"; fi\n'
+            'if [[ "$*" == *"dr_drill_postgresql_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-postgresql-restore-role"; fi\n'
+            'if [[ "$*" == *"dr_drill_clickhouse_role_arn"* ]]; then echo "arn:aws:iam::123:role/dr-drill-clickhouse-backup-role"; fi\n'
+        ))
+        self._mock("kubectl", "cat > /dev/null 2>/dev/null; exit 0")
+        result = subprocess.run(
+            ["bash", str(BOOTSTRAP_SCRIPT)],
+            env=self.env, capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self._log()
+        for restore_namespace in (
+            "dr-drill-mongodb-restore-target",
+            "dr-drill-postgresql-restore-target",
+            "dr-drill-clickhouse-restore-target",
+        ):
+            self.assertIn(f"create namespace {restore_namespace}", log,
+                          f"must create the fixed namespace {restore_namespace}")
+        self.assertIn("apply -f", log)
+        self.assertIn("rbac.yaml", log, "must apply k8s/dr-drill/rbac.yaml")
+
+        namespace_idx = max(
+            log.index(f"create namespace {ns}") for ns in (
+                "dr-drill-mongodb-restore-target",
+                "dr-drill-postgresql-restore-target",
+                "dr-drill-clickhouse-restore-target",
+            )
+        )
+        rbac_idx = log.index("rbac.yaml")
+        self.assertLess(namespace_idx, rbac_idx,
+                         "all fixed namespaces must exist before rbac.yaml is applied")
+
 
 class DrDrillCronJobStructureTests(unittest.TestCase):
     """Structural (parsed-field) assertions, not substring search.

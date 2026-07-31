@@ -25,10 +25,10 @@ spec:
     spec:
       # Grants the clickhouse-backup container an AWS identity (EKS Pod
       # Identity) to reach the oms-signoz-clickhouse-backups S3 bucket.
-      # Requires a ServiceAccount of this name to exist in the drill's own
-      # (dynamic) namespace -- created by
-      # scripts/dr-drill-clickhouse-backup-restore.sh alongside the
-      # namespace itself.
+      # Requires a ServiceAccount of this name to exist in this fixed,
+      # reusable namespace -- provisioned ONCE (not per-run) by
+      # scripts/bootstrap-dr-drill-role-arns-configmap.sh (D18/D19), never
+      # by this Deployment or the drill script itself.
       serviceAccountName: dr-drill-clickhouse-runner
       containers:
         - name: clickhouse-server

@@ -44,8 +44,8 @@ echo "Drill namespace: ${DRILL_NAMESPACE}"
 echo "Drill IAM role: ${DRILL_IAM_ROLE_ARN} (read-only, dr-drill-mongodb-restore-role)"
 
 # Defense-in-depth: verify the pod is actually running under the expected
-# drill role before touching anything. Guards against a misconfigured IRSA
-# ServiceAccount binding accidentally granting production credentials.
+# drill role before touching anything. Guards against a misconfigured Pod
+# Identity association accidentally granting production credentials.
 ASSUMED_IDENTITY_ARN="$(aws sts get-caller-identity --query Arn --output text)"
 if [[ "${ASSUMED_IDENTITY_ARN}" != *"${DRILL_ROLE_NAME}"* ]]; then
   echo "FATAL: identity mismatch -- running as '${ASSUMED_IDENTITY_ARN}', expected role '${DRILL_ROLE_NAME}'. Refusing to proceed."
@@ -81,7 +81,7 @@ RESTORE_POD=$(kubectl get pod -n "${DRILL_NAMESPACE}" -l app=mongodb-restore-tar
 
 echo "Configuring PBM storage backend (read-only drill role, oms-pbm-backups)..."
 # No static access/secret keys: the pbm-agent container inherits AWS
-# credentials from the pod's IRSA-annotated ServiceAccount (ambient AWS SDK
+# credentials from the pod's EKS Pod Identity association (ambient AWS SDK
 # credential chain), same as the identity guard above.
 kubectl exec -n "${DRILL_NAMESPACE}" "${RESTORE_POD}" -c pbm-agent -- \
   pbm config --mongodb-uri="mongodb://localhost:27017" \
