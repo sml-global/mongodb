@@ -1,0 +1,57 @@
+# k8s/dr-drill/mongodb-restore-target.yaml
+#
+# Single throwaway MongoDB + PBM sidecar, deployed fresh into each drill
+# namespace by scripts/dr-drill-mongodb-restore.sh. Not GitOps-managed --
+# this is drill scratch infrastructure, torn down by the script's cleanup
+# trap every run.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-restore-target
+  labels:
+    app: mongodb-restore-target
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb-restore-target
+  template:
+    metadata:
+      labels:
+        app: mongodb-restore-target
+    spec:
+      # Grants the pbm-agent container an AWS identity (EKS Pod Identity) to
+      # reach the oms-pbm-backups S3 bucket. Requires a ServiceAccount of
+      # this name to exist in this fixed, reusable namespace -- provisioned
+      # ONCE (not per-run) by scripts/bootstrap-dr-drill-role-arns-configmap.sh
+      # (D18/D19), never by this Deployment or the drill script itself.
+      serviceAccountName: dr-drill-mongodb-runner
+      containers:
+        - name: mongodb
+          image: percona/percona-server-mongodb:6.0
+          ports:
+            - containerPort: 27017
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+        - name: pbm-agent
+          image: percona/percona-backup-mongodb:2.4
+          env:
+            - name: PBM_MONGODB_URI
+              value: "mongodb://localhost:27017"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

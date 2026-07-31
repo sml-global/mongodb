@@ -1,0 +1,71 @@
+# k8s/dr-drill/clickhouse-restore-target.yaml
+#
+# Single throwaway ClickHouse + clickhouse-backup sidecar, deployed fresh
+# into each drill namespace by scripts/dr-drill-clickhouse-backup-restore.sh.
+# Not GitOps-managed -- this is drill scratch infrastructure, torn down by
+# the script's cleanup trap every run.
+#
+# CRITICAL: restores from S3 land HERE, never on the live signoz namespace's
+# ClickHouse pod. See scripts/dr-drill-clickhouse-backup-restore.sh header.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse-restore-target
+  labels:
+    app: clickhouse-restore-target
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse-restore-target
+  template:
+    metadata:
+      labels:
+        app: clickhouse-restore-target
+    spec:
+      # Grants the clickhouse-backup container an AWS identity (EKS Pod
+      # Identity) to reach the oms-signoz-clickhouse-backups S3 bucket.
+      # Requires a ServiceAccount of this name to exist in this fixed,
+      # reusable namespace -- provisioned ONCE (not per-run) by
+      # scripts/bootstrap-dr-drill-role-arns-configmap.sh (D18/D19), never
+      # by this Deployment or the drill script itself.
+      serviceAccountName: dr-drill-clickhouse-runner
+      containers:
+        - name: clickhouse-server
+          image: clickhouse/clickhouse-server:24.1.2-alpine
+          ports:
+            - containerPort: 9000
+            - containerPort: 8123
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 8123
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+        - name: clickhouse-backup
+          image: altinity/clickhouse-backup:2.5.19
+          env:
+            - name: CLICKHOUSE_HOST
+              value: "localhost"
+            - name: CLICKHOUSE_PORT
+              value: "9000"
+            - name: REMOTE_STORAGE
+              value: s3
+            - name: REMOTE_STORAGE_S3_BUCKET
+              value: oms-signoz-clickhouse-backups
+            - name: REMOTE_STORAGE_S3_PATH
+              value: clickhouse-backups
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
