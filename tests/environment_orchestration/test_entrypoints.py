@@ -335,6 +335,7 @@ class LegacyProvisionRegressionTests(LegacyProvisionFixture):
                 "provision-platform-prereq.sh mongodb",
                 "provision-platform-prereq.sh pg",
                 "provision-k8s-components.sh mongodb",
+                "provision-k8s-components.sh postgresql",
             ],
         )
         self.assertIn("Completed provisioning scope: all", result.stdout)
@@ -357,7 +358,11 @@ class LegacyProvisionRegressionTests(LegacyProvisionFixture):
         result = self.run_provision(["pg", "--auto-approve"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            self.command_log_lines(), ["provision-platform-prereq.sh pg --auto-approve"]
+            self.command_log_lines(),
+            [
+                "provision-platform-prereq.sh pg --auto-approve",
+                "provision-k8s-components.sh postgresql",
+            ],
         )
 
     def test_signoz_runs_only_the_k8s_component_step(self):
