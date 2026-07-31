@@ -601,28 +601,31 @@ terraform validate      # Valid HCL configuration
 
 ## Configuration Reference
 
-Configuration values are defined in the environment schema fragment and consumed by provisioning scripts:
+**Update (2026-07-31, Issue #4):** the environment-schema keys previously
+listed here (`POSTGRESQL_VERSION`, `POSTGRESQL_STORAGE_CLASS`,
+`POSTGRESQL_REPLICA_COUNT`, `POSTGRESQL_IMAGE_REPO`,
+`POSTGRESQL_OPERATOR_VERSION`, `POSTGRESQL_BACKUP_ENABLED`,
+`POSTGRESQL_BACKUP_SCHEDULE`, `POSTGRESQL_WAL_ARCHIVAL_ENABLED`,
+`POSTGRESQL_WAL_RETENTION_DAYS`, `POSTGRESQL_PITR_ENABLED`) were never
+actually consumed by any script, Terraform module, or Kubernetes manifest --
+verified via repo-wide search, including `scripts/lib/packages/40-postgresql/`.
+They were removed from `config/environment-schema/fragments/40-postgresql.manifest`.
 
-**Fragment Location:** `config/environment-schema/fragments/40-postgresql.manifest`
+Per the Dev/SIT-vs-UAT/Prod split (see the Scope Update above and
+`docs/references/component-catalog.md`):
 
-**Configuration Parameters:**
-
-- `POSTGRESQL_VERSION`: PostgreSQL version (e.g., "16.3")
-- `POSTGRESQL_STORAGE_CLASS`: Kubernetes StorageClass for data volumes (default: "gp3-postgresql")
-- `POSTGRESQL_REPLICA_COUNT`: Number of replicas (default: 3)
-- `POSTGRESQL_WAL_ARCHIVAL_ENABLED`: Enable continuous WAL archival (default: "true")
-- `POSTGRESQL_WAL_RETENTION_DAYS`: WAL retention period in days (default: 30)
-- `POSTGRESQL_PITR_ENABLED`: Enable point-in-time recovery (default: "true")
-
-**Consumed By:**
-
-1. **scripts/provision.sh postgresql**
-   - Sources environment fragment
-   - Passes values to Terraform and GitOps
-
-2. **platform-prerequisites/terraform/postgresql/variables.tf**
-   - Reads PostgreSQL operator role ARN
-   - Configures WAL archive bucket and KMS key references
+- **UAT/Prod (Aurora):** real configuration is Terraform-managed --
+  `platform-prerequisites/terraform/postgresql/variables.tf` and the
+  `environments/{uat,prod}/*.tfvars` files are authoritative.
+- **Dev/SIT (CNPG):** **no committed CNPG `Cluster` manifest for a live
+  Dev/SIT deployment was found anywhere in this repository** at the time of
+  this cleanup -- the only `postgresql.cnpg.io` `Cluster` manifest that
+  exists is the throwaway restore-target created inline by
+  `scripts/dr-drill-postgresql-restore.sh` for DR drills, which is not the
+  same thing as a live Dev/SIT database. If a real Dev/SIT CNPG deployment
+  exists, it is not tracked as IaC in this repo and this section cannot
+  document its actual hardcoded values; this is flagged as a follow-up to
+  verify separately, not assumed away.
 
 3. **gitops/postgresql/overlays/uat/kustomization.yaml**
    - Reads POSTGRESQL_VERSION for HelmRelease chart version

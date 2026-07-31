@@ -145,23 +145,25 @@ class TestMongoDBPlatformContract(unittest.TestCase):
         self.assertIn("Phase 2", self.content,
                       "Missing 'Phase 2' reference for AWS prerequisites")
     
-    def test_23_component_overview_mentions_version_source(self):
-        """Component Overview must reference version configuration"""
-        self.assertIn("MONGODB_VERSION", self.content,
-                      "Missing MONGODB_VERSION configuration reference")
-    
-    def test_24_configuration_reference_complete(self):
-        """Configuration Reference must include all key parameters"""
-        required_params = [
-            "MONGODB_VERSION",
-            "MONGODB_STORAGE_CLASS",
-            "MONGODB_REPLICA_COUNT",
-            "MONGODB_BACKUP_ENABLED"
+    def test_23_component_overview_mentions_hardcoded_image(self):
+        """Component Overview / Configuration Reference must point to the
+        real, hardcoded image reference (Issue #4: MONGODB_VERSION was never
+        a real env-schema key or consumed anywhere)."""
+        self.assertIn("percona/percona-server-mongodb", self.content,
+                      "Missing hardcoded MongoDB image reference")
+
+    def test_24_configuration_reference_documents_real_manifest(self):
+        """Configuration Reference must point to the real manifest and its
+        actual hardcoded values (Issue #4 cleanup), not dead env-schema keys."""
+        required_facts = [
+            "k8s/base/psmdb-cluster.yaml",
+            "gp3-mongodb",
+            "0 2 * * *",
         ]
-        
-        for param in required_params:
-            self.assertIn(param, self.content,
-                          f"Missing configuration parameter: {param}")
+
+        for fact in required_facts:
+            self.assertIn(fact, self.content,
+                          f"Missing configuration fact: {fact}")
     
     def test_25_contract_has_minimum_length(self):
         """Contract should be comprehensive (not a stub)"""

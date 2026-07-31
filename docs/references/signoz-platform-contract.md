@@ -27,9 +27,9 @@
 ## Component Overview
 
 - **Platform:** SigNoz (open-source observability stack)
-- **Version:** Defined in `config/environment-schema/fragments/50-signoz.manifest` (SIGNOZ_VERSION)
+- **Version:** Chart `signoz` version `0.130.1`, hardcoded in `gitops/signoz/base/helmreleases.yaml` (see Configuration Reference below; not sourced from an environment variable)
 - **Namespace:** signoz (created by deployment script)
-- **StorageClass:** gp3-observability (defined in k8s/base/storage-classes.yaml)
+- **StorageClass:** `gp3-mongodb` (shared with MongoDB; defined in `k8s/base/storageclass-gp3-mongodb.yaml`, set via `storageClass: gp3-mongodb` in the HelmRelease)
 - **Backend Database:** ClickHouse (columnar time-series database)
 - **UI Server:** SigNoz frontend (Grafana-like dashboard)
 - **API Server:** SigNoz API (telemetry ingestion and query API)
@@ -575,39 +575,43 @@ kubectl api-resources | grep helmrelease
 
 ## Configuration Reference
 
-Configuration values are defined in the environment schema fragment and consumed by provisioning scripts:
+**Update (2026-07-31, Issue #4):** the environment-schema keys previously listed
+here (`SIGNOZ_VERSION`, `SIGNOZ_K8S_INFRA_VERSION`, `SIGNOZ_STORAGE_CLASS`,
+`SIGNOZ_OTEL_ENDPOINT`, `SIGNOZ_CLICKHOUSE_SECRET_NAME`, plus the
+never-implemented `SIGNOZ_REPLICA_COUNT`/`SIGNOZ_RETENTION_DAYS`) were never
+actually consumed by any script, Terraform module, or Kubernetes manifest --
+verified via repo-wide search, including `scripts/lib/packages/50-signoz/`.
+They were removed from `config/environment-schema/fragments/50-signoz.manifest`.
+The real, authoritative configuration is hardcoded directly in the live
+manifest:
 
-**Fragment Location:** `config/environment-schema/fragments/50-signoz.manifest`
+**Manifest Location:** `gitops/signoz/base/helmreleases.yaml`
 
-**Configuration Parameters:**
+**Actual Configuration:**
 
-- `SIGNOZ_VERSION`: SigNoz version (e.g., "0.42.0")
-- `SIGNOZ_STORAGE_CLASS`: Kubernetes StorageClass for observability data (default: "gp3-observability")
-- `SIGNOZ_REPLICA_COUNT`: Number of replicas for ClickHouse (default: 1)
-- `SIGNOZ_RETENTION_DAYS`: Time-series data retention period in days (default: 7)
-- `SIGNOZ_CLICKHOUSE_PASSWORD`: ClickHouse root user password (default: auto-generated)
+- Chart: `signoz` version `0.130.1`
+- ClickHouse root password: sourced from the `signoz-clickhouse` Kubernetes
+  Secret (see `scripts/create-signoz-root-user-secret.sh`), not an env var
+- `clickhouse-backup` sidecar: writes to the dedicated
+  `oms-signoz-clickhouse-backups` S3 bucket (see
+  `docs/superpowers/specs/2026-07-28-phase4-day2-operations-design.md`, D1/D15)
 
 **Consumed By:**
 
-1. **scripts/provision.sh signoz**
-   - Sources environment fragment
-   - Passes values to GitOps
+1. **scripts/create-signoz-root-user-secret.sh**
+   - Creates the Kubernetes secret consumed by the HelmRelease
 
-2. **scripts/create-signoz-clickhouse-secret.sh**
-   - Reads `CLICKHOUSE_ROOT_PASSWORD` env var (or generates password)
-   - Creates Kubernetes secret in signoz namespace
-
-3. **gitops/signoz/overlays/uat/kustomization.yaml**
-   - Reads SIGNOZ_VERSION for HelmRelease chart version
-   - Configures replica count and storage class
-
-4. **scripts/provision-signoz-observability.sh**
+2. **scripts/provision-signoz-observability.sh**
    - Configures dashboards and alert rules
    - Verifies observability setup
 
-5. **scripts/verify-platform-health.sh --smoke-test**
+3. **scripts/verify-platform-health.sh --smoke-test**
    - Verifies SigNoz is accessible
    - Validates telemetry ingestion is working
+
+To change the chart version or storage configuration, edit
+`gitops/signoz/base/helmreleases.yaml` directly and let Flux/GitOps reconcile
+it -- there is no environment-variable indirection.
 
 ---
 
