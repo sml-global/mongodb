@@ -15,7 +15,9 @@ Scopes:
   signoz-observability  Destroy dashboards/alerts Terraform state (run before 'signoz' so the API is still reachable).
 
 Options:
-  --auto-approve          Skip Terraform approval prompts.
+  --auto-approve          Skip Terraform approval prompts and the DESTROY confirmation.
+  --export-first          Run scripts/export-database-snapshot.sh for each database
+                           scope before any teardown step; aborts if the export fails.
   --keep-signoz-namespace Keep signoz namespace object (delete app resources only).
   -h, --help              Show this help.
 
@@ -36,6 +38,7 @@ TF_STATE_REGION="${TF_STATE_REGION:-ap-east-1}"
 
 SCOPE="${1:-}"
 AUTO_APPROVE="false"
+EXPORT_FIRST="false"
 KEEP_SIGNOZ_NAMESPACE="false"
 
 if [[ "$SCOPE" == "-h" || "$SCOPE" == "--help" ]]; then
@@ -53,6 +56,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --auto-approve)
       AUTO_APPROVE="true"
+      shift
+      ;;
+    --export-first)
+      EXPORT_FIRST="true"
       shift
       ;;
     --keep-signoz-namespace)
@@ -77,6 +84,46 @@ require_cmd() {
     echo "Error: required command not found: $cmd" >&2
     exit 1
   fi
+}
+
+confirm_destruction() {
+  local scope="$1"
+
+  if [[ "$AUTO_APPROVE" == "true" ]]; then
+    return 0
+  fi
+
+  echo "About to destroy scope '$scope'. This removes Kubernetes workloads and/or"
+  echo "Terraform-managed AWS resources for this scope and cannot be undone from"
+  echo "here (see docs/references/recovery-procedures.md for recovery options)."
+  echo "Type DESTROY (all caps) to proceed, or anything else to abort:"
+  local reply
+  IFS= read -r reply || reply=""
+  if [[ "$reply" != "DESTROY" ]]; then
+    echo "Aborted: confirmation not received." >&2
+    exit 1
+  fi
+}
+
+export_scope_if_requested() {
+  local scope="$1"
+
+  if [[ "$EXPORT_FIRST" != "true" ]]; then
+    return 0
+  fi
+
+  case "$scope" in
+    mongodb|mongo)
+      "$ROOT_DIR/scripts/export-database-snapshot.sh" mongodb
+      ;;
+    pg)
+      "$ROOT_DIR/scripts/export-database-snapshot.sh" postgresql
+      ;;
+    all)
+      "$ROOT_DIR/scripts/export-database-snapshot.sh" mongodb
+      "$ROOT_DIR/scripts/export-database-snapshot.sh" postgresql
+      ;;
+  esac
 }
 
 ensure_tfvars() {
@@ -252,6 +299,9 @@ main() {
     echo "Error: backend bootstrap script is not executable: $BOOTSTRAP_BACKEND_SCRIPT" >&2
     exit 1
   fi
+
+  confirm_destruction "$SCOPE"
+  export_scope_if_requested "$SCOPE"
 
   case "$SCOPE" in
     signoz)
