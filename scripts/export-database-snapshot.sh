@@ -39,8 +39,8 @@ shift || true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --wait-timeout-seconds)
-      if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-        echo "Error: --wait-timeout-seconds requires a positive integer, got: $2" >&2
+      if ! [[ "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --wait-timeout-seconds requires a positive integer, got: ${2:-<missing>}" >&2
         exit 1
       fi
       WAIT_TIMEOUT_SECONDS="$2"
