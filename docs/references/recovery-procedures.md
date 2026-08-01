@@ -254,6 +254,70 @@ kubectl -n signoz rollout restart statefulset/signoz-clickhouse
 
 ---
 
+## Dev/SIT PostgreSQL Recovery (CNPG)
+
+Dev/SIT PostgreSQL runs as a self-managed CloudNativePG (CNPG) cluster (see
+[PostgreSQL Platform Contract](postgresql-platform-contract.md)), not Aurora —
+use this section for Dev/SIT; see "PostgreSQL Recovery" below for UAT/Prod.
+
+### Restoring into a new cluster from the WAL archive
+
+CNPG restores by bootstrapping a **new** `Cluster` resource that recovers from
+an existing backup archive — it does not restore in place onto the original
+cluster.
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: oms-postgresql-restored
+  namespace: postgresql
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:16
+  storage:
+    storageClass: gp3-postgresql
+    size: 50Gi
+  bootstrap:
+    recovery:
+      source: oms-postgresql-backup-source
+  externalClusters:
+    - name: oms-postgresql-backup-source
+      barmanObjectStore:
+        destinationPath: s3://oms-postgresql-backup
+        s3Credentials:
+          inheritFromIAMRole: true
+```
+
+### Point-in-time recovery
+
+Add `recoveryTarget.targetTime` under `bootstrap.recovery` to recover to a
+specific point in time instead of the latest available WAL:
+
+```yaml
+  bootstrap:
+    recovery:
+      source: oms-postgresql-backup-source
+      recoveryTarget:
+        targetTime: "2026-08-01T09:00:00Z"
+```
+
+### Restoring from an on-demand export
+
+If an on-demand backup was taken via
+`scripts/export-database-snapshot.sh postgresql` (see the script's own
+`--help` for usage), it is stored in the same `s3://oms-postgresql-backup`
+destination and is restored the same way — CNPG does not distinguish
+scheduled/continuous backups from on-demand ones at restore time.
+
+**Verify the restore:**
+```bash
+kubectl -n postgresql get cluster oms-postgresql-restored
+# Expect: status=Ready once recovery completes
+```
+
+---
+
 ## PostgreSQL Recovery
 
 ### Aurora automated backups
