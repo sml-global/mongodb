@@ -91,13 +91,13 @@ LEGACY_PROVISION_CASES = (
 )
 
 LEGACY_DESTROY_CASES = (
-    ("all",),
-    ("mongodb",),
-    ("mongo",),
-    ("pg",),
-    ("signoz",),
-    ("signoz-observability",),
-    ("unknown",),
+    ("all", "--auto-approve"),
+    ("mongodb", "--auto-approve"),
+    ("mongo", "--auto-approve"),
+    ("pg", "--auto-approve"),
+    ("signoz", "--auto-approve"),
+    ("signoz-observability", "--auto-approve"),
+    ("unknown", "--auto-approve"),
 )
 
 LEGACY_VERIFY_CASES = (
@@ -178,7 +178,7 @@ class _BaseFixture(unittest.TestCase):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
 
-    def run_clean(self, argv, extra_env=None):
+    def run_clean(self, argv, extra_env=None, stdin=None):
         environment = {
             "PATH": f"{self.mock_bin}:/usr/bin:/bin",
             "MOCK_COMMAND_LOG": str(self.command_log),
@@ -187,6 +187,7 @@ class _BaseFixture(unittest.TestCase):
             environment.update({key: str(value) for key, value in extra_env.items()})
         return subprocess.run(
             argv, cwd=self.root, env=environment, text=True, capture_output=True,
+            stdin=stdin,
         )
 
     def command_log_lines(self):
@@ -243,7 +244,7 @@ class LegacyDestroyFixture(_BaseFixture):
             tfvars.write_text("", encoding="utf-8")
 
     def run_destroy(self, args):
-        return self.run_clean(["bash", "scripts/legacy/dev/destroy.sh", *args])
+        return self.run_clean(["bash", "scripts/legacy/dev/destroy.sh", *args], stdin=subprocess.DEVNULL)
 
 
 class LegacyVerifyFixture(_BaseFixture):
@@ -469,7 +470,7 @@ class LegacyDestroyRegressionTests(LegacyDestroyFixture):
         self.assertFalse(any("pg.tfstate" in line for line in log), log)
 
     def test_unknown_scope_fails_with_usage_and_no_terraform_invocation(self):
-        result = self.run_destroy(["unknown", "--auto-approve"])
+        result = self.run_destroy(["unknown"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown scope 'unknown'", result.stderr)
         log = self.command_log_lines()

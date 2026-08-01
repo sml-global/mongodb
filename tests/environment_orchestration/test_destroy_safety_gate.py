@@ -104,15 +104,48 @@ class ExportFirstFlagTests(DestroySafetyGateFixture):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         logged = self.command_log_lines()
-        # First logged kubectl/terraform call must come from the export
-        # tool's own kubectl invocations (it runs before destroy_mongodb_k8s).
-        self.assertTrue(any("get pods" in line or "exec" in line for line in logged[:2]))
+        # First export-related kubectl invocations must come before any
+        # delete/destroy-type destructive commands.
+        export_commands = [i for i, line in enumerate(logged) if "get pods" in line or "exec" in line]
+        destructive_commands = [i for i, line in enumerate(logged) if "delete" in line or "destroy" in line]
+        self.assertTrue(len(export_commands) > 0, "No export commands found")
+        if destructive_commands:
+            self.assertTrue(
+                min(export_commands) < min(destructive_commands),
+                f"Export commands {export_commands} must come before destructive commands {destructive_commands}",
+            )
 
     def test_without_export_first_flag_export_script_never_invoked(self):
         result = self.run_destroy(["mongodb", "--auto-approve"], stdin_text="")
         self.assertEqual(result.returncode, 0, result.stderr)
         logged = "\n".join(self.command_log_lines())
         self.assertNotIn("pbm backup", logged)
+
+    def test_export_failure_aborts_teardown(self):
+        """When export-database-snapshot.sh fails for any database in the
+        scope, the entire destroy operation must abort with no destructive
+        commands executed. This covers the 'all' scope with mixed success/
+        failure: mongodb succeeds, postgresql fails."""
+        # Stub export-database-snapshot.sh to succeed for mongodb, fail for
+        # postgresql (exit 9).
+        export_script = self.root / "scripts" / "export-database-snapshot.sh"
+        export_script.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf 'export %s\\n' \"$*\" >> \"$MOCK_COMMAND_LOG\"\n"
+            "[ \"$1\" = \"postgresql\" ] && exit 9\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        export_script.chmod(0o755)
+        result = self.run_destroy(["all", "--auto-approve", "--export-first"], stdin_text="")
+        self.assertNotEqual(result.returncode, 0, "destroy should fail when export fails")
+        logged = self.command_log_lines()
+        # Both export attempts should be logged
+        self.assertTrue(any("export mongodb" in line for line in logged), logged)
+        self.assertTrue(any("export postgresql" in line for line in logged), logged)
+        # No destructive commands should be executed
+        self.assertFalse(any("delete" in line for line in logged), logged)
+        self.assertFalse(any("destroy" in line for line in logged), logged)
 
 
 if __name__ == "__main__":

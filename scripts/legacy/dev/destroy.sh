@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  destroy.sh <scope> [--auto-approve] [--keep-signoz-namespace]
+  destroy.sh <scope> [--auto-approve] [--export-first] [--keep-signoz-namespace]
 
 Scopes:
   all       Remove SigNoz + MongoDB + PostgreSQL resources (dev teardown).
@@ -122,6 +122,9 @@ export_scope_if_requested() {
     all)
       "$ROOT_DIR/scripts/export-database-snapshot.sh" mongodb
       "$ROOT_DIR/scripts/export-database-snapshot.sh" postgresql
+      ;;
+    *)
+      echo "No database scope for '$scope'; nothing to export."
       ;;
   esac
 }
@@ -300,6 +303,17 @@ main() {
     exit 1
   fi
 
+  # Validate scope before confirmation prompt
+  case "$SCOPE" in
+    signoz|signoz-observability|mongodb|mongo|pg|all)
+      ;;
+    *)
+      echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, signoz, signoz-observability" >&2
+      usage
+      exit 1
+      ;;
+  esac
+
   confirm_destruction "$SCOPE"
   export_scope_if_requested "$SCOPE"
 
@@ -321,11 +335,6 @@ main() {
       destroy_signoz
       destroy_mongodb
       destroy_pg
-      ;;
-    *)
-      echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, signoz, signoz-observability" >&2
-      usage
-      exit 1
       ;;
   esac
 
