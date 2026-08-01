@@ -333,14 +333,15 @@ metadata:
 spec:
   instances: 3
   imageName: ghcr.io/cloudnative-pg/postgresql:16
+  serviceAccountName: oms-postgresql-workload
   storage:
     storageClass: gp3-postgresql
     size: 50Gi
   bootstrap:
     recovery:
-      source: oms-postgresql-backup-source
+      source: oms-postgresql
   externalClusters:
-    - name: oms-postgresql-backup-source
+    - name: oms-postgresql
       barmanObjectStore:
         destinationPath: s3://oms-postgresql-backup
         s3Credentials:
@@ -355,7 +356,7 @@ specific point in time instead of the latest available WAL:
 ```yaml
   bootstrap:
     recovery:
-      source: oms-postgresql-backup-source
+      source: oms-postgresql
       recoveryTarget:
         targetTime: "2026-08-01T09:00:00Z"
 ```

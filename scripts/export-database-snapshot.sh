@@ -39,6 +39,10 @@ shift || true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --wait-timeout-seconds)
+      if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+        echo "Error: --wait-timeout-seconds requires a positive integer, got: $2" >&2
+        exit 1
+      fi
       WAIT_TIMEOUT_SECONDS="$2"
       shift 2
       ;;
@@ -57,12 +61,19 @@ done
 export_mongodb() {
   local namespace="${MONGODB_NAMESPACE:-mongodb}"
   local pbm_pod
-  pbm_pod="$(kubectl -n "$namespace" get pods -l app.kubernetes.io/name=percona-server-mongodb -o jsonpath='{.items[0].metadata.name}')"
+  pbm_pod="$(kubectl -n "$namespace" get pods -l app.kubernetes.io/component=mongod -o jsonpath='{.items[0].metadata.name}')"
+  if [[ -z "$pbm_pod" ]]; then
+    echo "ERROR: no MongoDB pod found in namespace '$namespace' (label app.kubernetes.io/component=mongod)." >&2
+    return 1
+  fi
   echo "Triggering on-demand PBM backup on pod $pbm_pod (namespace $namespace) ..."
-  kubectl -n "$namespace" exec "$pbm_pod" -- pbm backup --wait --wait-time "${WAIT_TIMEOUT_SECONDS}s"
+  kubectl -n "$namespace" exec "$pbm_pod" -c pbm-agent -- \
+    pbm backup --wait --wait-time "${WAIT_TIMEOUT_SECONDS}s" --mongodb-uri="mongodb://localhost:27017"
 }
 
 export_postgresql() {
+  # Backup CR schema (spec.method, spec.cluster.name, status.phase=completed|failed)
+  # verified against CNPG operator 1.24.x docs (pinned version in gitops/postgresql/base/operator.yaml).
   local namespace="${POSTGRESQL_NAMESPACE:-postgresql}"
   local cluster_name="${POSTGRESQL_CLUSTER_NAME:-oms-postgresql}"
   local backup_name="on-demand-$(date -u +%Y%m%dt%H%M%Sz)"
