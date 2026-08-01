@@ -252,6 +252,13 @@ class TestPostgreSQLDocumentationOrchestrationFixes(unittest.TestCase):
         content = (Path(__file__).parent.parent.parent / "docs" / "references" / "postgresql-platform-contract.md").read_text()
         self.assertIn("recovery-procedures.md", content)
 
+    def test_recovery_procedures_documents_orphaned_ebs_volume_recovery(self):
+        """recovery-procedures.md must explain recovering a Released EBS-backed PV"""
+        content = (Path(__file__).parent.parent.parent / "docs" / "references" / "recovery-procedures.md").read_text()
+        self.assertIn("Orphaned EBS Volume Recovery", content)
+        self.assertIn("claimRef", content)
+        self.assertIn("Released", content)
+
 
 if __name__ == "__main__":
     unittest.main()
