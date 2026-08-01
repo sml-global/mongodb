@@ -16,6 +16,18 @@ _LOGGING_STUB_TEMPLATE = (
     "exit 0\n"
 )
 
+# kubectl stub must return a fake pod name for `get pods` (export-database-snapshot.sh
+# now validates pod existence before executing into it).
+_KUBECTL_STUB = (
+    "#!/usr/bin/env bash\n"
+    "printf 'kubectl %s\\n' \"$*\" >> \"$MOCK_COMMAND_LOG\"\n"
+    "if [[ \"$1\" == \"get\" && \"$2\" == \"pods\" ]] || [[ \"$3\" == \"get\" && \"$4\" == \"pods\" ]]; then\n"
+    "  echo -n \"psmdb-rs0-0\"\n"
+    "  exit 0\n"
+    "fi\n"
+    "exit 0\n"
+)
+
 
 class DestroySafetyGateFixture(unittest.TestCase):
     def setUp(self):
@@ -25,10 +37,12 @@ class DestroySafetyGateFixture(unittest.TestCase):
         self.command_log = pathlib.Path(self.temporary.name) / "commands.log"
         self.root.mkdir(parents=True)
         self.mock_bin.mkdir(parents=True)
-        for command in ("aws", "kubectl", "terraform"):
+        for command in ("aws", "terraform"):
             self._write_executable(
                 self.mock_bin / command, _LOGGING_STUB_TEMPLATE.format(name=command),
             )
+        # kubectl needs a specialized stub to return pod names for export-database-snapshot.sh
+        self._write_executable(self.mock_bin / "kubectl", _KUBECTL_STUB)
         (self.root / "scripts").mkdir(parents=True, exist_ok=True)
         for name in ("legacy/dev/destroy.sh", "export-database-snapshot.sh",
                      "bootstrap-terraform-s3-backend.sh"):

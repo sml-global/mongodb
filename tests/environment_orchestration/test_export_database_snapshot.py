@@ -62,10 +62,14 @@ class UnknownScopeTests(ExportDatabaseSnapshotFixture):
 
 class MongodbExportTests(ExportDatabaseSnapshotFixture):
     def test_mongodb_scope_execs_pbm_backup_with_wait(self):
-        # Fake kubectl: log every invocation; for `exec ... -- pbm backup ...`
-        # calls, exit 0 to simulate the (mocked) pbm CLI completing.
+        # Fake kubectl: log every invocation, return a fake pod name for `get pods`,
+        # exit 0 for `exec ... pbm backup ...` to simulate successful backup.
         body = (
             'printf "kubectl %s\\n" "$*" >> "$MOCK_COMMAND_LOG"\n'
+            'if [[ "$1" == "get" && "$2" == "pods" ]] || [[ "$3" == "get" && "$4" == "pods" ]]; then\n'
+            '  echo -n "psmdb-rs0-0"\n'
+            '  exit 0\n'
+            'fi\n'
             'if [[ "$1" == "exec" || "$3" == "exec" ]]; then exit 0; fi\n'
             'exit 0\n'
         )
@@ -75,6 +79,10 @@ class MongodbExportTests(ExportDatabaseSnapshotFixture):
         self.assertIn("exec", logged)
         self.assertIn("pbm backup", logged)
         self.assertIn("--wait", logged)
+        # Critical: verify container selection and explicit MongoDB URI
+        # (C1 fix regression guard — wrong container/missing URI both silent-fail).
+        self.assertIn("-c pbm-agent", logged, "Must exec into pbm-agent container, not default mongod")
+        self.assertIn("--mongodb-uri=", logged, "Must pass explicit MongoDB URI (pbm-agent has no PBM_MONGODB_URI env)")
 
 
 class PostgresqlExportTests(ExportDatabaseSnapshotFixture):
