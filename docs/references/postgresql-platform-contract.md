@@ -23,7 +23,7 @@
 - **Related Docs:** 
   - [Architect Reference](architect-reference.md)
   - [Component Catalog](component-catalog.md)
-  - [Recovery Procedures](recovery-procedures.md)
+  - [Recovery Procedures](recovery-procedures.md) — Dev/SIT CNPG restore and PITR
   - [Environment Setup](../guides/environment-setup.md)
   - [Operator Runbook](../guides/operator-runbook.md)
 

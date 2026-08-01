@@ -241,6 +241,17 @@ class TestPostgreSQLDocumentationOrchestrationFixes(unittest.TestCase):
         self.assertIn('POSTGRESQL_CLUSTER_NAME:-"oms-postgresql"', content)
         self.assertNotIn('POSTGRESQL_CLUSTER_NAME:-"postgresql"}', content)
 
+    def test_recovery_procedures_documents_devsit_cnpg_restore(self):
+        """recovery-procedures.md must cover Dev/SIT CNPG restore, not just Aurora"""
+        content = (Path(__file__).parent.parent.parent / "docs" / "references" / "recovery-procedures.md").read_text()
+        self.assertIn("Dev/SIT PostgreSQL Recovery (CNPG)", content)
+        self.assertIn("s3://oms-postgresql-backup", content)
+        self.assertIn("recoveryTarget", content)
+
+    def test_platform_contract_links_to_devsit_recovery_section(self):
+        content = (Path(__file__).parent.parent.parent / "docs" / "references" / "postgresql-platform-contract.md").read_text()
+        self.assertIn("recovery-procedures.md", content)
+
 
 if __name__ == "__main__":
     unittest.main()
