@@ -424,7 +424,7 @@ class LegacyDestroyRegressionTests(LegacyDestroyFixture):
         for scope in ("mongodb", "mongo"):
             with self.subTest(scope=scope):
                 self.reset_command_log()
-                result = self.run_destroy([scope])
+                result = self.run_destroy([scope, "--auto-approve"])
                 self.assertEqual(result.returncode, 97, result.stderr)
                 log = self.command_log_lines()
                 self.assertTrue(
@@ -440,7 +440,7 @@ class LegacyDestroyRegressionTests(LegacyDestroyFixture):
                 )
 
     def test_pg_reaches_terraform_destroy_and_stops_there(self):
-        result = self.run_destroy(["pg"])
+        result = self.run_destroy(["pg", "--auto-approve"])
         self.assertEqual(result.returncode, 97, result.stderr)
         log = self.command_log_lines()
         self.assertTrue(
@@ -452,24 +452,24 @@ class LegacyDestroyRegressionTests(LegacyDestroyFixture):
         )
 
     def test_signoz_completes_cleanly_when_namespace_already_absent(self):
-        result = self.run_destroy(["signoz"])
+        result = self.run_destroy(["signoz", "--auto-approve"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Completed destroy scope: signoz", result.stdout)
 
     def test_signoz_observability_completes_cleanly_when_secret_already_absent(self):
-        result = self.run_destroy(["signoz-observability"])
+        result = self.run_destroy(["signoz-observability", "--auto-approve"])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Completed destroy scope: signoz-observability", result.stdout)
 
     def test_all_completes_signoz_steps_then_stops_at_first_terraform_failure(self):
-        result = self.run_destroy(["all"])
+        result = self.run_destroy(["all", "--auto-approve"])
         self.assertEqual(result.returncode, 97, result.stderr)
         log = self.command_log_lines()
         self.assertTrue(any("mongo.tfstate" in line for line in log), log)
         self.assertFalse(any("pg.tfstate" in line for line in log), log)
 
     def test_unknown_scope_fails_with_usage_and_no_terraform_invocation(self):
-        result = self.run_destroy(["unknown"])
+        result = self.run_destroy(["unknown", "--auto-approve"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown scope 'unknown'", result.stderr)
         log = self.command_log_lines()
