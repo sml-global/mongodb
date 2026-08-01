@@ -172,6 +172,64 @@ kubectl -n kube-system get pods -l app.kubernetes.io/name=aws-ebs-csi-driver
 
 ---
 
+## Orphaned EBS Volume Recovery
+
+Both `gp3-mongodb` and `gp3-postgresql` StorageClasses use
+`reclaimPolicy: Retain`. Deleting a PVC (directly, or as a side effect of
+`scripts/destroy.sh`) does **not** delete the underlying AWS EBS volume — the
+`PersistentVolume` moves to `Released`, and the data survives, but it will
+not automatically bind to a new PVC until an operator clears its claim.
+
+This is a Kubernetes-side operation on the `PersistentVolume` object's
+`spec.claimRef` field — not an AWS-console action; the EBS volume itself is
+untouched throughout.
+
+### Step 1: Identify the released volume
+
+```bash
+kubectl get pv | grep Released
+# NAME       CAPACITY   ...   RECLAIM POLICY   STATUS     CLAIM
+# pvc-abc123 50Gi       ...   Retain           Released   postgresql/oms-postgresql-1
+```
+
+### Step 2: Clear the stale claim reference
+
+```bash
+kubectl patch pv pvc-abc123 --type=json \
+  -p='[{"op": "remove", "path": "/spec/claimRef"}]'
+# PV moves from Released -> Available
+```
+
+### Step 3: Bind it to a new PVC
+
+Create a PVC with a matching `storageClassName`, `accessModes`, and a
+`volumeName` pinning it to the specific released volume:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: recovered-data
+  namespace: postgresql
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: gp3-postgresql
+  volumeName: pvc-abc123
+  resources:
+    requests:
+      storage: 50Gi
+```
+
+### Step 4: Mount and read the data
+
+Attach the PVC to a temporary debug pod to inspect/copy its contents (for
+PostgreSQL, this is the raw `PGDATA` directory — do not start a new
+PostgreSQL instance directly against it without restoring through CNPG's
+normal bootstrap process; treat it as a forensic copy source, not a
+drop-in replacement volume).
+
+---
+
 ## Flux HelmRelease Stuck
 
 ### Symptom: HelmRelease shows Ready=False or suspended
