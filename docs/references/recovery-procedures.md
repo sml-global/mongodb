@@ -452,7 +452,7 @@ bash scripts/destroy.sh signoz-observability --auto-approve
 # Remove MongoDB stack only (k8s workloads + mongodb terraform scope)
 bash scripts/destroy.sh mongodb --auto-approve
 
-# Remove PostgreSQL only (postgresql terraform scope)
+# Remove PostgreSQL only (k8s workloads + postgresql terraform scope)
 bash scripts/destroy.sh pg --auto-approve
 
 # Remove SigNoz only (helmrelease + namespace)

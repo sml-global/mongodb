@@ -446,25 +446,25 @@ class LegacyDestroyRegressionTests(LegacyDestroyFixture):
         log = self.command_log_lines()
         self.assertTrue(
             any(
-                line.startswith("kubectl ") and "delete" in line and "cluster" in line
+                "-n postgresql " in line and "delete" in line and "clusters.postgresql.cnpg.io" in line and "oms-postgresql" in line
                 for line in log
             ),
             log,
         )
         self.assertTrue(
             any(
-                line.startswith("kubectl ") and "delete" in line and "helmrelease" in line
+                "-n postgresql-operator " in line and "delete" in line and "helmrelease" in line and "cloudnative-pg" in line
                 for line in log
             ),
             log,
         )
         cluster_index = next(
             i for i, line in enumerate(log)
-            if line.startswith("kubectl ") and "delete" in line and "cluster" in line
+            if "-n postgresql " in line and "delete" in line and "clusters.postgresql.cnpg.io" in line
         )
         helmrelease_index = next(
             i for i, line in enumerate(log)
-            if line.startswith("kubectl ") and "delete" in line and "helmrelease" in line
+            if "-n postgresql-operator " in line and "delete" in line and "helmrelease" in line
         )
         self.assertLess(cluster_index, helmrelease_index, log)
         self.assertTrue(

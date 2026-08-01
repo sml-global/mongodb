@@ -10,7 +10,7 @@ Scopes:
   all       Remove SigNoz + MongoDB + PostgreSQL resources (dev teardown).
   mongodb   Remove MongoDB Kubernetes workloads/secrets, then destroy MongoDB Terraform scope.
   mongo     Alias of mongodb.
-  pg        Destroy PostgreSQL Terraform scope.
+  pg        Remove PostgreSQL Kubernetes workloads (Cluster, operator), then destroy PostgreSQL Terraform scope.
   signoz    Remove SigNoz HelmRelease and namespace resources.
   signoz-observability  Destroy dashboards/alerts Terraform state (run before 'signoz' so the API is still reachable).
 
@@ -239,7 +239,8 @@ destroy_mongodb() {
 
 destroy_postgresql_k8s() {
   echo "Removing PostgreSQL CNPG Cluster resource..."
-  kubectl -n postgresql delete cluster oms-postgresql --ignore-not-found=true || true
+  kubectl -n postgresql delete clusters.postgresql.cnpg.io oms-postgresql --ignore-not-found=true || true
+  echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
 
   echo "Removing CNPG operator..."
   kubectl -n postgresql-operator delete helmrelease cloudnative-pg --ignore-not-found=true || true
