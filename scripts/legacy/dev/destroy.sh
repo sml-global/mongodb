@@ -237,7 +237,16 @@ destroy_mongodb() {
   terraform_destroy_scope mongodb
 }
 
+destroy_postgresql_k8s() {
+  echo "Removing PostgreSQL CNPG Cluster resource..."
+  kubectl -n postgresql delete cluster oms-postgresql --ignore-not-found=true || true
+
+  echo "Removing CNPG operator..."
+  kubectl -n postgresql-operator delete helmrelease cloudnative-pg --ignore-not-found=true || true
+}
+
 destroy_pg() {
+  destroy_postgresql_k8s
   terraform_destroy_scope pg
 }
 

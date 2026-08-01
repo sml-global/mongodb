@@ -446,6 +446,29 @@ class LegacyDestroyRegressionTests(LegacyDestroyFixture):
         log = self.command_log_lines()
         self.assertTrue(
             any(
+                line.startswith("kubectl ") and "delete" in line and "cluster" in line
+                for line in log
+            ),
+            log,
+        )
+        self.assertTrue(
+            any(
+                line.startswith("kubectl ") and "delete" in line and "helmrelease" in line
+                for line in log
+            ),
+            log,
+        )
+        cluster_index = next(
+            i for i, line in enumerate(log)
+            if line.startswith("kubectl ") and "delete" in line and "cluster" in line
+        )
+        helmrelease_index = next(
+            i for i, line in enumerate(log)
+            if line.startswith("kubectl ") and "delete" in line and "helmrelease" in line
+        )
+        self.assertLess(cluster_index, helmrelease_index, log)
+        self.assertTrue(
+            any(
                 "bootstrap-terraform-s3-backend.sh" in line and "pg.tfstate" in line
                 for line in log
             ),
