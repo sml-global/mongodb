@@ -7,12 +7,23 @@ Usage:
   destroy.sh <scope> [--auto-approve] [--export-first] [--keep-signoz-namespace]
 
 Scopes:
-  all       Remove SigNoz + MongoDB + PostgreSQL resources (dev teardown).
-  mongodb   Remove MongoDB Kubernetes workloads/secrets, then destroy MongoDB Terraform scope.
-  mongo     Alias of mongodb.
-  pg        Remove PostgreSQL Kubernetes workloads (Cluster, operator), then destroy PostgreSQL Terraform scope.
-  signoz    Remove SigNoz HelmRelease and namespace resources.
+  all         Remove SigNoz + MongoDB + PostgreSQL resources (dev teardown).
+  mongodb     Remove MongoDB Kubernetes workloads/secrets, then destroy MongoDB Terraform scope.
+  mongo       Alias of mongodb.
+  pg          Remove PostgreSQL Kubernetes workloads (Cluster, operator), then destroy PostgreSQL Terraform scope.
+  postgresql  Alias of pg.
+  signoz      Remove SigNoz HelmRelease and namespace resources.
   signoz-observability  Destroy dashboards/alerts Terraform state (run before 'signoz' so the API is still reachable).
+  overlay     Remove only the MongoDB workload overlay (k8s/overlays/dev) — PSMDB Cluster CR, TLS certs,
+              PDB, metrics collectors. Leaves the operator and Kyverno policies in place.
+  postgresql-overlay  Remove only the PostgreSQL workload overlay (gitops/postgresql/overlays/dev) —
+              the CNPG Cluster CR. Leaves the operator and Kyverno policies in place.
+  policies    Remove the shared Kyverno ClusterPolicies (policies/kyverno). Safe to run independently —
+              nothing else depends on these existing at destroy time.
+  operators   Remove the shared Flux-managed operator HelmReleases (gitops/operators/base). Run this
+              LAST, after 'overlay'/'postgresql-overlay' — removing the operator while a live
+              Cluster/PSMDB CR still exists orphans its StatefulSet/Pods (no controller left to manage
+              them). This is the reverse of provisioning order (operators are applied first).
 
 Options:
   --auto-approve          Skip Terraform approval prompts and the DESTROY confirmation.
@@ -26,6 +37,9 @@ Examples:
   bash scripts/destroy.sh pg --auto-approve
   bash scripts/destroy.sh signoz
   bash scripts/destroy.sh signoz-observability --auto-approve
+  bash scripts/destroy.sh overlay
+  bash scripts/destroy.sh policies
+  bash scripts/destroy.sh operators
   bash scripts/destroy.sh all --auto-approve
 EOF
 }
@@ -116,7 +130,7 @@ export_scope_if_requested() {
     mongodb|mongo)
       "$ROOT_DIR/scripts/export-database-snapshot.sh" mongodb
       ;;
-    pg)
+    pg|postgresql)
       "$ROOT_DIR/scripts/export-database-snapshot.sh" postgresql
       ;;
     all)
@@ -156,7 +170,7 @@ terraform_destroy_scope() {
       tf_dir="$ROOT_DIR/platform-prerequisites/terraform/mongodb"
       tf_state_key="oms/dev/mongo.tfstate"
       ;;
-    pg)
+    pg|postgresql)
       tf_dir="$ROOT_DIR/platform-prerequisites/terraform/postgresql"
       tf_state_key="oms/dev/pg.tfstate"
       ;;
@@ -252,6 +266,31 @@ destroy_pg() {
   terraform_destroy_scope pg
 }
 
+destroy_mongodb_overlay() {
+  echo "Removing MongoDB workload overlay (k8s/overlays/dev) only..."
+  echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
+  kubectl delete -k "$ROOT_DIR/k8s/overlays/dev" --ignore-not-found=true || true
+}
+
+destroy_postgresql_overlay() {
+  echo "Removing PostgreSQL workload overlay (gitops/postgresql/overlays/dev) only..."
+  echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
+  kubectl delete -k "$ROOT_DIR/gitops/postgresql/overlays/dev" --ignore-not-found=true || true
+}
+
+destroy_policies() {
+  echo "Removing shared Kyverno ClusterPolicies (policies/kyverno)..."
+  kubectl delete -k "$ROOT_DIR/policies/kyverno" --ignore-not-found=true || true
+}
+
+destroy_operators() {
+  echo "Removing shared Flux-managed operator HelmReleases (gitops/operators/base)..."
+  echo "Warning: this removes the operator(s) managing any still-live MongoDB/PostgreSQL"
+  echo "Cluster CRs. Run 'overlay'/'postgresql-overlay' first, or you will orphan their"
+  echo "StatefulSets/Pods (no controller left to reconcile them)."
+  kubectl delete -k "$ROOT_DIR/gitops/operators/base" --ignore-not-found=true || true
+}
+
 destroy_signoz_observability() {
   local tf_dir="$ROOT_DIR/platform-prerequisites/terraform/signoz-observability"
   local tf_state_key="oms/dev/signoz-observability.tfstate"
@@ -316,10 +355,10 @@ main() {
 
   # Validate scope before confirmation prompt
   case "$SCOPE" in
-    signoz|signoz-observability|mongodb|mongo|pg|all)
+    signoz|signoz-observability|mongodb|mongo|pg|postgresql|all|overlay|postgresql-overlay|policies|operators)
       ;;
     *)
-      echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, signoz, signoz-observability" >&2
+      echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, postgresql, signoz, signoz-observability, overlay, postgresql-overlay, policies, operators" >&2
       usage
       exit 1
       ;;
@@ -338,8 +377,20 @@ main() {
     mongodb|mongo)
       destroy_mongodb
       ;;
-    pg)
+    pg|postgresql)
       destroy_pg
+      ;;
+    overlay)
+      destroy_mongodb_overlay
+      ;;
+    postgresql-overlay)
+      destroy_postgresql_overlay
+      ;;
+    policies)
+      destroy_policies
+      ;;
+    operators)
+      destroy_operators
       ;;
     all)
       destroy_signoz_observability
