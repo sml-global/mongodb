@@ -279,6 +279,23 @@ kubectl -n mongodb describe pod psmdb-rs0-0
 
 ---
 
+## MongoDB Recovery: Restoring from an on-demand export
+
+If an on-demand backup was taken via
+`scripts/export-database-snapshot.sh mongodb` (see the script's own `--help`
+for usage), it is written via PBM (Percona Backup for MongoDB) to the same S3
+backup prefix as scheduled backups and is restored the same way — PBM does
+not distinguish scheduled/continuous backups from on-demand ones at restore
+time.
+
+`scripts/dr-drill-mongodb-restore.sh` automates exactly this restore path
+(latest PBM backup from the catalog, restored via `pbm restore --wait` into
+an isolated namespace) and can be used as a reference for a manual restore,
+or run directly for a drill/verification. It never targets the production
+namespace.
+
+---
+
 ## SigNoz Recovery
 
 ### Symptom: SigNoz pods Pending due to PVC issues
@@ -415,7 +432,9 @@ For a complete fresh dev environment:
 
 ```bash
 # 1. Teardown provisioned components (all-at-once)
-bash scripts/destroy.sh all --auto-approve
+# Add --export-first to take an on-demand backup of MongoDB/PostgreSQL data
+# before teardown (aborts if the export fails) -- see `scripts/destroy.sh --help`.
+bash scripts/destroy.sh all --auto-approve --export-first
 
 # 2. Re-provision from scratch
 bash scripts/provision.sh all
@@ -450,10 +469,12 @@ Use these to remove stacks one by one after tests:
 bash scripts/destroy.sh signoz-observability --auto-approve
 
 # Remove MongoDB stack only (k8s workloads + mongodb terraform scope)
-bash scripts/destroy.sh mongodb --auto-approve
+# Add --export-first for an on-demand backup before teardown (aborts on export failure)
+bash scripts/destroy.sh mongodb --auto-approve --export-first
 
 # Remove PostgreSQL only (k8s workloads + postgresql terraform scope)
-bash scripts/destroy.sh pg --auto-approve
+# Add --export-first for an on-demand backup before teardown (aborts on export failure)
+bash scripts/destroy.sh pg --auto-approve --export-first
 
 # Remove SigNoz only (helmrelease + namespace)
 bash scripts/destroy.sh signoz
