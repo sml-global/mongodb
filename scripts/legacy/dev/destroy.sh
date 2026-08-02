@@ -221,6 +221,7 @@ destroy_signoz() {
 destroy_mongodb_k8s() {
   echo "Removing MongoDB workload resources..."
   kubectl -n mongodb delete perconaservermongodb psmdb --ignore-not-found=true || true
+  echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
   kubectl -n mongodb delete helmrelease percona-server-mongodb-operator --ignore-not-found=true || true
 
   # Remove cert-manager resources commonly created for MongoDB in this repo.
