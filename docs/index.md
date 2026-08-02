@@ -62,7 +62,26 @@ runbook, or verification procedures.
   resources, and the [Sandbox Teardown Runbook](references/sandbox-teardown-runbook.md).
 - **Resolved:** `gitops/postgresql/overlays/uat/` (the superseded CNPG deployment for UAT) has
   been deleted — see [PostgreSQL Platform Contract](references/postgresql-platform-contract.md)
-  and Issue #6 for the Dev/SIT orchestration wiring that replaced it.
+  for the Dev/SIT orchestration wiring that replaced it (Issue #6, closed).
+
+## Approved PostgreSQL Orchestration & Teardown Safety
+
+- [PostgreSQL Dev/SIT Orchestration & IaC Cleanup Design Spec](superpowers/specs/2026-07-31-postgresql-orchestration-design.md)
+  / [Implementation Plan](superpowers/plans/2026-07-31-postgresql-orchestration.md) —
+  wires the existing CNPG `Cluster` manifest into Dev/SIT provisioning, fixes the
+  `gp3` storage anti-pattern, and removes the CRD race condition between the
+  operator and the Cluster resource (Issue #6, closed).
+- [Teardown Safety & Recovery Design Spec](superpowers/specs/2026-08-01-teardown-safety-and-recovery.md)
+  / [Implementation Plan](superpowers/plans/2026-08-01-teardown-safety-and-recovery.md) —
+  adds a standalone on-demand database export tool
+  (`scripts/export-database-snapshot.sh`), a typed `DESTROY` confirmation gate and
+  `--export-first` flag on `scripts/destroy.sh`, and the Dev/SIT CNPG restore +
+  orphaned EBS volume recovery guides in
+  [Recovery Procedures](references/recovery-procedures.md).
+- [Issue #7 PostgreSQL Destroy Path Design Spec](superpowers/specs/2026-08-02-issue-7-postgresql-destroy-path.md)
+  / [Implementation Plan](superpowers/plans/2026-08-02-issue-7-postgresql-destroy-path.md) —
+  adds `destroy_postgresql_k8s()` so `scripts/destroy.sh pg` tears down the in-cluster
+  CNPG `Cluster`/operator before the Terraform-managed AWS prerequisites (Issue #7, closed).
 
 ## Why Provisioning Is Split
 
