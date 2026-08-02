@@ -74,13 +74,13 @@ Audit trail (MongoDB) and application data (PostgreSQL) are intentionally separa
 
 | Aspect | Current State | Production Direction |
 |---|---|---|
-| MongoDB credentials | Generated locally, stored in Kubernetes Secrets + local escrow | Secrets Manager with automatic rotation |
-| PostgreSQL password | Manual in `terraform.tfvars`, stored in Terraform state | Secrets Manager-backed, no state exposure |
-| Terraform state | S3 with versioning + encryption | Add DynamoDB locking + restricted IAM |
-| MongoDB encryption | Customer-managed key (generated, escrowed locally) | KMS-managed key with audit trail |
-| Network access | EKS public endpoint, SigNoz internal-only | Private endpoint + VPN/bastion |
-| SigNoz dashboard | Port-forward (dev) | Ingress with SSO/OIDC + network restrictions |
-| Backup bucket | Public access blocked, versioned, encrypted | Add lifecycle rules + cross-region replication |
+| MongoDB credentials | Generated locally, stored in Kubernetes Secrets + local escrow | **Prod only:** Secrets Manager with automatic rotation. Dev/SIT/UAT stay on K8s Secrets (cost-driven, see [Production Readiness Assessment](#production-readiness-assessment)). |
+| PostgreSQL password | Manual in `terraform.tfvars`, stored in Terraform state | **Prod only:** Secrets Manager-backed, no state exposure. Dev/SIT/UAT unchanged. |
+| Terraform state | S3 with versioning + encryption | S3 native locking (`use_lockfile = true`, Terraform >= 1.10) + restricted IAM \u2014 not DynamoDB, which this repo has already moved away from on 4 of 8 roots |
+| MongoDB encryption | Customer-managed key (generated, escrowed locally) | KMS-managed key with audit trail (deferred, see Production Readiness Assessment) |
+| Network access | EKS public endpoint, SigNoz internal-only | Private endpoint + VPN/bastion (deferred) |
+| SigNoz dashboard | Port-forward (dev) | Ingress with SSO/OIDC + network restrictions (active backlog item) |
+| Backup bucket | Public access blocked, versioned, encrypted | Add lifecycle rules + cross-region replication (active backlog item) |
 
 ### Data Sensitivity Map
 
@@ -236,30 +236,54 @@ flowchart LR
 
 ## Production Readiness Assessment
 
-### What's Dev-Only vs Production-Ready
+Reprioritized 2026-08-02 against actual cost/risk tradeoffs. Two tracks:
+**Now** (active backlog) and **Later** (intentionally deferred, tracked here
+so it isn't lost). Items are cross-referenced with
+[Audit Enforcement Gaps](#audit-enforcement-gaps-target-state) where they overlap.
 
-| Aspect | Current (Dev) | Gap for Production |
-|---|---|---|
-| MongoDB replica count | 3 nodes | ✓ Production-ready |
-| MongoDB encryption | Active with local key | Need KMS-managed key |
-| MongoDB backup | PBM configured | Need verified restore procedure |
-| PostgreSQL | Single writer, manual password | Need multi-AZ, Secrets Manager |
-| SigNoz access | Port-forward | Need ingress + SSO/OIDC |
-| Terraform state | S3 encrypted + versioned | Need DynamoDB locking |
-| Network | Public EKS endpoint | Need private endpoint + VPN |
-| Monitoring | Manual verification scripts | Need automated alerting |
-| Credential rotation | Manual | Need automated rotation |
-| DR/failover | Not tested | Need documented runbook + drill |
+### Now
 
-### Migration Path to Production
+| Item | Current State | Target | Why now |
+|---|---|---|---|
+| Terraform state locking | 4 of 8 roots (`access-governance`, `eks-access`, `eks-platform`, `workload-identity`) already use Terraform's native S3 conditional-write locking (`use_lockfile = true`, requires Terraform >= 1.10 — DynamoDB-based locking is the now-superseded approach). Not yet applied to `mongodb`, `postgresql`, `signoz-observability` (all already >= 1.10) or `dr-drill` (pinned to >= 1.5.0). | Enable `use_lockfile = true` on the remaining 3 roots; bump `dr-drill/versions.tf` to `>= 1.10.0` first. No DynamoDB table anywhere. | Closes the last gap in a pattern already adopted elsewhere in this repo; no new infra to provision. |
+| Backup bucket hardening | Public access blocked, versioned, encrypted; no lifecycle rules or cross-region replication | Add lifecycle rules (transition/expire) + cross-region replication | Backup integrity is a standing risk — prioritized ahead of convenience items |
+| SigNoz ingress | Port-forward only | ALB/NGINX ingress + SSO/OIDC | Approved; unblocks dashboard access beyond operators |
+| Aurora Multi-AZ | Single-AZ everywhere Aurora is used (UAT today; Prod not yet provisioned) | **Prod only** → multi-AZ Aurora. UAT stays single-AZ to cut cost. Dev/SIT don't use Aurora at all (self-managed CNPG) — not applicable. | Cost-driven: only prod needs the failover guarantee, contingent on backups already being in place |
+| DR restore documentation | CNPG (Dev/SIT) and MongoDB PBM restore steps exist in [Recovery Procedures](../references/recovery-procedures.md), not yet consolidated into one drill runbook | Consolidate/complete restore documentation for both engines | Documentation is cheap and high-value; actually *running* the drill on a cadence is deferred (see Later) |
+| Multi-environment parameterization | Dev/UAT/Prod partially parameterized (see [Per-Environment Feature Map](#per-environment-feature-map)); SIT not yet provisioned | Full parameterization across dev/sit/uat/prod state keys and tfvars, ready for SIT once its AWS account exists | Blocks nothing else on this list; needed before further per-environment hardening |
+| Insert-only MongoDB writer role | Audit-writer secret currently uses the same db-admin identity as operators | Create a **new, additional** MongoDB role scoped to `insert`-only on `oms_audit.auditlogs`, used only by the Boomi audit-writer secret. **The existing db-admin/userAdmin identity is untouched and keeps full rights** — this only narrows the one identity embedded in the Boomi-facing secret, it does not restrict administrators. | Closes an audit-integrity gap without reducing operator capability |
+| Secrets Manager | K8s Secrets + local escrow everywhere | **Prod only.** Dev/SIT/UAT remain on K8s Secrets — Secrets Manager has a per-secret + API-call cost not justified pre-prod. | Cost-driven; prod is the only environment where the compliance/rotation benefit outweighs the spend |
 
-1. **Secrets management:** Move credentials to AWS Secrets Manager with rotation policies
-2. **Network hardening:** Private EKS endpoint, VPN-only access, security group tightening
-3. **State locking:** Add DynamoDB table for Terraform state locking
-4. **Ingress:** Deploy ALB/NGINX ingress controller with SSO/OIDC for SigNoz
-5. **Monitoring:** Add CloudWatch/Prometheus alerts for component health
-6. **DR testing:** Document and drill restore procedures quarterly
-7. **Multi-environment:** Parameterize for staging/prod with separate state keys
+### Later (deferred, tracked not forgotten)
+
+| Item | Note |
+|---|---|
+| Network hardening (private EKS endpoint + VPN/bastion) | Revisit after Now items land |
+| Automated CloudWatch/Prometheus alerting | Manual verification scripts remain sufficient for now |
+| DR drill *execution* (quarterly cadence) | Documentation is Now; scheduling/running the drill is deferred |
+| MongoDB encryption → KMS-managed key | Local escrowed key remains acceptable pre-prod |
+| Tamper evidence (signed digest / hash-chain sealing) | See [Audit Enforcement Gaps](#audit-enforcement-gaps-target-state) |
+| Trusted recorded-at (NTP/chrony enforcement, clock-skew alerting) | See [Audit Enforcement Gaps](#audit-enforcement-gaps-target-state) |
+| Payload lifecycle coupling | See [Audit Enforcement Gaps](#audit-enforcement-gaps-target-state) — clarified below |
+| Break-glass payload access service | See [Audit Enforcement Gaps](#audit-enforcement-gaps-target-state) |
+| Retention & legal hold (local download-and-purge, not S3 archival) | See [Audit Enforcement Gaps](#audit-enforcement-gaps-target-state) — decided 2026-08-02, needs its own design pass before implementation |
+
+### Per-Environment Feature Map
+
+| Aspect | Dev | SIT | UAT | Prod |
+|---|---|---|---|---|
+| Status | Implemented | **Deferred** — requires a new AWS account that does not exist yet | Implemented | Target account currently running Sandbox; becomes Prod after Sandbox is torn down |
+| AWS Account | `815402439714` | TBD (not provisioned) | `672172129937` | `632674123947` |
+| PostgreSQL engine | CNPG (self-managed, in-cluster) | CNPG (self-managed, in-cluster) — planned | Aurora (managed) | Aurora (managed) |
+| Aurora Multi-AZ | N/A (not Aurora) | N/A (not Aurora) | Single-AZ (cost) | Multi-AZ (Now item above) |
+| Secrets storage | K8s Secrets + local escrow | K8s Secrets + local escrow (planned) | K8s Secrets + local escrow | AWS Secrets Manager (Now item above) |
+| MongoDB encryption key | Local escrowed key | Local escrowed key (planned) | Local escrowed key | Local escrowed key (KMS migration is Later) |
+| SigNoz access | Port-forward today → ingress+SSO (Now) | Port-forward (planned) | Port-forward today → ingress+SSO (Now) | Port-forward today → ingress+SSO (Now) |
+| Network exposure | Public EKS endpoint | Public EKS endpoint (planned) | Public EKS endpoint | Public EKS endpoint (private endpoint/VPN is Later, all envs) |
+
+This table exists to keep environment-specific decisions (like "multi-AZ only
+in prod" or "Secrets Manager only in prod") from getting lost in prose —
+update it whenever a Now/Later item lands or an environment's scope changes.
 
 ---
 
@@ -303,17 +327,19 @@ operational guarantees that contract depends on.
 ### Audit Enforcement Gaps (Target State)
 
 These are required for a defensible audit trail and are **not yet enforced**;
-the contract's Conformance Status table points here.
+the contract's Conformance Status table points here. Priority column added
+2026-08-02 (see [Production Readiness Assessment](#production-readiness-assessment)
+for the full Now/Later backlog this feeds into).
 
-| Gap | Current state | Target |
-|---|---|---|
-| **Insert-only writer role** | The audit-writer secret uses a database-admin identity that can update/delete (`scripts/create-audit-writer-secret.sh`). "Immutable" is convention, not enforced. | A custom MongoDB role granting only `insert` on `oms_audit.auditlogs`; `update`/`remove`/`dropCollection`/index admin denied. Read-back for tests uses a separate identity. |
-| **Tamper evidence** | RBAC only; a privileged admin could alter history undetectably. | Periodic signed digest / hash-chain sealing so admin-side mutation is detectable independent of RBAC. |
-| **Trusted recorded-at** | `time` is caller-supplied; even the ObjectId timestamp is client-generated, so backdating is undetectable. | Treat `_id` generation time as de-facto recorded-at for drift forensics; enforce NTP/chrony on producers and alert on clock skew beyond tolerance. |
-| **Payload lifecycle** | `std.payload_uri` objects have no coupled lifecycle. | Offloaded-object storage lifetime ≥ audit retention; store `std.payload_sha256` for integrity/404 detection; delete the object in coordination with its audit row so no orphaned payload outlives its index. |
-| **Right-to-be-forgotten** | No defined mechanism against immutable records. | Pseudonymize identities in-record; hold the token→identity mapping in a separate erasable identity store; RTBF severs the mapping. Crypto-shredding (per-tenant KMS key) only for payloads that must be retained in full. |
-| **Break-glass payload access** | Ad-hoc; SRE may lack access mid-incident. | An audited retrieval service resolving `std.payload_uri` behind JIT access, MFA, incident/ticket reason, RBAC by data class, masked-by-default preview, and immutable access logging — not direct bucket/KMS grants. |
-| **Retention & legal hold** | No automatic deletion; no archive tier. | Policy by data class/jurisdiction/tenant; archive to encrypted WORM/Object-Lock cold storage with verified count/checksum/restore; legal hold blocks deletion; controlled purge only after verified archive, with recorded approval. Do **not** use a TTL index (the string `time` field is TTL-incompatible and TTL deletion can breach legal hold). |
+| Gap | Priority | Current state | Target |
+|---|---|---|---|
+| **Insert-only writer role** | **Now** | The audit-writer secret uses a database-admin identity that can update/delete (`scripts/create-audit-writer-secret.sh`). "Immutable" is convention, not enforced. | Add a **new**, narrower MongoDB role granting only `insert` on `oms_audit.auditlogs`, used solely by the audit-writer secret; `update`/`remove`/`dropCollection`/index admin denied for that identity only. **Existing db-admin/userAdmin identities are unaffected and keep full rights** — this change only swaps which identity the Boomi-facing secret uses. Read-back for tests uses a separate identity. |
+| **Tamper evidence** | Later | RBAC only; a privileged admin could alter history undetectably. | Periodic signed digest / hash-chain sealing so admin-side mutation is detectable independent of RBAC. |
+| **Trusted recorded-at** | Later | `time` is caller-supplied; even the ObjectId timestamp is client-generated, so backdating is undetectable. | Treat `_id` generation time as de-facto recorded-at for drift forensics; enforce NTP/chrony on producers and alert on clock skew beyond tolerance. |
+| **Payload lifecycle** | Later | `std.payload_uri` objects have no coupled lifecycle. Concretely: some audit records reference a large payload stored outside MongoDB (e.g. an S3 object) instead of embedding it; nothing today keeps that external object's lifetime in sync with the audit record's own retention. | Offloaded-object storage lifetime ≥ audit retention; store `std.payload_sha256` for integrity/404 detection; delete the object in coordination with its audit row so no orphaned payload outlives its index. |
+| **Right-to-be-forgotten** | **N/A** | Decided 2026-08-02: this is a B2B platform, not a consumer-facing service — `user_id`/`ip` identify the individual (client-company employee or internal operator) who performed an action, and retaining that identity is the explicit *purpose* of the audit trail (attributing responsibility when something goes wrong), not incidental PII collection. | **Not applicable, by design — do not build RTBF.** Erasing `who`/`ip` from an audit record would defeat the record's own reason for existing. No pseudonymization or erasable-identity-mapping work is planned. If a future contractual/regulatory obligation ever requires erasure for a specific individual, that will need a dedicated design at that time — this decision covers the current B2B scope only, not a hypothetical future consumer-facing use case. |
+| **Break-glass payload access** | Later | Ad-hoc; SRE may lack access mid-incident. | An audited retrieval service resolving `std.payload_uri` behind JIT access, MFA, incident/ticket reason, RBAC by data class, masked-by-default preview, and immutable access logging — not direct bucket/KMS grants. |
+| **Retention & legal hold** | Later | No automatic deletion; no archive tier. **This is about the MongoDB audit collection's own long-term archive — it has no relationship to Aurora's backup mechanism**, which is a separate, already-in-place operational recovery concern (RTO/RPO for the application database, not audit-trail legal retention). | **Decided 2026-08-02: local download-and-purge, not S3 archival.** Multi-year continuous S3 storage (even Glacier Deep Archive) costs more over the retention horizon this system expects than a one-time export to an operator-controlled local/offline copy, followed by removing the aged-out records from the live MongoDB collection to cap its growth. **Accepted trade-off:** this gives up S3 Object Lock's cloud-native WORM/tamper-evidence guarantee — the exported copy's integrity depends on operator handling, not object storage immutability. Not yet designed: export trigger (age threshold/manual), export format/encryption, custody/access control for the offline copy, and the exact purge-after-export sequencing — needs its own brainstorming pass before implementation (tracked as future work, still Later priority). Do **not** use a TTL index (the string `time` field is TTL-incompatible and TTL deletion can breach legal hold). |
 
 ### Change Management Rules
 
