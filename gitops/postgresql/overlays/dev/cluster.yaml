@@ -6,11 +6,6 @@ metadata:
 spec:
   instances: 3
   imageName: ghcr.io/cloudnative-pg/postgresql:16
-  # IRSA: pods use this service account, which is annotated by Phase 2 Terraform
-  # with the operator IAM role ARN via platform_contract.postgresql_workload_service_account
-  serviceAccountTemplate:
-    metadata:
-      annotations: {}
   storage:
     storageClass: gp3-postgresql
     size: 50Gi
@@ -22,5 +17,10 @@ spec:
       wal:
         compression: gzip
   # IRSA authentication — no credentials secret; pod identity via
-  # service account oms-postgresql-workload annotated with IAM role
+  # service account oms-postgresql-workload annotated with IAM role.
+  # serviceAccountName references an EXISTING ServiceAccount (created and
+  # IRSA-annotated by Phase 2 Terraform) rather than having the operator
+  # generate one; this field is mutually exclusive with serviceAccountTemplate
+  # per the CNPG Cluster CRD reference (cloudnative-pg.io/docs/devel/
+  # cloudnative-pg.v1#clusterspec) — do not add serviceAccountTemplate here.
   serviceAccountName: oms-postgresql-workload
