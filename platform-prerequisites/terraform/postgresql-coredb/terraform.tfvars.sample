@@ -1,0 +1,22 @@
+aws_region      = "ap-east-1"
+expected_account_id = "REPLACE_ME"
+environment     = "dev"
+name_prefix     = "oms-dev-postgresql-coredb"
+cluster_name    = "EKS-boomi-runtime-cluster"
+backup_bucket_name = "REPLACE_ME_CORE_CNPG_BACKUP_BUCKET"
+
+namespace                      = "coredb"
+workload_service_account_name  = "oms-postgresql-workload"
+iam_role_name                  = "postgresql-coredb-cnpg-role"
+
+# Keep true for EKS Pod Identity.
+use_pod_identity = true
+
+# Only needed for IRSA mode (when use_pod_identity=false).
+oidc_provider_arn = ""
+oidc_provider_url = ""
+
+# Optional, only if KMS key access is required.
+kms_key_arn = ""
+
+tags = { Environment = "dev", ManagedBy = "Terraform" }

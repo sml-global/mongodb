@@ -44,8 +44,8 @@ class DestroySafetyGateFixture(unittest.TestCase):
         # kubectl needs a specialized stub to return pod names for export-database-snapshot.sh
         self._write_executable(self.mock_bin / "kubectl", _KUBECTL_STUB)
         (self.root / "scripts").mkdir(parents=True, exist_ok=True)
-        for name in ("legacy/dev/destroy.sh", "export-database-snapshot.sh",
-                     "bootstrap-terraform-s3-backend.sh"):
+        for name in ("legacy/dev/destroy.sh", "legacy/dev/load-env-config.sh",
+                     "export-database-snapshot.sh", "bootstrap-terraform-s3-backend.sh"):
             source = REPO_ROOT / "scripts" / name
             destination = self.root / "scripts" / name
             destination.parent.mkdir(parents=True, exist_ok=True)

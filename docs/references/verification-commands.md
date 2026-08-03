@@ -345,23 +345,29 @@ kill $PF_PID 2>/dev/null
 
 ## PostgreSQL
 
-**Dev/SIT (CNPG, in-cluster):**
+**Dev/SIT (CNPG, in-cluster, independent core/brand clusters):**
 
 ```bash
-kubectl -n postgresql get cluster oms-postgresql
+kubectl -n coredb get cluster oms-postgresql-coredb
 # Expect: status=Ready
 
-kubectl -n postgresql exec -it oms-postgresql-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+kubectl -n coredb exec -it oms-postgresql-coredb-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+# Expect: 2 healthy streaming replicas
+
+kubectl -n branddb get cluster oms-postgresql-branddb
+# Expect: status=Ready
+
+kubectl -n branddb exec -it oms-postgresql-branddb-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
 # Expect: 2 healthy streaming replicas
 ```
 
-**Pass criteria:** Cluster `Ready`, 3 healthy members (1 primary + 2 secondaries). See
+**Pass criteria:** Each cluster `Ready`, 3 healthy members (1 primary + 2 secondaries). See
 [PostgreSQL Platform Contract](postgresql-platform-contract.md).
 
 **UAT/Prod (Aurora, managed RDS):**
 
 ```bash
-# Cluster status (replace <name_prefix> with the environment's prefix, e.g. oms-uat-postgresql-aurora)
+# Cluster status (replace <name_prefix> with the environment's prefix, e.g. oms-uat-coredb or oms-uat-branddb)
 aws rds describe-db-clusters \
   --db-cluster-identifier <name_prefix>-aurora \
   --query 'DBClusters[0].Status' \
