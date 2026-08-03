@@ -2,7 +2,7 @@
 aws_region          = "ap-east-1"
 expected_account_id = "REPLACE_ME"
 environment         = "REPLACE_ME"
-name_prefix         = "oms-REPLACE_ME-postgresql"
+name_prefix         = "oms-REPLACE_ME-coredb"
 
 # All Aurora variables below can be omitted entirely for CNPG-only environments (dev/sit/sandbox); they default to empty and disable the Aurora resources.
 # From eks-platform's platform_contract output — copy manually, this root has no remote_state dependency.
@@ -18,7 +18,7 @@ cluster_kms_key_arn              = "REPLACE_ME"
 aurora_engine_version  = "REPLACE_ME"
 aurora_instance_class  = "db.r6g.large"
 aurora_instance_count  = 1
-aurora_database_name   = "oms"
+aurora_database_name   = "coredb"
 aurora_master_username = "oms_admin"
 
 tags = { Environment = "REPLACE_ME", ManagedBy = "Terraform" }

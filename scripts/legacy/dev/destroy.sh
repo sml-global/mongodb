@@ -18,8 +18,10 @@ Scopes:
   signoz-observability  Destroy dashboards/alerts Terraform state (run before 'signoz' so the API is still reachable).
   overlay     Remove only the MongoDB workload overlay (k8s/overlays/dev) — PSMDB Cluster CR, TLS certs,
               PDB, metrics collectors. Leaves the operator and Kyverno policies in place.
-  postgresql-overlay  Remove only the PostgreSQL workload overlay (gitops/postgresql/overlays/dev) —
-              the CNPG Cluster CR. Leaves the operator and Kyverno policies in place.
+  postgresql-overlay  Remove only the PostgreSQL workload overlays (both core and brand CNPG Cluster CRs).
+              Leaves the operator and Kyverno policies in place.
+  postgresql-coredb-overlay   Remove only the PostgreSQL core CNPG Cluster CR (namespace coredb) — independent of brand.
+  postgresql-branddb-overlay  Remove only the PostgreSQL brand CNPG Cluster CR (namespace branddb) — independent of core.
   policies    Remove the shared Kyverno ClusterPolicies (policies/kyverno). Safe to run independently —
               nothing else depends on these existing at destroy time.
   operators   Remove the shared Flux-managed operator HelmReleases (gitops/operators/base). Run this
@@ -120,7 +122,7 @@ describe_destruction() {
       components=("MongoDB PerconaServerMongoDB CR, operator HelmRelease, TLS certs/issuers" "MongoDB secrets (psmdb-encryption-key, psmdb-secrets, internal-psmdb-users, oms-audit-writer) + local escrow files" "MongoDB Terraform scope (mongodb root) — EBS volumes are Retained, not deleted")
       ;;
     pg|postgresql)
-      components=("PostgreSQL Kubernetes workloads (CNPG Cluster, operator)" "postgresql-core Terraform scope (Aurora cluster, if applicable)")
+      components=("PostgreSQL Kubernetes workloads (core+brand CNPG Clusters, operator)" "postgresql-core Terraform scope (Aurora cluster, if applicable)")
       ;;
     pg-brand|postgresql-brand)
       components=("postgresql-brand Terraform scope (Aurora brand cluster) — no associated Kubernetes workload")
@@ -129,7 +131,13 @@ describe_destruction() {
       components=("MongoDB workload overlay only (k8s/overlays/dev) — PSMDB Cluster CR, TLS certs, PDB, metrics collectors" "Operator and Kyverno policies are left in place")
       ;;
     postgresql-overlay)
-      components=("PostgreSQL workload overlay only (gitops/postgresql/overlays/dev) — CNPG Cluster CR" "Operator and Kyverno policies are left in place")
+      components=("PostgreSQL workload overlays only (gitops/postgresql-coredb/overlays/dev + gitops/postgresql-branddb/overlays/dev) — both CNPG Cluster CRs" "Operator and Kyverno policies are left in place")
+      ;;
+    postgresql-coredb-overlay)
+      components=("PostgreSQL core workload overlay only (gitops/postgresql-coredb/overlays/dev) — CNPG Cluster CR in namespace coredb" "brand cluster, operator, and Kyverno policies are left in place")
+      ;;
+    postgresql-branddb-overlay)
+      components=("PostgreSQL brand workload overlay only (gitops/postgresql-branddb/overlays/dev) — CNPG Cluster CR in namespace branddb" "core cluster, operator, and Kyverno policies are left in place")
       ;;
     policies)
       components=("Shared Kyverno ClusterPolicies (policies/kyverno)")
@@ -312,12 +320,25 @@ destroy_mongodb() {
 }
 
 destroy_postgresql_k8s() {
-  echo "Removing PostgreSQL CNPG Cluster resource..."
-  kubectl -n postgresql delete clusters.postgresql.cnpg.io oms-postgresql --ignore-not-found=true || true
+  echo "Removing PostgreSQL CNPG Cluster resources (core and brand)..."
+  kubectl -n coredb delete clusters.postgresql.cnpg.io oms-postgresql-coredb --ignore-not-found=true || true
+  kubectl -n branddb delete clusters.postgresql.cnpg.io oms-postgresql-branddb --ignore-not-found=true || true
   echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
 
   echo "Removing CNPG operator..."
   kubectl -n postgresql-operator delete helmrelease cloudnative-pg --ignore-not-found=true || true
+}
+
+destroy_postgresql_coredb_k8s() {
+  echo "Removing PostgreSQL core CNPG Cluster resource only..."
+  kubectl -n coredb delete clusters.postgresql.cnpg.io oms-postgresql-coredb --ignore-not-found=true || true
+  echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
+}
+
+destroy_postgresql_branddb_k8s() {
+  echo "Removing PostgreSQL brand CNPG Cluster resource only..."
+  kubectl -n branddb delete clusters.postgresql.cnpg.io oms-postgresql-branddb --ignore-not-found=true || true
+  echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
 }
 
 destroy_pg() {
@@ -332,9 +353,20 @@ destroy_mongodb_overlay() {
 }
 
 destroy_postgresql_overlay() {
-  echo "Removing PostgreSQL workload overlay (gitops/postgresql/overlays/${ENVIRONMENT:-dev}) only..."
+  destroy_postgresql_coredb_overlay
+  destroy_postgresql_branddb_overlay
+}
+
+destroy_postgresql_coredb_overlay() {
+  echo "Removing PostgreSQL core workload overlay (gitops/postgresql-coredb/overlays/${ENVIRONMENT:-dev}) only..."
   echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
-  kubectl delete -k "$ROOT_DIR/gitops/postgresql/overlays/${ENVIRONMENT:-dev}" --ignore-not-found=true || true
+  kubectl delete -k "$ROOT_DIR/gitops/postgresql-coredb/overlays/${ENVIRONMENT:-dev}" --ignore-not-found=true || true
+}
+
+destroy_postgresql_branddb_overlay() {
+  echo "Removing PostgreSQL brand workload overlay (gitops/postgresql-branddb/overlays/${ENVIRONMENT:-dev}) only..."
+  echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
+  kubectl delete -k "$ROOT_DIR/gitops/postgresql-branddb/overlays/${ENVIRONMENT:-dev}" --ignore-not-found=true || true
 }
 
 destroy_policies() {
@@ -414,10 +446,10 @@ main() {
 
   # Validate scope before confirmation prompt
   case "$SCOPE" in
-    signoz|signoz-observability|mongodb|mongo|pg|postgresql|pg-brand|postgresql-brand|all|overlay|postgresql-overlay|policies|operators)
+    signoz|signoz-observability|mongodb|mongo|pg|postgresql|pg-brand|postgresql-brand|all|overlay|postgresql-overlay|postgresql-coredb-overlay|postgresql-branddb-overlay|policies|operators)
       ;;
     *)
-      echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, postgresql, pg-brand, postgresql-brand, signoz, signoz-observability, overlay, postgresql-overlay, policies, operators" >&2
+      echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, postgresql, pg-brand, postgresql-brand, signoz, signoz-observability, overlay, postgresql-overlay, postgresql-coredb-overlay, postgresql-branddb-overlay, policies, operators" >&2
       usage
       exit 1
       ;;
@@ -447,6 +479,12 @@ main() {
       ;;
     postgresql-overlay)
       destroy_postgresql_overlay
+      ;;
+    postgresql-coredb-overlay)
+      destroy_postgresql_coredb_overlay
+      ;;
+    postgresql-branddb-overlay)
+      destroy_postgresql_branddb_overlay
       ;;
     policies)
       destroy_policies

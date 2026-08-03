@@ -153,21 +153,34 @@ flowchart TD
 
 ### 3b. `provision-k8s-components.sh postgresql` — detailed steps
 
-**What it's trying to achieve:** deploy the CloudNativePG (CNPG) operator and
-the `Cluster` custom resource that connects to the already-Terraform-provisioned
-Aurora instance. **Why CNPG at all if Aurora is AWS-managed:** CNPG here
-manages the in-cluster credentials/connection wiring and health checks for
-the application side, not the database engine itself.
+**What it's trying to achieve:** deploy the shared CloudNativePG (CNPG)
+operator once, then two independent, self-contained CNPG clusters — `coredb`
+and `branddb` — each in its own namespace with its own S3 backup bucket and
+IAM pod-identity role, so either can be provisioned, resized, or destroyed
+without affecting the other. **This is the Dev/SIT path only** — UAT/Prod use
+AWS Aurora (fully managed RDS) instead, via the separate
+`postgresql-core`/`postgresql-brand` Terraform roots; CNPG here is not
+connected to Aurora in any way.
 
 ```mermaid
 flowchart TD
   A["provision-k8s-components.sh postgresql"] --> B[preflight_scope postgresql]
-  B --> C["apply_postgresql_operator()<br/>kubectl apply -k gitops/postgresql/base<br/>Provisions: postgresql namespace, CNPG HelmRepository,<br/>CNPG operator HelmRelease, gp3-postgresql StorageClass<br/>(requires Flux CRDs already installed)"]
+  B --> C["apply_postgresql_operator()<br/>kubectl apply -k gitops/postgresql/base<br/>Provisions: postgresql-operator namespace, CNPG HelmRepository,<br/>CNPG operator HelmRelease, gp3-postgresql StorageClass<br/>(requires Flux CRDs already installed; shared by both clusters)"]
   C --> D["apply_policies()<br/>same 4 Kyverno ClusterPolicies as §3a"]
   D --> E["wait_for_postgresql_crd<br/>poll until CNPG Cluster CRD is Established"]
-  E --> F["apply_postgresql_overlay()<br/>kubectl apply -k gitops/postgresql/overlays/dev<br/>Provisions: CNPG Cluster CR wiring to the Aurora endpoint"]
-  F --> G[Done]
+  E --> F["apply_postgresql_coredb_overlay()<br/>kubectl apply -k gitops/postgresql-coredb/overlays/dev<br/>Provisions: coredb namespace + oms-postgresql-coredb Cluster CR"]
+  F --> G["apply_postgresql_branddb_overlay()<br/>kubectl apply -k gitops/postgresql-branddb/overlays/dev<br/>Provisions: branddb namespace + oms-postgresql-branddb Cluster CR"]
+  G --> H[Done]
 ```
+
+Each cluster also has its own Terraform prerequisites root
+(`postgresql-coredb`/`postgresql-branddb`, via the shared
+`modules/cnpg-prereqs` module) that must be applied first — see
+[PostgreSQL Platform Contract](postgresql-platform-contract.md) for the full
+sequence. To provision or destroy only one cluster, use the
+`postgresql-coredb`/`postgresql-branddb` scopes on
+`provision-k8s-components.sh`/`destroy.sh` instead of the combined
+`postgresql`/`postgresql-overlay` scopes.
 
 ### 3c. `provision-k8s-components.sh signoz` — detailed steps
 
@@ -253,7 +266,7 @@ flowchart TD
   I -->|signoz| L["kubectl delete HelmRelease + namespace<br/>(finalizer-safe teardown for stuck ClickHouse installations)"]
   I -->|signoz-observability| M["terraform destroy (signoz-observability root)<br/>— run before 'signoz' itself, while the API is still reachable"]
   I -->|overlay| N["kubectl delete -k k8s/overlays/${ENVIRONMENT:-dev}<br/>MongoDB workload only — leaves operator + policies in place"]
-  I -->|postgresql-overlay| O["kubectl delete -k gitops/postgresql/overlays/dev<br/>CNPG Cluster CR only — leaves operator + policies in place"]
+  I -->|postgresql-overlay| O["kubectl delete -k gitops/postgresql-coredb/overlays/dev<br/>AND gitops/postgresql-branddb/overlays/dev<br/>Both CNPG Cluster CRs only — leaves operator + policies in place<br/>(use postgresql-coredb-overlay/postgresql-branddb-overlay to target just one)"]
   I -->|policies| P["kubectl delete -k policies/kyverno<br/>Safe to run independently, any time"]
   I -->|operators| Q["kubectl delete -k gitops/operators/base<br/>⚠ Run LAST — orphans live CRs' Pods if run before overlay teardown"]
 ```

@@ -17,9 +17,11 @@
 # orchestration logic is reimplemented here. postgresql-brand has no
 # associated Kubernetes workload today, so its handler is Terraform-only.
 #
-# Dev/SIT use self-managed CloudNativePG (a Cluster CR applied via
-# gitops/postgresql/overlays/dev); UAT/Prod use AWS Aurora (fully managed,
-# no in-cluster Cluster CR) — see docs/references/postgresql-platform-contract.md.
+# Dev/SIT use self-managed CloudNativePG (independent core/brand Cluster CRs
+# applied via gitops/postgresql-coredb/overlays/dev and
+# gitops/postgresql-branddb/overlays/dev); UAT/Prod use AWS Aurora (fully
+# managed, no in-cluster Cluster CR) — see
+# docs/references/postgresql-platform-contract.md.
 # The Kubernetes step below is therefore only run for dev/sit.
 
 postgresql_internal_error() {
