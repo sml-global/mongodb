@@ -1,0 +1,35 @@
+apiVersion: psmdb.percona.com/v1
+kind: PerconaServerMongoDB
+metadata:
+  name: psmdb
+  namespace: mongodb-uat
+spec:
+  replsets:
+    - name: rs0
+      serviceAccountName: psmdb-db
+      size: 3
+      affinity:
+        antiAffinityTopologyKey: topology.kubernetes.io/zone
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+      volumeSpec:
+        persistentVolumeClaim:
+          storageClassName: gp3-mongodb
+          resources:
+            requests:
+              storage: 100Gi
+  backup:
+    enabled: true
+    storages:
+      s3-main:
+        type: s3
+        s3:
+          # REPLACE_ME: no real UAT PBM backup bucket name exists in this
+          # repo yet — fill in the actual bucket before applying to UAT.
+          bucket: REPLACE_ME_UAT_PBM_BUCKET
+          region: ap-east-1

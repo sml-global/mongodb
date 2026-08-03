@@ -22,6 +22,9 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/signoz-observability"
 BOOTSTRAP_BACKEND_SCRIPT="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
 
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/legacy/dev/load-env-config.sh"
+
 TF_STATE_BUCKET="${TF_STATE_BUCKET:-sml-oms-dev-tfstate}"
 TF_STATE_REGION="${TF_STATE_REGION:-ap-east-1}"
 TF_STATE_KEY="${TF_STATE_KEY:-oms/dev/signoz-observability.tfstate}"

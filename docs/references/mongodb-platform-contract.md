@@ -15,7 +15,7 @@
 - **On-Call Contact:** [Define in deployment runbook]
 - **Documentation:** This contract (mongodb-platform-contract.md)
 - **Related Docs:** 
-  - [Architect Reference](architect-reference.md)
+  - [Architect Reference](../guides/architect-reference.md)
   - [Component Catalog](component-catalog.md)
   - [Recovery Procedures](recovery-procedures.md)
   - [Environment Setup](../guides/environment-setup.md)
