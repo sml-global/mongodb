@@ -23,7 +23,7 @@ Single source of truth for all deployed versions. Update this table when any com
 | MongoDB Server | 7.0.12-7 | `k8s/base/psmdb-cluster.yaml` | `helm show values percona/psmdb-db --version <op-ver>` → look for image tag |
 | Percona Operator | chart 1.18.0 (app 1.18.0) | `gitops/operators/base/helmreleases.yaml` | `helm search repo percona/psmdb-operator --versions` |
 | PBM (backup agent) | 2.6.0 | `k8s/base/psmdb-cluster.yaml` | Ships with operator version |
-| PostgreSQL (Aurora) | 18.3 | `platform-prerequisites/terraform/postgresql-core/variables.tf` | `aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1` |
+| PostgreSQL (Aurora) | 18.4 | `terraform.tfvars` (`aurora_engine_version`, no committed default — set per operator) | `aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1` |
 | SigNoz | chart 0.130.1 (app v0.130.1) | `gitops/signoz/base/helmreleases.yaml` | `helm search repo signoz/signoz --versions` |
 
 ### Platform Controllers
@@ -66,7 +66,7 @@ Single source of truth for all deployed versions. Update this table when any com
 
 - **Percona Operator**: current 1.18.0 is 4 versions behind latest (1.22.0). Upgrade path: 1.18→1.19→1.20→1.21→1.22 (one minor at a time). Check [Percona Operator release notes](https://docs.percona.com/percona-operator-for-mongodb/ReleaseNotes/index.html) and the [upgrade matrix](https://docs.percona.com/percona-operator-for-mongodb/update.html) for inter-version compatibility. See [Architect Reference § Upgrade Procedures](../guides/architect-reference.md#upgrade-procedures).
 - **SigNoz**: current 0.130.1, latest 0.131.0 — minor version bump, generally safe. Check [SigNoz changelog](https://github.com/SigNoz/signoz/releases).
-- **PostgreSQL**: pinned at 18.3. AWS may release newer point releases — check via `aws rds describe-db-engine-versions`.
+- **PostgreSQL**: pinned at 18.4 (confirmed available via `aws rds describe-db-engine-versions --engine aurora-postgresql --region ap-east-1`, the current latest 18.x minor as of 2026-08-03). Set via `aurora_engine_version` in each root's `terraform.tfvars` — check for newer point releases via the same command before re-pinning.
 - **EKS**: AWS manages control plane upgrades. Node groups may need manual update. Check [EKS version calendar](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html).
 - **MongoDB driver 5.1.2**: compatible with MongoDB 7.0. If upgrading MongoDB to 8.0+, verify driver compatibility at [MongoDB driver compatibility](https://www.mongodb.com/docs/drivers/java/sync/current/compatibility/).
 
