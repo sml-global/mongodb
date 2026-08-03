@@ -1,0 +1,27 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: oms-postgresql-coredb
+  namespace: coredb
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.4
+  storage:
+    storageClass: gp3-postgresql
+    size: 50Gi
+  backup:
+    barmanObjectStore:
+      destinationPath: s3://oms-postgresql-coredb-backup
+      s3Credentials:
+        inheritFromIAMRole: true
+      wal:
+        compression: gzip
+  # IRSA authentication — no credentials secret; pod identity via
+  # service account oms-postgresql-workload annotated with IAM role,
+  # created by platform-prerequisites/terraform/postgresql-coredb.
+  # serviceAccountName references an EXISTING ServiceAccount rather than
+  # having the operator generate one; this field is mutually exclusive
+  # with serviceAccountTemplate per the CNPG Cluster CRD reference
+  # (cloudnative-pg.io/docs/devel/cloudnative-pg.v1#clusterspec) — do not
+  # add serviceAccountTemplate here.
+  serviceAccountName: oms-postgresql-workload

@@ -1,6 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: postgresql-operator
+  name: branddb
   labels:
     app.kubernetes.io/managed-by: flux
+    app.kubernetes.io/part-of: postgresql-platform

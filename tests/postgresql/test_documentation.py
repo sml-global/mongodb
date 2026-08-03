@@ -69,20 +69,20 @@ class TestPostgreSQLPlatformContract(unittest.TestCase):
         self.assertIn("## Configuration Reference", self.content,
                       "Missing 'Configuration Reference' section header")
     
-    def test_10_prerequisites_mentions_irsa_role(self):
-        """Prerequisites section must reference IRSA role"""
-        self.assertIn("oms-postgresql-operator-role", self.content,
-                      "Missing IRSA role reference 'oms-postgresql-operator-role'")
-    
+    def test_10_prerequisites_mentions_iam_role(self):
+        """Prerequisites section must reference the per-cluster IAM role"""
+        self.assertIn("postgresql-coredb-cnpg-role", self.content,
+                      "Missing IAM role reference 'postgresql-coredb-cnpg-role'")
+
     def test_11_prerequisites_mentions_s3_bucket(self):
-        """Prerequisites section must reference S3 bucket"""
-        self.assertIn("oms-cnpg-wal-archive", self.content,
-                      "Missing S3 bucket reference 'oms-cnpg-wal-archive'")
-    
+        """Prerequisites section must reference S3 backup bucket"""
+        self.assertIn("backup_bucket_name", self.content,
+                      "Missing S3 bucket reference 'backup_bucket_name'")
+
     def test_12_prerequisites_mentions_kms_key(self):
-        """Prerequisites section must reference KMS key"""
-        self.assertIn("oms-postgresql-cluster-key", self.content,
-                      "Missing KMS key reference 'oms-postgresql-cluster-key'")
+        """Prerequisites section must reference optional KMS key"""
+        self.assertIn("kms_key_arn", self.content,
+                      "Missing KMS key reference 'kms_key_arn'")
     
     def test_13_guard_semantics_includes_seven_step_protocol(self):
         """Guard Semantics must describe full 7-step protocol"""
@@ -196,9 +196,9 @@ class TestPostgreSQLDocumentationOrchestrationFixes(unittest.TestCase):
     """Tests for PostgreSQL orchestration documentation fixes (Task 5 additions)"""
 
     def test_contract_references_real_pod_name(self):
-        """Contract must reference oms-postgresql-1 pod name consistently"""
+        """Contract must reference oms-postgresql-coredb-1 pod name consistently"""
         content = (Path(__file__).parent.parent.parent / "docs" / "references" / "postgresql-platform-contract.md").read_text()
-        self.assertIn("oms-postgresql-1", content)
+        self.assertIn("oms-postgresql-coredb-1", content)
         self.assertNotIn("exec -it postgresql-1", content)
 
     def test_contract_references_gp3_postgresql_storageclass(self):
@@ -226,26 +226,26 @@ class TestPostgreSQLDocumentationOrchestrationFixes(unittest.TestCase):
         self.assertIn("scripts/provision.sh pg", content)
 
     def test_verification_commands_reference_real_cluster_name(self):
-        """Verification commands must reference oms-postgresql-1 pod name"""
+        """Verification commands must reference oms-postgresql-coredb-1 pod name"""
         content = (Path(__file__).parent.parent.parent / "docs" / "references" / "verification-commands.md").read_text()
-        self.assertIn("oms-postgresql-1", content)
+        self.assertIn("oms-postgresql-coredb-1", content)
 
     def test_index_has_no_stale_uat_decommission_followup(self):
         """Index must not contain stale UAT decommission follow-up notes"""
         content = (Path(__file__).parent.parent.parent / "docs" / "index.md").read_text()
         self.assertNotIn("needs an explicit, manual decommission step", content)
 
-    def test_contract_postgresql_cluster_name_defaults_to_oms_postgresql(self):
-        """Contract must define POSTGRESQL_CLUSTER_NAME default as oms-postgresql (I4 fix)"""
+    def test_contract_postgresql_cluster_name_defaults_to_oms_postgresql_coredb(self):
+        """Contract must define POSTGRESQL_CLUSTER_NAME default as oms-postgresql-coredb (core/brand split)"""
         content = (Path(__file__).parent.parent.parent / "docs" / "references" / "postgresql-platform-contract.md").read_text()
-        self.assertIn('POSTGRESQL_CLUSTER_NAME:-"oms-postgresql"', content)
+        self.assertIn('POSTGRESQL_CLUSTER_NAME:-"oms-postgresql-coredb"', content)
         self.assertNotIn('POSTGRESQL_CLUSTER_NAME:-"postgresql"}', content)
 
     def test_recovery_procedures_documents_devsit_cnpg_restore(self):
         """recovery-procedures.md must cover Dev/SIT CNPG restore, not just Aurora"""
         content = (Path(__file__).parent.parent.parent / "docs" / "references" / "recovery-procedures.md").read_text()
         self.assertIn("Dev/SIT PostgreSQL Recovery (CNPG)", content)
-        self.assertIn("s3://oms-postgresql-backup", content)
+        self.assertIn("s3://oms-postgresql-coredb-backup", content)
         self.assertIn("recoveryTarget", content)
 
     def test_platform_contract_links_to_devsit_recovery_section(self):

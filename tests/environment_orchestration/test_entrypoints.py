@@ -234,11 +234,12 @@ class LegacyDestroyFixture(_BaseFixture):
     def setUp(self):
         super().setUp()
         self._copy("scripts/legacy/dev/destroy.sh")
+        self._copy("scripts/legacy/dev/load-env-config.sh")
         self._write_executable(
             self.root / "scripts" / "bootstrap-terraform-s3-backend.sh",
             _LOGGING_STUB_TEMPLATE.format(name="bootstrap-terraform-s3-backend.sh"),
         )
-        for tf_subdir in ("mongodb", "postgresql"):
+        for tf_subdir in ("mongodb", "postgresql-core"):
             tfvars = self.root / "platform-prerequisites" / "terraform" / tf_subdir / "terraform.tfvars"
             tfvars.parent.mkdir(parents=True, exist_ok=True)
             tfvars.write_text("", encoding="utf-8")
@@ -446,7 +447,14 @@ class LegacyDestroyRegressionTests(LegacyDestroyFixture):
         log = self.command_log_lines()
         self.assertTrue(
             any(
-                "-n postgresql " in line and "delete" in line and "clusters.postgresql.cnpg.io" in line and "oms-postgresql" in line
+                "-n coredb " in line and "delete" in line and "clusters.postgresql.cnpg.io" in line and "oms-postgresql-coredb" in line
+                for line in log
+            ),
+            log,
+        )
+        self.assertTrue(
+            any(
+                "-n branddb " in line and "delete" in line and "clusters.postgresql.cnpg.io" in line and "oms-postgresql-branddb" in line
                 for line in log
             ),
             log,
@@ -460,7 +468,7 @@ class LegacyDestroyRegressionTests(LegacyDestroyFixture):
         )
         cluster_index = next(
             i for i, line in enumerate(log)
-            if "-n postgresql " in line and "delete" in line and "clusters.postgresql.cnpg.io" in line
+            if "-n coredb " in line and "delete" in line and "clusters.postgresql.cnpg.io" in line
         )
         helmrelease_index = next(
             i for i, line in enumerate(log)
