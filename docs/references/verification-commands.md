@@ -367,7 +367,7 @@ kubectl -n branddb exec -it oms-postgresql-branddb-1 -- psql -U postgres -c "SEL
 **UAT/Prod (Aurora, managed RDS):**
 
 ```bash
-# Cluster status (replace <name_prefix> with the environment's prefix, e.g. oms-uat-postgresql-aurora)
+# Cluster status (replace <name_prefix> with the environment's prefix, e.g. oms-uat-coredb or oms-uat-branddb)
 aws rds describe-db-clusters \
   --db-cluster-identifier <name_prefix>-aurora \
   --query 'DBClusters[0].Status' \

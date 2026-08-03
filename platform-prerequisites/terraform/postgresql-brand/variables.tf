@@ -73,7 +73,7 @@ variable "aurora_instance_count" {
 variable "aurora_database_name" {
   description = "Initial database name created in the brand Aurora cluster."
   type        = string
-  default     = "brand"
+  default     = "branddb"
 }
 
 variable "aurora_master_username" {

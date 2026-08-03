@@ -1436,8 +1436,8 @@ class HandlerConfirmationSubsetPassingTests(_OrchestratorDestroyDispatchFixture)
         created_at = destroy_evidence.format_timestamp(self.FIXED_CLOCK_EPOCH)
         snapshot_timestamp = created_at.replace(":", "").replace("-", "")
         confirmation_value = (
-            "destroy:uat:672172129937:postgresql-brand:db/oms-uat-brand:"
-            f"final-snapshot=oms-uat-brand-final-{snapshot_timestamp}"
+            "destroy:uat:672172129937:postgresql-brand:db/oms-uat-branddb:"
+            f"final-snapshot=oms-uat-branddb-final-{snapshot_timestamp}"
         )
         override = (
             _guard_override("scope_registry_pre_destroy_guard_postgresql_brand", "postgresql-brand")
