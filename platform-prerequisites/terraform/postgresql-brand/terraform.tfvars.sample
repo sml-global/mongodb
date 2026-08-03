@@ -4,7 +4,7 @@
 aws_region          = "ap-east-1"
 expected_account_id = "REPLACE_ME"
 environment         = "REPLACE_ME"
-name_prefix         = "oms-REPLACE_ME-brand"
+name_prefix         = "oms-REPLACE_ME-branddb"
 
 # From eks-platform's platform_contract output — copy manually, this root has no remote_state dependency.
 vpc_id                            = "REPLACE_ME_VPC_ID"
@@ -18,7 +18,7 @@ aurora_instance_class  = "db.r6g.large"
 # 1 for UAT (cost); >= 2 for Prod (Multi-AZ) — see docs/guides/enterprise-architecture.md
 # § Production Readiness Assessment — Now — "Aurora Multi-AZ: Prod only".
 aurora_instance_count  = 1
-aurora_database_name   = "brand"
-aurora_master_username = "brand_admin"
+aurora_database_name   = "branddb"
+aurora_master_username = "branddb_admin"
 
 tags = { Environment = "REPLACE_ME", ManagedBy = "Terraform" }

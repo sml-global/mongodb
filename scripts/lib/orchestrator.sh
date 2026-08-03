@@ -562,11 +562,11 @@ _orchestrator_compute_required_confirmations() {
         ;;
       postgresql-core)
         REQUIRED_CONFIRMATION_SCOPES+=("$step")
-        REQUIRED_CONFIRMATIONS+=("destroy:${environment_name}:${account_id}:postgresql-core:db/oms-${environment_name}-core:final-snapshot=oms-${environment_name}-core-final-${snapshot_timestamp}")
+        REQUIRED_CONFIRMATIONS+=("destroy:${environment_name}:${account_id}:postgresql-core:db/oms-${environment_name}-coredb:final-snapshot=oms-${environment_name}-coredb-final-${snapshot_timestamp}")
         ;;
       postgresql-brand)
         REQUIRED_CONFIRMATION_SCOPES+=("$step")
-        REQUIRED_CONFIRMATIONS+=("destroy:${environment_name}:${account_id}:postgresql-brand:db/oms-${environment_name}-brand:final-snapshot=oms-${environment_name}-brand-final-${snapshot_timestamp}")
+        REQUIRED_CONFIRMATIONS+=("destroy:${environment_name}:${account_id}:postgresql-brand:db/oms-${environment_name}-branddb:final-snapshot=oms-${environment_name}-branddb-final-${snapshot_timestamp}")
         ;;
       *) ;;
     esac
