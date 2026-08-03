@@ -1,23 +1,12 @@
-# Attach CNPG backup S3 access policy to Phase 2 IRSA operator role
-resource "aws_iam_role_policy" "cnpg_backup_access" {
-  name = "${var.name_prefix}-cnpg-backup-access"
-  role = element(split("/", var.postgresql_operator_iam_role_arn), length(split("/", var.postgresql_operator_iam_role_arn)) - 1)
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
-      Resource = [
-        "arn:aws:s3:::${var.cnpg_backup_bucket_name}",
-        "arn:aws:s3:::${var.cnpg_backup_bucket_name}/*"
-      ]
-      }, {
-      Effect   = "Allow"
-      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
-      Resource = [var.cluster_kms_key_arn]
-    }]
-  })
-}
+# Reusable Aurora PostgreSQL module — invoked by the postgresql-core and
+# postgresql-brand Terraform roots, each with its own name_prefix/database
+# name/instance count, so a brand outage/misconfiguration/destroy cannot
+# touch core (see docs/guides/enterprise-architecture.md § Production
+# Readiness Assessment — Now — "Aurora brand database").
+#
+# All resources are count-gated on database_subnet_ids being non-empty, so
+# CNPG-only environments (dev/sit) that invoke a root without Aurora
+# variables set simply provision nothing here.
 
 resource "aws_db_subnet_group" "aurora" {
   count      = length(var.database_subnet_ids) > 0 ? 1 : 0

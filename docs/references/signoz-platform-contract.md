@@ -16,7 +16,7 @@
 - **On-Call Contact:** [Define in deployment runbook]
 - **Documentation:** This contract (signoz-platform-contract.md)
 - **Related Docs:** 
-  - [Architect Reference](architect-reference.md)
+  - [Architect Reference](../guides/architect-reference.md)
   - [Component Catalog](component-catalog.md)
   - [Dashboard Import Pack](signoz-dashboard-import-pack.md)
   - [Environment Setup](../guides/environment-setup.md)

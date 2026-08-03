@@ -8,9 +8,9 @@
 
 > **Scope update (2026-07-30):** this contract now applies to **Dev/SIT only**. UAT and
 > Prod are migrating from CNPG to AWS Aurora PostgreSQL (managed RDS) per
-> [VPC Subnet Allocation and Boomi Networking Design](superpowers/specs/2026-07-29-vpc-subnet-and-boomi-routing-design.md#database-engine-decision)
+> [VPC Subnet Allocation and Boomi Networking Design](../superpowers/specs/2026-07-29-vpc-subnet-and-boomi-routing-design.md#database-engine-decision)
 > and the Aurora Terraform resources in
-> [platform-prerequisites/terraform/postgresql/main.tf](../../platform-prerequisites/terraform/postgresql/main.tf).
+> [platform-prerequisites/terraform/postgresql-core/main.tf](../../platform-prerequisites/terraform/postgresql-core/main.tf).
 
 ---
 
@@ -21,7 +21,7 @@
 - **On-Call Contact:** [Define in deployment runbook]
 - **Documentation:** This contract (postgresql-platform-contract.md)
 - **Related Docs:** 
-  - [Architect Reference](architect-reference.md)
+  - [Architect Reference](../guides/architect-reference.md)
   - [Component Catalog](component-catalog.md)
   - [Recovery Procedures](recovery-procedures.md) — Dev/SIT CNPG restore and PITR
   - [Environment Setup](../guides/environment-setup.md)
@@ -66,15 +66,15 @@ The following AWS resources **must** exist from Phase 2 provisioning before Post
 Terraform applies IAM policy attachment to enable PostgreSQL operator to access AWS resources:
 
 ```bash
-cd platform-prerequisites/terraform/postgresql
+cd platform-prerequisites/terraform/postgresql-core
 terraform fmt -check      # Validate code style
 terraform validate        # Validate configuration
 terraform plan            # Review changes (do NOT apply)
 ```
 
 **Terraform Artifacts:**
-- **Module:** `platform-prerequisites/terraform/postgresql/main.tf`
-- **Variables:** `platform-prerequisites/terraform/postgresql/variables.tf`
+- **Module:** `platform-prerequisites/terraform/postgresql-core/main.tf`
+- **Variables:** `platform-prerequisites/terraform/postgresql-core/variables.tf`
 - **Outputs:** `postgresql_operator_policy_id` (IAM policy ID created)
 - **Validation:** Attaches `oms-postgresql-wal-archive-policy` to `oms-postgresql-operator-role`
 
@@ -193,7 +193,7 @@ If guard passes, destruction proceeds:
 
 2. **Terraform Destruction:**
    ```bash
-   cd platform-prerequisites/terraform/postgresql
+   cd platform-prerequisites/terraform/postgresql-core
    terraform destroy
    ```
    - Removes IAM policy attachment to IRSA role
@@ -249,7 +249,7 @@ metadata:
 
 ### IAM Permissions
 
-**Policy Name:** `oms-postgresql-wal-archive-policy` (attached by platform-prerequisites/terraform/postgresql/)
+**Policy Name:** `oms-postgresql-wal-archive-policy` (attached by platform-prerequisites/terraform/postgresql-core/)
 
 **S3 Permissions:**
 ```json
@@ -445,7 +445,7 @@ aws iam get-role --role-name oms-postgresql-operator-role
 
 **What It Is:** An AWS IAM role with a trust relationship to the Kubernetes OIDC provider, allowing PostgreSQL operator pods to assume this role via IRSA.
 
-**Used By:** Terraform `platform-prerequisites/terraform/postgresql/variables.tf` consumes this via `var.postgresql_operator_iam_role_arn`
+**Used By:** Terraform `platform-prerequisites/terraform/postgresql-core/variables.tf` consumes this via `var.postgresql_operator_iam_role_arn`
 
 **Why It Matters:** Without this role, PostgreSQL operator cannot authenticate to AWS to archive WAL segments or perform backups.
 
@@ -538,7 +538,7 @@ aws kms get-key-policy --key-id oms-postgresql-cluster-key --policy-name default
 
 #### Terraform Validation
 ```bash
-cd platform-prerequisites/terraform/postgresql
+cd platform-prerequisites/terraform/postgresql-core
 terraform fmt -check    # No formatting issues
 terraform validate      # Valid HCL configuration
 ```
@@ -610,7 +610,7 @@ Per the Dev/SIT-vs-UAT/Prod split (see the Scope Update above and
 `docs/references/component-catalog.md`):
 
 - **UAT/Prod (Aurora):** real configuration is Terraform-managed --
-  `platform-prerequisites/terraform/postgresql/variables.tf` and the
+  `platform-prerequisites/terraform/postgresql-core/variables.tf` and the
   `environments/{uat,prod}/*.tfvars` files are authoritative.
 - **Dev/SIT (CNPG):** committed CNPG `Cluster` manifest is at
   `gitops/postgresql/overlays/dev/cluster.yaml`, wired into provisioning via

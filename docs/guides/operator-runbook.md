@@ -22,9 +22,9 @@ Use this only after you understand the target environment and state location.
 ```bash
 # Create tfvars for both roots
 cp platform-prerequisites/terraform/mongodb/terraform.tfvars.sample platform-prerequisites/terraform/mongodb/terraform.tfvars
-cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-prerequisites/terraform/postgresql/terraform.tfvars
+cp platform-prerequisites/terraform/postgresql-core/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-core/terraform.tfvars
 nano platform-prerequisites/terraform/mongodb/terraform.tfvars
-nano platform-prerequisites/terraform/postgresql/terraform.tfvars
+nano platform-prerequisites/terraform/postgresql-core/terraform.tfvars
 
 # Provision everything
 bash scripts/provision.sh all --auto-approve
@@ -162,7 +162,7 @@ Expected: all preflight checks pass. If not, return to [Environment Setup](envir
 Scope-to-root mapping:
 - `all` → runs `mongodb` then `pg` sequentially (create BOTH tfvars files)
 - `mongodb` → `platform-prerequisites/terraform/mongodb`
-- `pg` → `platform-prerequisites/terraform/postgresql`
+- `pg` → `platform-prerequisites/terraform/postgresql-core`
 
 For `mongodb`:
 
@@ -173,7 +173,7 @@ cp platform-prerequisites/terraform/mongodb/terraform.tfvars.sample platform-pre
 For `pg`:
 
 ```bash
-cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-prerequisites/terraform/postgresql/terraform.tfvars
+cp platform-prerequisites/terraform/postgresql-core/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-core/terraform.tfvars
 ```
 
 Expected: selected root has local `terraform.tfvars` file (not committed to git).

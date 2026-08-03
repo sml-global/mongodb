@@ -33,7 +33,7 @@ terraform apply sandbox-mongodb-destroy.tfplan
 ## Step 2: Destroy consumers — `postgresql`
 
 ```bash
-cd platform-prerequisites/terraform/postgresql
+cd platform-prerequisites/terraform/postgresql-core
 terraform init -reconfigure
 terraform plan -destroy -var-file=../environments/sandbox/postgresql.tfvars -out=sandbox-postgresql-destroy.tfplan
 terraform apply sandbox-postgresql-destroy.tfplan

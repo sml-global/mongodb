@@ -23,7 +23,7 @@ Single source of truth for all deployed versions. Update this table when any com
 | MongoDB Server | 7.0.12-7 | `k8s/base/psmdb-cluster.yaml` | `helm show values percona/psmdb-db --version <op-ver>` → look for image tag |
 | Percona Operator | chart 1.18.0 (app 1.18.0) | `gitops/operators/base/helmreleases.yaml` | `helm search repo percona/psmdb-operator --versions` |
 | PBM (backup agent) | 2.6.0 | `k8s/base/psmdb-cluster.yaml` | Ships with operator version |
-| PostgreSQL (Aurora) | 18.3 | `platform-prerequisites/terraform/postgresql/variables.tf` | `aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1` |
+| PostgreSQL (Aurora) | 18.3 | `platform-prerequisites/terraform/postgresql-core/variables.tf` | `aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1` |
 | SigNoz | chart 0.130.1 (app v0.130.1) | `gitops/signoz/base/helmreleases.yaml` | `helm search repo signoz/signoz --versions` |
 
 ### Platform Controllers
@@ -92,14 +92,14 @@ Single source of truth for all deployed versions. Update this table when any com
 
 | Aspect | Detail |
 |---|---|
-| **What** | Dev/SIT: CloudNativePG (CNPG), a self-managed PostgreSQL operator running in-cluster, 3-node replica set, continuous WAL archival to S3. UAT/Prod: AWS Aurora PostgreSQL (managed RDS), engine kept in lockstep between the two, with `manage_master_user_password` (AWS Secrets Manager) instead of any stored password. |
-| **Why** | Primary application database for OMS — stores orders, inventory, customers, and operational data. CNPG keeps dev/SIT cost low; UAT/Prod use a real managed engine for production-representative validation ahead of go-live. |
+| **What** | Dev/SIT: CloudNativePG (CNPG), a self-managed PostgreSQL operator running in-cluster, 3-node replica set, continuous WAL archival to S3. UAT/Prod: AWS Aurora PostgreSQL (managed RDS) — core (`postgresql-core` root) and a second, independent brand database (`postgresql-brand` root), engine kept in lockstep between them, with `manage_master_user_password` (AWS Secrets Manager) instead of any stored password. |
+| **Why** | Primary application database for OMS — stores orders, inventory, customers, and operational data. CNPG keeps dev/SIT cost low; UAT/Prod use a real managed engine for production-representative validation ahead of go-live. Core and brand are separate Terraform roots so a brand outage/misconfiguration/destroy cannot affect core. |
 | **How it helps** | Dev/SIT: no AWS RDS cost, full operator control, same engine family as prod. UAT/Prod: automatic backups, failover, and patching via AWS, with UAT validating against the same engine version Prod will run. |
 | **Namespace** | Dev/SIT: `postgresql` (CNPG, in-cluster). UAT/Prod: N/A (AWS managed service, not in Kubernetes). |
 | **Owner** | Infra Architect / Platform team |
-| **Depends on** | Dev/SIT: CNPG operator, `gp3-postgresql` StorageClass, S3 WAL archive bucket. UAT/Prod: VPC database subnet tier, security group, `aws_db_subnet_group` (all provisioned by the `postgresql` Terraform root). |
+| **Depends on** | Dev/SIT: CNPG operator, `gp3-postgresql` StorageClass, S3 WAL archive bucket. UAT/Prod: VPC database subnet tier, security group, `aws_db_subnet_group` (all provisioned by the shared `modules/postgresql` Terraform module, invoked by both `postgresql-core` and `postgresql-brand` roots). |
 | **Depended on by** | OMS application services |
-| **Provisioned by** | Dev/SIT: `scripts/provision.sh pg` (GitOps). UAT/Prod: `platform-prerequisites/terraform/postgresql` (Terraform, `aws_rds_cluster`). |
+| **Provisioned by** | Dev/SIT: `scripts/provision.sh pg` (GitOps). UAT/Prod: `platform-prerequisites/terraform/postgresql-core` + `platform-prerequisites/terraform/postgresql-brand` (Terraform, `aws_rds_cluster`, via `scripts/provision-platform-prereq.sh pg-core` / `pg-brand`). |
 | **Verification** | [Verification Commands § PostgreSQL](verification-commands.md#postgresql) |
 
 ### SigNoz
@@ -277,7 +277,8 @@ Every root shares the same bucket and region; only the key (path) differs:
 | Terraform root | Bucket | Region | State key (path within bucket) |
 |---|---|---|---|
 | `platform-prerequisites/terraform/mongodb` | `sml-oms-dev-tfstate` | `ap-east-1` | `oms/dev/mongo.tfstate` |
-| `platform-prerequisites/terraform/postgresql` | `sml-oms-dev-tfstate` | `ap-east-1` | `oms/dev/pg.tfstate` |
+| `platform-prerequisites/terraform/postgresql-core` | `sml-oms-dev-tfstate` | `ap-east-1` | `oms/dev/postgresql-core.tfstate` |
+| `platform-prerequisites/terraform/postgresql-brand` | `sml-oms-dev-tfstate` | `ap-east-1` | `oms/dev/postgresql-brand.tfstate` |
 | `platform-prerequisites/terraform/signoz-observability` | `sml-oms-dev-tfstate` | `ap-east-1` | `oms/dev/signoz-observability.tfstate` |
 
 So, for example, the MongoDB prerequisites' state is the single object at

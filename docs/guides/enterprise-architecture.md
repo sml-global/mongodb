@@ -232,6 +232,34 @@ flowchart LR
 | Compliance team | MongoDB | MongoDB wire protocol (read-only) | Audit trail queries |
 | Operators | SigNoz dashboard | HTTPS (ingress) | Observability |
 
+### Boomi Provisioning Boundary
+
+**This repo provisions no Boomi workload.** Verified by full-repo search:
+there is no Deployment, StatefulSet, HelmRelease, or namespace manifest for
+Boomi anywhere in `k8s/` or `gitops/`. Boomi runs on its own licensed
+platform, entirely outside this repo's provisioning scope — a Boomi admin
+deploys/configures Boomi processes independently, onto whichever environment
+holds a valid license key, using the Boomi platform's own tooling.
+
+What this repo *does* provision, as Boomi-adjacent plumbing only (never
+bundled implicitly with core infra provisioning — see
+[Provisioning Flows § Boomi Provisioning Boundary](../references/provisioning-flows-and-infra-diagrams.md#boomi-provisioning-boundary)
+for the exact files):
+
+- The `BOOMI_NAMESPACE` config value (`boomi` / `boomi-uat`) — a namespace
+  *name* other resources reference; the namespace object itself does not
+  exist as a manifest in this repo today.
+- The `boomi_admin_role_arn` Terraform variable and its EKS access entry in
+  `platform-prerequisites/terraform/eks-access/` — grants a Boomi Admin
+  principal cluster access scoped to that namespace, so Boomi's own
+  deployment tooling can reach the cluster.
+- The `oms-audit-writer` Kubernetes Secret (`scripts/create-audit-writer-secret.sh`)
+  — a MongoDB connection URI for an *external* Boomi process to consume;
+  not a pod spec.
+- Two Groovy libraries (`scripts/groovy/boomi/BoomiAuditLogLibrary.groovy`,
+  `BoomiOtelLibrary.groovy`) — code meant to run *inside* Boomi's own
+  scripting runtime, not deployed as a Kubernetes workload by this repo.
+
 ---
 
 ## Production Readiness Assessment
@@ -253,6 +281,7 @@ so it isn't lost). Items are cross-referenced with
 | Multi-environment parameterization | Dev/UAT/Prod partially parameterized (see [Per-Environment Feature Map](#per-environment-feature-map)); SIT not yet provisioned | Full parameterization across dev/sit/uat/prod state keys and tfvars, ready for SIT once its AWS account exists | Blocks nothing else on this list; needed before further per-environment hardening |
 | Insert-only MongoDB writer role | Audit-writer secret currently uses the same db-admin identity as operators | Create a **new, additional** MongoDB role scoped to `insert`-only on `oms_audit.auditlogs`, used only by the Boomi audit-writer secret. **The existing db-admin/userAdmin identity is untouched and keeps full rights** — this only narrows the one identity embedded in the Boomi-facing secret, it does not restrict administrators. | Closes an audit-integrity gap without reducing operator capability |
 | Secrets Manager | K8s Secrets + local escrow everywhere | **Prod only.** Dev/SIT/UAT remain on K8s Secrets — Secrets Manager has a per-secret + API-call cost not justified pre-prod. | Cost-driven; prod is the only environment where the compliance/rotation benefit outweighs the spend |
+| Aurora "brand" database | **Built.** `platform-prerequisites/terraform/modules/postgresql/` is a reusable Aurora module invoked by two independent sibling roots: `postgresql-core/` (existing app database) and `postgresql-brand/` (new). Each has its own state key (`postgresql-core.tfstate`/`postgresql-brand.tfstate`), so a brand outage/misconfiguration/destroy cannot affect core. **Not yet applied to any real environment** — `postgresql-brand/terraform.tfvars.sample` has placeholder VPC/subnet/IAM values that an operator must fill in with real UAT/prod infra IDs before running `scripts/provision-platform-prereq.sh pg-brand`. | Design/build complete; real `apply` against UAT/prod is the operator's follow-up action once tfvars are filled in. | Flagged directly by the platform owner as a hard requirement for production, not an optional nice-to-have. |
 
 ### Later (deferred, tracked not forgotten)
 
@@ -272,9 +301,10 @@ so it isn't lost). Items are cross-referenced with
 
 | Aspect | Dev | SIT | UAT | Prod |
 |---|---|---|---|---|
-| Status | Implemented | **Deferred** — requires a new AWS account that does not exist yet | Implemented | Target account currently running Sandbox; becomes Prod after Sandbox is torn down |
+| Status | Implemented | **Deferred** — requires a new AWS account that does not exist yet | **Access Foundation only** — Access Analyzer governance and 3 EKS access entries are real and provisioned; the data layer (MongoDB/PostgreSQL/SigNoz) is not yet wired for this environment (unified-orchestrator handlers for those scopes are stubs today). See [Provisioning Flows § Scope Implementation Status](../references/provisioning-flows-and-infra-diagrams.md#5-scope-implementation-status-unified-orchestrator---env-devuat) for the verified per-scope breakdown. | Target account currently running Sandbox; becomes Prod after Sandbox is torn down |
 | AWS Account | `815402439714` | TBD (not provisioned) | `672172129937` | `632674123947` |
-| PostgreSQL engine | CNPG (self-managed, in-cluster) | CNPG (self-managed, in-cluster) — planned | Aurora (managed) | Aurora (managed) |
+| PostgreSQL engine | CNPG (self-managed, in-cluster) | CNPG (self-managed, in-cluster) — planned | Aurora (managed) — `postgresql-core` root built; not yet applied for this environment (`terraform.tfvars` for this root needs real UAT values filled in) | Aurora (managed) — `postgresql-core` + `postgresql-brand` roots both built; neither yet applied for prod |
+| Aurora "brand" DB | N/A (not Aurora) | N/A (not Aurora) | **Built, not yet applied** — `postgresql-brand/` root exists (see Production Readiness § Now); needs real tfvars values before `terraform apply` | **Built, not yet applied** — same root, `aurora_instance_count >= 2` for prod Multi-AZ |
 | Aurora Multi-AZ | N/A (not Aurora) | N/A (not Aurora) | Single-AZ (cost) | Multi-AZ (Now item above) |
 | Secrets storage | K8s Secrets + local escrow | K8s Secrets + local escrow (planned) | K8s Secrets + local escrow | AWS Secrets Manager (Now item above) |
 | MongoDB encryption key | Local escrowed key | Local escrowed key (planned) | Local escrowed key | Local escrowed key (KMS migration is Later) |
