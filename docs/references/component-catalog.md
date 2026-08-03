@@ -23,7 +23,8 @@ Single source of truth for all deployed versions. Update this table when any com
 | MongoDB Server | 7.0.12-7 | `k8s/base/psmdb-cluster.yaml` | `helm show values percona/psmdb-db --version <op-ver>` → look for image tag |
 | Percona Operator | chart 1.18.0 (app 1.18.0) | `gitops/operators/base/helmreleases.yaml` | `helm search repo percona/psmdb-operator --versions` |
 | PBM (backup agent) | 2.6.0 | `k8s/base/psmdb-cluster.yaml` | Ships with operator version |
-| PostgreSQL (Aurora) | 18.4 | `terraform.tfvars` (`aurora_engine_version`, no committed default — set per operator) | `aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1` |
+| PostgreSQL (Aurora, UAT/Prod) | 18.4 | `terraform.tfvars` (`aurora_engine_version`, no committed default — set per operator) | `aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1` |
+| PostgreSQL (CNPG, Dev/SIT) | 18.4 | `gitops/postgresql-coredb/overlays/dev/cluster.yaml`, `gitops/postgresql-branddb/overlays/dev/cluster.yaml` | `ghcr.io/cloudnative-pg/postgresql` image tags |
 | SigNoz | chart 0.130.1 (app v0.130.1) | `gitops/signoz/base/helmreleases.yaml` | `helm search repo signoz/signoz --versions` |
 
 ### Platform Controllers
@@ -66,7 +67,8 @@ Single source of truth for all deployed versions. Update this table when any com
 
 - **Percona Operator**: current 1.18.0 is 4 versions behind latest (1.22.0). Upgrade path: 1.18→1.19→1.20→1.21→1.22 (one minor at a time). Check [Percona Operator release notes](https://docs.percona.com/percona-operator-for-mongodb/ReleaseNotes/index.html) and the [upgrade matrix](https://docs.percona.com/percona-operator-for-mongodb/update.html) for inter-version compatibility. See [Architect Reference § Upgrade Procedures](../guides/architect-reference.md#upgrade-procedures).
 - **SigNoz**: current 0.130.1, latest 0.131.0 — minor version bump, generally safe. Check [SigNoz changelog](https://github.com/SigNoz/signoz/releases).
-- **PostgreSQL**: pinned at 18.4 (confirmed available via `aws rds describe-db-engine-versions --engine aurora-postgresql --region ap-east-1`, the current latest 18.x minor as of 2026-08-03). Set via `aurora_engine_version` in each root's `terraform.tfvars` — check for newer point releases via the same command before re-pinning.
+- **PostgreSQL (Aurora, UAT/Prod)**: pinned at 18.4 (confirmed available via `aws rds describe-db-engine-versions --engine aurora-postgresql --region ap-east-1`, the current latest 18.x minor as of 2026-08-03). Set via `aurora_engine_version` in each root's `terraform.tfvars` — check for newer point releases via the same command before re-pinning.
+- **PostgreSQL (CNPG, Dev/SIT)**: pinned at 18.4 via `imageName: ghcr.io/cloudnative-pg/postgresql:18.4` in each cluster's `cluster.yaml` — check the [CloudNativePG PostgreSQL container image tags](https://github.com/cloudnative-pg/postgres-containers) before re-pinning.
 - **EKS**: AWS manages control plane upgrades. Node groups may need manual update. Check [EKS version calendar](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html).
 - **MongoDB driver 5.1.2**: compatible with MongoDB 7.0. If upgrading MongoDB to 8.0+, verify driver compatibility at [MongoDB driver compatibility](https://www.mongodb.com/docs/drivers/java/sync/current/compatibility/).
 
@@ -92,14 +94,14 @@ Single source of truth for all deployed versions. Update this table when any com
 
 | Aspect | Detail |
 |---|---|
-| **What** | Dev/SIT: CloudNativePG (CNPG), a self-managed PostgreSQL operator running in-cluster, 3-node replica set, continuous WAL archival to S3. UAT/Prod: AWS Aurora PostgreSQL (managed RDS) — core (`postgresql-core` root) and a second, independent brand database (`postgresql-brand` root), engine kept in lockstep between them, with `manage_master_user_password` (AWS Secrets Manager) instead of any stored password. |
-| **Why** | Primary application database for OMS — stores orders, inventory, customers, and operational data. CNPG keeps dev/SIT cost low; UAT/Prod use a real managed engine for production-representative validation ahead of go-live. Core and brand are separate Terraform roots so a brand outage/misconfiguration/destroy cannot affect core. |
-| **How it helps** | Dev/SIT: no AWS RDS cost, full operator control, same engine family as prod. UAT/Prod: automatic backups, failover, and patching via AWS, with UAT validating against the same engine version Prod will run. |
-| **Namespace** | Dev/SIT: `postgresql` (CNPG, in-cluster). UAT/Prod: N/A (AWS managed service, not in Kubernetes). |
+| **What** | Dev/SIT: CloudNativePG (CNPG), two independent self-managed PostgreSQL clusters running in-cluster — `oms-postgresql-coredb` (namespace `coredb`) and `oms-postgresql-branddb` (namespace `branddb`) — each a 3-node replica set with its own continuous WAL archival to S3, so either can be provisioned, resized, or destroyed without affecting the other. UAT/Prod: AWS Aurora PostgreSQL (managed RDS) — core (`postgresql-core` root) and a second, independent brand database (`postgresql-brand` root), engine kept in lockstep between them, with `manage_master_user_password` (AWS Secrets Manager) instead of any stored password. |
+| **Why** | Primary application database for OMS — stores orders, inventory, customers, and operational data. CNPG keeps dev/SIT cost low; UAT/Prod use a real managed engine for production-representative validation ahead of go-live. Core and brand are separate namespaces/Terraform roots (both Dev/SIT and UAT/Prod) so a brand outage/misconfiguration/destroy cannot affect core. |
+| **How it helps** | Dev/SIT: no AWS RDS cost, full operator control, same engine family as prod, independent lifecycle per database. UAT/Prod: automatic backups, failover, and patching via AWS, with UAT validating against the same engine version Prod will run. |
+| **Namespace** | Dev/SIT: `coredb` and `branddb` (CNPG, in-cluster, one namespace per cluster). UAT/Prod: N/A (AWS managed service, not in Kubernetes). |
 | **Owner** | Infra Architect / Platform team |
-| **Depends on** | Dev/SIT: CNPG operator, `gp3-postgresql` StorageClass, S3 WAL archive bucket. UAT/Prod: VPC database subnet tier, security group, `aws_db_subnet_group` (all provisioned by the shared `modules/postgresql` Terraform module, invoked by both `postgresql-core` and `postgresql-brand` roots). |
+| **Depends on** | Dev/SIT: shared CNPG operator (`gitops/postgresql/base/`), `gp3-postgresql` StorageClass, one S3 WAL archive bucket per cluster, and each cluster's own namespace/IAM role via the shared `modules/cnpg-prereqs` Terraform module. UAT/Prod: VPC database subnet tier, security group, `aws_db_subnet_group` (all provisioned by the shared `modules/postgresql` Terraform module, invoked by both `postgresql-core` and `postgresql-brand` roots). |
 | **Depended on by** | OMS application services |
-| **Provisioned by** | Dev/SIT: `scripts/provision.sh pg` (GitOps). UAT/Prod: `platform-prerequisites/terraform/postgresql-core` + `platform-prerequisites/terraform/postgresql-brand` (Terraform, `aws_rds_cluster`, via `scripts/provision-platform-prereq.sh pg-core` / `pg-brand`). |
+| **Provisioned by** | Dev/SIT: `scripts/provision-platform-prereq.sh pg-coredb` / `pg-branddb` (Terraform prerequisites) then `scripts/provision.sh pg` or `scripts/provision-k8s-components.sh postgresql-coredb` / `postgresql-branddb` (GitOps). UAT/Prod: `platform-prerequisites/terraform/postgresql-core` + `platform-prerequisites/terraform/postgresql-brand` (Terraform, `aws_rds_cluster`, via `scripts/provision-platform-prereq.sh pg-core` / `pg-brand`). |
 | **Verification** | [Verification Commands § PostgreSQL](verification-commands.md#postgresql) |
 
 ### SigNoz

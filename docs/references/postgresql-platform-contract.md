@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-27  
 **Component:** CloudNativePG (CNPG) Operator  
-**Namespace:** postgresql  
+**Namespaces:** `coredb` (core database), `branddb` (brand database) — one independent CNPG cluster per namespace so each can be provisioned, resized, or destroyed without affecting the other  
 **StorageClass:** gp3-postgresql  
-**Backup System:** Continuous WAL archival to AWS S3
+**Backup System:** Continuous WAL archival to AWS S3, one bucket per cluster
 
 > **Scope update (2026-07-30):** this contract now applies to **Dev/SIT only**. UAT and
 > Prod are migrating from CNPG to AWS Aurora PostgreSQL (managed RDS) per
@@ -33,10 +33,10 @@
 
 - **Operator:** CloudNativePG (CNPG)
 - **Version:** Defined in `config/environment-schema/fragments/40-postgresql.manifest` (POSTGRESQL_VERSION)
-- **Namespace:** postgresql (created automatically by HelmRelease with `createNamespace: true`)
-- **StorageClass:** gp3-postgresql (defined in gitops/postgresql/base/storageclass-gp3-postgresql.yaml)
-- **Backup System:** Continuous WAL archival to AWS S3 with point-in-time recovery (PITR)
-- **Replica Set:** 3-node configuration (configurable per environment via schema fragment)
+- **Namespaces:** `coredb`, `branddb` (created by each cluster's Terraform root via the `cnpg-prereqs` module, not by the operator HelmRelease)
+- **StorageClass:** gp3-postgresql (defined in gitops/postgresql/base/storageclass-gp3-postgresql.yaml, shared by both clusters)
+- **Backup System:** Continuous WAL archival to AWS S3 with point-in-time recovery (PITR), one bucket per cluster
+- **Replica Set:** 3-node configuration per cluster (configurable per environment via schema fragment)
 
 ---
 
@@ -44,69 +44,60 @@
 
 ### Provisioning Phase
 
-#### Step 1: Phase 2 Prerequisites Validation
-The following AWS resources **must** exist from Phase 2 provisioning before PostgreSQL provisioning can proceed:
-
-1. **IRSA Role:** `oms-postgresql-operator-role`
-   - Verify: `aws iam get-role --role-name oms-postgresql-operator-role`
-   - Used by: Terraform `var.postgresql_operator_iam_role_arn` input
-   - Purpose: AWS pod identity for PostgreSQL operator workload
-
-2. **S3 Bucket:** `oms-cnpg-wal-archive`
-   - Verify: `aws s3api head-bucket --bucket oms-cnpg-wal-archive`
-   - Used by: CloudNativePG WAL archival destination
-   - Purpose: Store PostgreSQL WAL (Write-Ahead Logs) for continuous backup and PITR
-
-3. **AWS KMS Key:** `oms-postgresql-cluster-key`
-   - Verify: `aws kms describe-key --key-id oms-postgresql-cluster-key`
-   - Used by: Encrypt/decrypt WAL archives and backups
-   - Purpose: Encryption at rest for backup artifacts
-
-#### Step 2: Terraform Provisioning
-Terraform applies IAM policy attachment to enable PostgreSQL operator to access AWS resources:
+#### Step 1: Terraform Prerequisites Provisioning
+Each CNPG cluster (core, brand) has its own Terraform root provisioning its namespace, S3 backup bucket, and IAM pod-identity role via the shared `platform-prerequisites/terraform/modules/cnpg-prereqs` module — independent of each other, so either can be provisioned, resized, or destroyed without touching the other:
 
 ```bash
-cd platform-prerequisites/terraform/postgresql-core
-terraform fmt -check      # Validate code style
-terraform validate        # Validate configuration
-terraform plan            # Review changes (do NOT apply)
+cp platform-prerequisites/terraform/postgresql-coredb/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-coredb/terraform.tfvars
+# edit terraform.tfvars: set cluster_name, backup_bucket_name
+bash scripts/provision-platform-prereq.sh pg-coredb
+
+cp platform-prerequisites/terraform/postgresql-branddb/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-branddb/terraform.tfvars
+# edit terraform.tfvars: set cluster_name, backup_bucket_name
+bash scripts/provision-platform-prereq.sh pg-branddb
 ```
 
 **Terraform Artifacts:**
-- **Module:** `platform-prerequisites/terraform/postgresql-core/main.tf`
-- **Variables:** `platform-prerequisites/terraform/postgresql-core/variables.tf`
-- **Outputs:** `postgresql_operator_policy_id` (IAM policy ID created)
-- **Validation:** Attaches `oms-postgresql-wal-archive-policy` to `oms-postgresql-operator-role`
+- **Core root:** `platform-prerequisites/terraform/postgresql-coredb/` — namespace `coredb`, IAM role `postgresql-coredb-cnpg-role`, ServiceAccount `oms-postgresql-workload`
+- **Brand root:** `platform-prerequisites/terraform/postgresql-branddb/` — namespace `branddb`, IAM role `postgresql-branddb-cnpg-role`, ServiceAccount `oms-postgresql-brand-workload`
+- **Shared module:** `platform-prerequisites/terraform/modules/cnpg-prereqs/main.tf`
 
-#### Step 3: GitOps Provisioning
-GitOps deploys CloudNativePG Operator and PostgreSQL Cluster custom resource:
+#### Step 2: GitOps Provisioning
+GitOps deploys the shared CloudNativePG Operator once, then each cluster's Cluster custom resource independently:
 
 ```bash
 cd /Users/frank/sml/oms/mongodb
-bash scripts/provision.sh pg
+bash scripts/provision.sh pg               # operator + both core and brand clusters
+# or, independently:
+bash scripts/provision-k8s-components.sh postgresql-coredb
+bash scripts/provision-k8s-components.sh postgresql-branddb
 ```
 
 **GitOps Artifacts:**
-- **Base Configuration:** `gitops/postgresql/base/` (kustomization.yaml, helm values, namespace)
-- **Overlay (Dev/SIT):** `gitops/postgresql/overlays/dev/` (Cluster CR, kept separate from base to avoid a CRD race — see design spec D2)
-- **Deployment:** HelmRelease CRD for `cloudnative-pg` chart
-- **Cluster Resource:** Cluster custom resource named `oms-postgresql` with:
+- **Base Configuration (shared operator):** `gitops/postgresql/base/` (kustomization.yaml, helm values, `postgresql-operator` namespace)
+- **Core Overlay (Dev/SIT):** `gitops/postgresql-coredb/overlays/dev/` (namespace `coredb` + Cluster CR `oms-postgresql-coredb`)
+- **Brand Overlay (Dev/SIT):** `gitops/postgresql-branddb/overlays/dev/` (namespace `branddb` + Cluster CR `oms-postgresql-branddb`)
+- **Deployment:** HelmRelease CRD for `cloudnative-pg` chart (one operator instance manages both clusters)
+- **Cluster Resources:** `oms-postgresql-coredb` (namespace `coredb`) and `oms-postgresql-branddb` (namespace `branddb`), each with:
   - IRSA enabled via `inheritFromIAMRole: true`
-  - ServiceAccount: `oms-postgresql-workload` (annotated with IRSA role ARN)
-  - WAL archival configuration (S3 bucket path, KMS key reference)
+  - ServiceAccount: `oms-postgresql-workload` / `oms-postgresql-brand-workload` respectively (annotated with IRSA role ARN)
+  - WAL archival configuration (own S3 bucket path, KMS key reference)
   - 3-node replica set (standard configuration)
   - Point-in-time recovery (PITR) enabled
 
-#### Step 4: Provisioning Verification
+#### Step 3: Provisioning Verification
 ```bash
 # Check operator pod readiness
-kubectl get pods -n postgresql
+kubectl get pods -n postgresql-operator
 
-# Check PostgreSQL cluster status
-kubectl -n postgresql get cluster oms-postgresql
+# Check core cluster status
+kubectl -n coredb get cluster oms-postgresql-coredb
 
-# Check replica set health
-kubectl -n postgresql exec -it oms-postgresql-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+# Check brand cluster status
+kubectl -n branddb get cluster oms-postgresql-branddb
+
+# Check replica set health (repeat for branddb/oms-postgresql-branddb)
+kubectl -n coredb exec -it oms-postgresql-coredb-1 -- psql -U postgres -c "SELECT * FROM pg_stat_replication;"
 
 # Run smoke tests
 bash scripts/verify-platform-health.sh --smoke-test
@@ -122,8 +113,17 @@ bash scripts/verify-platform-health.sh --smoke-test
 
 ### Destruction Phase
 
+Each cluster (core, brand) is destroyed independently, using its own namespace/cluster name pair:
+
+| | Core | Brand |
+|---|---|---|
+| Namespace | `coredb` | `branddb` |
+| Cluster name | `oms-postgresql-coredb` | `oms-postgresql-branddb` |
+| ServiceAccount | `oms-postgresql-workload` | `oms-postgresql-brand-workload` |
+| Backup bucket | operator-supplied, per `postgresql-coredb/terraform.tfvars` | operator-supplied, per `postgresql-branddb/terraform.tfvars` |
+
 #### Pre-Destroy Guard Execution
-Before any destruction, the `verify_postgresql_pre_destroy_guard` is automatically executed:
+Before any destruction, `verify_postgresql_pre_destroy_guard` is automatically executed:
 
 ```bash
 bash scripts/provision.sh all --destroy
@@ -134,10 +134,12 @@ bash scripts/provision.sh all --destroy
 
 #### Step 1: Guard Validation Protocol (7-Step Seam)
 
+Run once per cluster, substituting the namespace/cluster-name pair from the table above.
+
 **Seam Read:** Extract guard configuration from environment
 ```bash
-POSTGRESQL_NAMESPACE=${POSTGRESQL_NAMESPACE:-"postgresql"}
-POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"oms-postgresql"}
+POSTGRESQL_NAMESPACE=${POSTGRESQL_NAMESPACE:-"coredb"}       # or "branddb"
+POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"oms-postgresql-coredb"}   # or oms-postgresql-branddb
 ```
 
 **Parse:** Query Kubernetes and PostgreSQL status
@@ -181,89 +183,85 @@ echo "Cluster configuration digest: $DIGEST"
 **Return:** Exit code 0 if all validations pass; non-zero if any check fails
 
 #### Step 2: Actual Destruction
-If guard passes, destruction proceeds:
+If guard passes, destruction proceeds — core and brand can be destroyed independently:
 
-1. **GitOps Removal:**
+1. **GitOps Removal (per cluster):**
    ```bash
-   bash scripts/provision.sh all --destroy
+   bash scripts/destroy.sh postgresql-coredb-overlay   # core only
+   bash scripts/destroy.sh postgresql-branddb-overlay  # brand only
+   # or bash scripts/destroy.sh postgresql-overlay      # both
    ```
-   - Removes PostgreSQL Cluster custom resource
-   - Removes CloudNativePG Operator HelmRelease
-   - PersistentVolumes and PersistentVolumeClaims are removed
+   - Removes the targeted PostgreSQL Cluster custom resource(s)
+   - `bash scripts/destroy.sh operators` (run separately, last) removes the shared CloudNativePG Operator HelmRelease — do this only after both overlays are removed, or you orphan the other cluster's StatefulSet/Pods
+   - PersistentVolumes and PersistentVolumeClaims are Retained, not removed (see recovery-procedures.md)
 
-2. **Terraform Destruction:**
+2. **Terraform Destruction (per cluster's prerequisites):**
    ```bash
-   cd platform-prerequisites/terraform/postgresql-core
+   cd platform-prerequisites/terraform/postgresql-coredb   # or postgresql-branddb
    terraform destroy
    ```
-   - Removes IAM policy attachment to IRSA role
-   - Does NOT remove IAM role itself (shared with other components)
-   - Preserves S3 bucket and KMS key (may be needed for WAL recovery)
+   - Removes the namespace, IAM role/pod-identity association, and S3 backup bucket created by the `cnpg-prereqs` module for that cluster only
+   - Does not affect the other cluster's namespace, role, or bucket
 
 #### Step 3: Post-Destruction Verification
 ```bash
-# Verify no PostgreSQL pods remain
-kubectl get pods -n postgresql
+# Verify no PostgreSQL pods remain (repeat for the other namespace)
+kubectl get pods -n coredb
 
 # Verify no PersistentVolumeClaims
-kubectl get pvc -n postgresql
+kubectl get pvc -n coredb
 
-# Verify no Cluster resources
+# Verify no Cluster resources anywhere
 kubectl get cluster -A
 
-# Verify S3 WAL archives are preserved
-aws s3api head-bucket --bucket oms-cnpg-wal-archive
+# Verify each cluster's S3 backup bucket is preserved (bucket name from its terraform.tfvars)
+aws s3api head-bucket --bucket <backup_bucket_name>
 ```
 
 **Success Criteria:**
-- No PostgreSQL pods in cluster
-- No PVCs in postgresql namespace
-- No Cluster custom resources
-- S3 bucket still contains WAL archives (for recovery if needed)
+- No PostgreSQL pods in the targeted namespace
+- No PVCs in the targeted namespace
+- No Cluster custom resources for the targeted cluster
+- Its S3 bucket still contains WAL archives (for recovery if needed)
 
 ---
 
 ## Identities
 
-### IRSA (AWS Pod Identity)
+### Pod Identity (AWS EKS Pod Identity)
 
-**Role Name:** `oms-postgresql-operator-role` (from Phase 2 platform_contract)
+Each cluster has its own IAM role and ServiceAccount, created by that cluster's Terraform root via the `cnpg-prereqs` module — not a shared "Phase 2" role.
 
-**Binding:** Kubernetes IRSA annotation on ServiceAccount
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: oms-postgresql-workload
-  namespace: postgresql
-  annotations:
-    iam.gke.io/gcp-service-account: oms-postgresql-operator-role@PROJECT_ID.iam.gserviceaccount.com
-```
+| | Core | Brand |
+|---|---|---|
+| IAM role name | `postgresql-coredb-cnpg-role` | `postgresql-branddb-cnpg-role` |
+| ServiceAccount | `oms-postgresql-workload` (namespace `coredb`) | `oms-postgresql-brand-workload` (namespace `branddb`) |
 
-**AWS Pod Identity Configuration:**
-- AWS EKS cluster with IRSA enabled
-- Trust relationship established between Kubernetes OIDC provider and IAM role
-- ServiceAccount annotation enables automatic credential injection to pods
+**Binding:** EKS Pod Identity association (`aws_eks_pod_identity_association`), not an IRSA OIDC annotation — see `platform-prerequisites/terraform/modules/cnpg-prereqs/main.tf`. The Cluster CR references the ServiceAccount directly via `serviceAccountName`; no `eks.amazonaws.com/role-arn` annotation is needed when Pod Identity is used (`use_pod_identity = true`, the default).
+
+**IRSA fallback:** if `use_pod_identity = false` is set, the module instead annotates the ServiceAccount with `eks.amazonaws.com/role-arn` and binds via OIDC trust — see the module's `oidc_provider_arn`/`oidc_provider_url` variables.
 
 ---
 
 ### IAM Permissions
 
-**Policy Name:** `oms-postgresql-wal-archive-policy` (attached by platform-prerequisites/terraform/postgresql-core/)
+**Policy Name:** `<iam_role_name>-policy` (attached by the `cnpg-prereqs` module, one per cluster)
 
 **S3 Permissions:**
 ```json
 {
   "Effect": "Allow",
   "Action": [
+    "s3:AbortMultipartUpload",
+    "s3:GetBucketLocation",
     "s3:GetObject",
+    "s3:ListBucket",
     "s3:PutObject",
-    "s3:DeleteObject",
-    "s3:ListBucket"
+    "s3:DeleteObject"
   ],
   "Resource": [
-    "arn:aws:s3:::oms-cnpg-wal-archive",
-    "arn:aws:s3:::oms-cnpg-wal-archive/*"
+    "arn:aws:s3:::<backup_bucket_name>",
+    "arn:aws:s3:::<backup_bucket_name>/*"
   ]
 }
 ```
@@ -274,21 +272,23 @@ metadata:
 - `DeleteObject`: Clean up old WAL segments per retention policy
 - `ListBucket`: Enumerate WAL objects for inventory and recovery
 
-**KMS Permissions:**
+**KMS Permissions (only if `kms_key_arn` is set):**
 ```json
 {
   "Effect": "Allow",
   "Action": [
     "kms:Decrypt",
-    "kms:GenerateDataKey"
+    "kms:Encrypt",
+    "kms:GenerateDataKey",
+    "kms:DescribeKey"
   ],
-  "Resource": "arn:aws:kms:*:ACCOUNT_ID:key/oms-postgresql-cluster-key"
+  "Resource": "<kms_key_arn>"
 }
 ```
 
 **Purpose:**
 - `Decrypt`: Decrypt WAL archives during point-in-time recovery
-- `GenerateDataKey`: Encrypt WAL segments during S3 upload
+- `GenerateDataKey`/`Encrypt`: Encrypt WAL segments during S3 upload
 
 ---
 
@@ -296,11 +296,11 @@ metadata:
 
 **Native Kubernetes Secrets:** None
 
-All AWS credentials are injected via IRSA pod identity. No stored Kubernetes secrets for AWS credentials.
+All AWS credentials are injected via EKS Pod Identity (or IRSA, if configured). No stored Kubernetes secrets for AWS credentials.
 
-**PostgreSQL Internal Secrets:**
-- `postgresql-superuser`: PostgreSQL superuser credentials (managed by CNPG operator, NOT exposed to external systems)
-- `postgresql-app-user`: Application database user credentials (if configured)
+**PostgreSQL Internal Secrets (per cluster):**
+- `<cluster-name>-superuser`: PostgreSQL superuser credentials (managed by CNPG operator, NOT exposed to external systems)
+- `<cluster-name>-app-user`: Application database user credentials (if configured)
 
 ---
 
@@ -310,20 +310,20 @@ All AWS credentials are injected via IRSA pod identity. No stored Kubernetes sec
 
 **Trigger:** Invoked automatically when `bash scripts/provision.sh all --destroy` is executed
 
-**Purpose:** Prevent accidental destruction of PostgreSQL cluster by validating:
+**Purpose:** Prevent accidental destruction of a PostgreSQL cluster by validating:
 1. Replica set is healthy and in sync
 2. No active backups or WAL archival operations are in progress
 3. AWS permissions are intact
 4. Authorized operator is performing the destruction
 
-**Protocol (7-Step Seam):**
+**Protocol (7-Step Seam)**, run per cluster with its own namespace/cluster-name/bucket:
 
 #### Seam Read
 Extract configuration from environment:
 ```bash
-POSTGRESQL_NAMESPACE=${POSTGRESQL_NAMESPACE:-"postgresql"}
-POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"oms-postgresql"}
-POSTGRESQL_WAL_BUCKET=${POSTGRESQL_WAL_BUCKET:-"oms-cnpg-wal-archive"}
+POSTGRESQL_NAMESPACE=${POSTGRESQL_NAMESPACE:-"coredb"}       # or "branddb"
+POSTGRESQL_CLUSTER_NAME=${POSTGRESQL_CLUSTER_NAME:-"oms-postgresql-coredb"}   # or oms-postgresql-branddb
+POSTGRESQL_WAL_BUCKET=${POSTGRESQL_WAL_BUCKET:-"<that cluster's backup_bucket_name>"}
 ```
 
 #### Parse
@@ -431,78 +431,73 @@ exit 1
 
 ## Prerequisites
 
-### AWS Prerequisites (Phase 2 Outputs)
+### AWS Prerequisites (created by each cluster's Terraform root)
 
-Before provisioning PostgreSQL on Phase 3, ensure the following AWS resources exist from Phase 2 infrastructure:
+Each cluster's namespace, IAM role, and S3 bucket are created by that cluster's own Terraform root (`postgresql-coredb` or `postgresql-branddb`) via the shared `cnpg-prereqs` module — not by an external "Phase 2" process. Run `bash scripts/provision-platform-prereq.sh pg-coredb` (or `pg-branddb`) before applying the Cluster CR.
 
-#### 1. IRSA Role: `oms-postgresql-operator-role`
-
-**Verification:**
-```bash
-aws iam get-role --role-name oms-postgresql-operator-role
-# Expected output: Role ARN, creation date, etc.
-```
-
-**What It Is:** An AWS IAM role with a trust relationship to the Kubernetes OIDC provider, allowing PostgreSQL operator pods to assume this role via IRSA.
-
-**Used By:** Terraform `platform-prerequisites/terraform/postgresql-core/variables.tf` consumes this via `var.postgresql_operator_iam_role_arn`
-
-**Why It Matters:** Without this role, PostgreSQL operator cannot authenticate to AWS to archive WAL segments or perform backups.
-
-#### 2. S3 Bucket: `oms-cnpg-wal-archive`
+#### 1. IAM Role: `postgresql-coredb-cnpg-role` / `postgresql-branddb-cnpg-role`
 
 **Verification:**
 ```bash
-aws s3api head-bucket --bucket oms-cnpg-wal-archive
-# Expected: HTTP 200 (bucket exists and you have access)
+aws iam get-role --role-name postgresql-coredb-cnpg-role   # or postgresql-branddb-cnpg-role
 ```
 
-**What It Is:** An S3 bucket for storing PostgreSQL WAL (Write-Ahead Logs) created by CloudNativePG WAL archival.
+**What It Is:** An AWS IAM role with an EKS Pod Identity association (or OIDC trust, if `use_pod_identity=false`), allowing that cluster's pods to authenticate to AWS to archive WAL segments or perform backups.
 
-**Used By:** CNPG cluster configuration for continuous WAL archival
+**Created By:** `platform-prerequisites/terraform/postgresql-coredb` (or `postgresql-branddb`), via `platform-prerequisites/terraform/modules/cnpg-prereqs`.
+
+#### 2. S3 Bucket: operator-supplied `backup_bucket_name`
+
+**Verification:**
+```bash
+aws s3api head-bucket --bucket <backup_bucket_name>
+```
+
+**What It Is:** An S3 bucket for storing that cluster's PostgreSQL WAL (Write-Ahead Logs), created by the `cnpg-prereqs` module.
+
+**Used By:** That cluster's CNPG Cluster CR (`spec.backup.barmanObjectStore.destinationPath`) for continuous WAL archival.
 
 **Why It Matters:** WAL archives are the foundation for point-in-time recovery (PITR). Without this bucket, WAL segments are not archived and data recovery is impossible.
 
-#### 3. AWS KMS Key: `oms-postgresql-cluster-key`
+#### 3. AWS KMS Key (optional): operator-supplied `kms_key_arn`
 
 **Verification:**
 ```bash
-aws kms describe-key --key-id oms-postgresql-cluster-key
-# Expected output: Key metadata, key state, etc.
+aws kms describe-key --key-id <kms_key_arn>
 ```
 
-**What It Is:** A KMS key for encrypting WAL archives and backups in transit and at rest.
+**What It Is:** An optional KMS key for encrypting WAL archives and backups in transit and at rest, if the operator sets `kms_key_arn` in that cluster's `terraform.tfvars`.
 
-**Used By:** CNPG cluster configuration references this key for encryption
+**Used By:** The `cnpg-prereqs` module's IAM policy, if provided.
 
-**Why It Matters:** WAL data is encrypted using this key; without it, encrypted WAL archives cannot be decrypted for point-in-time recovery.
+**Why It Matters:** If set, WAL data is encrypted using this key; without it, S3 default (AES256) encryption is used instead.
 
 ### Kubernetes Prerequisites
 
-#### 1. Namespace: `postgresql`
+#### 1. Namespaces: `coredb`, `branddb`
 
-**Status:** Automatically created by HelmRelease with `createNamespace: true`
+**Status:** Created by each cluster's Terraform root (`postgresql-coredb`/`postgresql-branddb`) via the `cnpg-prereqs` module — not by the operator HelmRelease.
 
 **Verification:**
 ```bash
-kubectl get namespace postgresql
+kubectl get namespace coredb branddb
 ```
 
 #### 2. StorageClass: `gp3-postgresql`
 
-**Status:** Defined in `gitops/postgresql/base/storageclass-gp3-postgresql.yaml`
+**Status:** Defined in `gitops/postgresql/base/storageclass-gp3-postgresql.yaml`, shared by both clusters
 
 **Verification:**
 ```bash
 kubectl get storageclass gp3-postgresql
-# Expected: Storage class with provisioner=aws-ebs, parameters include gp3, iops=3000, etc.
+# Expected: Storage class with provisioner=ebs.csi.aws.com, parameters include gp3, encrypted=true
 ```
 
-**Why It Matters:** PostgreSQL PersistentVolumes use this storage class for high-performance block storage.
+**Why It Matters:** Both clusters' PersistentVolumes use this storage class for high-performance block storage.
 
 #### 3. Flux Controllers
 
-**Status:** Must be active in cluster from Phase 2 EKS deployment
+**Status:** Must be active in cluster (bootstrapped via `--bootstrap-platform-controllers`)
 
 **Verification:**
 ```bash
@@ -520,25 +515,18 @@ bash scripts/verify-platform-health.sh --preflight
 # Checks: AWS credentials, EKS cluster access, Kubernetes connectivity
 ```
 
-#### Verify Phase 2 AWS Outputs
+#### Verify Each Cluster's Terraform Prerequisites Were Applied
 ```bash
-# Verify IRSA role exists
-aws iam get-role --role-name oms-postgresql-operator-role
+# Verify IAM role exists (repeat for the other cluster's role name)
+aws iam get-role --role-name postgresql-coredb-cnpg-role
 
-# Verify S3 bucket is accessible
-aws s3api head-bucket --bucket oms-cnpg-wal-archive
-
-# Verify KMS key is accessible
-aws kms describe-key --key-id oms-postgresql-cluster-key
-
-# Verify KMS key has correct permissions for IRSA role
-aws kms get-key-policy --key-id oms-postgresql-cluster-key --policy-name default --output text | \
-  grep "oms-postgresql-operator-role"
+# Verify S3 bucket is accessible (bucket name from that cluster's terraform.tfvars)
+aws s3api head-bucket --bucket <backup_bucket_name>
 ```
 
 #### Terraform Validation
 ```bash
-cd platform-prerequisites/terraform/postgresql-core
+cd platform-prerequisites/terraform/postgresql-coredb    # or postgresql-branddb
 terraform fmt -check    # No formatting issues
 terraform validate      # Valid HCL configuration
 ```
@@ -549,23 +537,18 @@ terraform validate      # Valid HCL configuration
 
 ### Depends On
 
-- **Phase 2 EKS Cluster:** Must be running and accessible before PostgreSQL provisioning
+- **EKS Cluster:** Must be running and accessible before PostgreSQL provisioning
   - Cluster name, endpoint, CA certificate
   - kubeconfig configured in `~/.kube/config`
   - kubectl connectivity verified
 
-- **Phase 2 IRSA Roles & Policies:** Must exist and be properly trusted
-  - `oms-postgresql-operator-role` with OIDC trust to EKS cluster
+- **Per-Cluster IAM Role & Pod Identity Association:** Must exist, created by that cluster's own Terraform root
+  - `postgresql-coredb-cnpg-role` / `postgresql-branddb-cnpg-role`
 
-- **Phase 2 AWS S3 Bucket:** Must exist with proper encryption
-  - `oms-cnpg-wal-archive` bucket created and accessible
-  - Encryption enabled (recommended: SSE-S3 or SSE-KMS)
+- **Per-Cluster S3 Backup Bucket:** Must exist, created by that cluster's own Terraform root
+  - Encryption enabled (SSE-S3 by default, SSE-KMS if `kms_key_arn` is set)
 
-- **Phase 2 AWS KMS Key:** Must exist and be accessible
-  - `oms-postgresql-cluster-key` key in ACTIVE state
-  - Key policy grants IRSA role permission to Decrypt and GenerateDataKey
-
-- **Phase 3 Kubernetes Storage:** Must be provisioned first
+- **Shared Kubernetes Storage:** Must be provisioned first
   - StorageClass `gp3-postgresql` defined in gitops/postgresql/base/
 
 ### Required By
@@ -586,7 +569,7 @@ terraform validate      # Valid HCL configuration
 
 - **MongoDB:** Runs independently; no direct dependency
   - Can coexist in same cluster without conflicts
-  - Both use different namespaces and storage classes
+  - Uses a different namespace and storage class
 
 - **SigNoz:** Observes PostgreSQL but not required for operation
   - Can be deployed before or after PostgreSQL
@@ -612,10 +595,12 @@ Per the Dev/SIT-vs-UAT/Prod split (see the Scope Update above and
 - **UAT/Prod (Aurora):** real configuration is Terraform-managed --
   `platform-prerequisites/terraform/postgresql-core/variables.tf` and the
   `environments/{uat,prod}/*.tfvars` files are authoritative.
-- **Dev/SIT (CNPG):** committed CNPG `Cluster` manifest is at
-  `gitops/postgresql/overlays/dev/cluster.yaml`, wired into provisioning via
-  `scripts/provision.sh pg` (which calls the `postgresql` scope in
-  `scripts/provision-k8s-components.sh`).
+- **Dev/SIT (CNPG):** committed CNPG `Cluster` manifests are at
+  `gitops/postgresql-coredb/overlays/dev/cluster.yaml` and
+  `gitops/postgresql-branddb/overlays/dev/cluster.yaml`, wired into provisioning
+  via `scripts/provision.sh pg` (which calls the `postgresql` scope in
+  `scripts/provision-k8s-components.sh`) or independently via the
+  `postgresql-coredb`/`postgresql-branddb` scopes.
 
 1. **scripts/verify-platform-health.sh --smoke-test**
    - Verifies PostgreSQL is accessible

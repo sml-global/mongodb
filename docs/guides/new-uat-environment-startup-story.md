@@ -538,7 +538,8 @@ Boomi Admin 可以自助的：
 ### Week 0.1 完成後：
 ```bash
 ✅ kubectl get pod -n mongodb  (shows: mongodb-0, mongodb-1, mongodb-2)
-✅ kubectl get pod -n postgresql  (shows: postgresql-1, postgresql-2, postgresql-3)
+✅ kubectl get pod -n coredb  (shows: oms-postgresql-coredb-1, -2, -3)
+✅ kubectl get pod -n branddb  (shows: oms-postgresql-branddb-1, -2, -3)
 ✅ kubectl get pod -n signoz  (shows: signoz-*, clickhouse-*, kafka-*)
 ✅ bash scripts/verify-platform-health.sh --smoke-test
    Output: ✅ All smoke tests passed

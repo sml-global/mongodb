@@ -9,7 +9,9 @@ Usage:
 Scopes:
   mongodb    Apply MongoDB operator, Kyverno policies, bootstrap secrets, and dev overlay.
   mongo      Alias of mongodb.
-  postgresql Apply CNPG operator, Kyverno policies, and the dev Cluster overlay.
+  postgresql Apply CNPG operator, Kyverno policies, and both core/brand dev Cluster overlays.
+  postgresql-coredb   Apply only the core CNPG Cluster overlay (namespace coredb) — independent of brand.
+  postgresql-branddb  Apply only the brand CNPG Cluster overlay (namespace branddb) — independent of core.
   signoz     Apply optional open-source SigNoz GitOps base only.
   operators  Apply only operator Helm layer.
   policies   Apply only Kyverno policies.
@@ -21,6 +23,8 @@ Examples:
   scripts/provision-k8s-components.sh mongodb
   scripts/provision-k8s-components.sh mongo
   scripts/provision-k8s-components.sh postgresql
+  scripts/provision-k8s-components.sh postgresql-coredb
+  scripts/provision-k8s-components.sh postgresql-branddb
   scripts/provision-k8s-components.sh mongodb --bootstrap-platform-controllers
 EOF
 }
@@ -552,7 +556,16 @@ apply_postgresql_operator() {
 }
 
 apply_postgresql_overlay() {
-  kubectl apply -k "$ROOT_DIR/gitops/postgresql/overlays/${ENVIRONMENT:-dev}"
+  apply_postgresql_coredb_overlay
+  apply_postgresql_branddb_overlay
+}
+
+apply_postgresql_coredb_overlay() {
+  kubectl apply -k "$ROOT_DIR/gitops/postgresql-coredb/overlays/${ENVIRONMENT:-dev}"
+}
+
+apply_postgresql_branddb_overlay() {
+  kubectl apply -k "$ROOT_DIR/gitops/postgresql-branddb/overlays/${ENVIRONMENT:-dev}"
 }
 
 wait_for_mongodb_crd() {
@@ -599,6 +612,20 @@ case "$SCOPE" in
     wait_for_postgresql_crd
     apply_postgresql_overlay
     ;;
+  postgresql-coredb)
+    preflight_scope "postgresql"
+    apply_postgresql_operator
+    apply_policies
+    wait_for_postgresql_crd
+    apply_postgresql_coredb_overlay
+    ;;
+  postgresql-branddb)
+    preflight_scope "postgresql"
+    apply_postgresql_operator
+    apply_policies
+    wait_for_postgresql_crd
+    apply_postgresql_branddb_overlay
+    ;;
   signoz)
     preflight_scope "$SCOPE"
     apply_signoz
@@ -628,7 +655,7 @@ case "$SCOPE" in
     exit 0
     ;;
   *)
-    echo "Error: unknown scope '$SCOPE'. Expected one of: mongodb, mongo, postgresql, signoz, operators, policies, overlay, all" >&2
+    echo "Error: unknown scope '$SCOPE'. Expected one of: mongodb, mongo, postgresql, postgresql-coredb, postgresql-branddb, signoz, operators, policies, overlay, all" >&2
     usage
     exit 1
     ;;

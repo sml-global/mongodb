@@ -189,7 +189,7 @@ untouched throughout.
 ```bash
 kubectl get pv | grep Released
 # NAME       CAPACITY   ...   RECLAIM POLICY   STATUS     CLAIM
-# pvc-abc123 50Gi       ...   Retain           Released   postgresql/oms-postgresql-1
+# pvc-abc123 50Gi       ...   Retain           Released   coredb/oms-postgresql-coredb-1
 ```
 
 ### Step 2: Clear the stale claim reference
@@ -210,7 +210,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: recovered-data
-  namespace: postgresql
+  namespace: coredb
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: gp3-postgresql
@@ -339,28 +339,31 @@ use this section for Dev/SIT; see "PostgreSQL Recovery" below for UAT/Prod.
 
 CNPG restores by bootstrapping a **new** `Cluster` resource that recovers from
 an existing backup archive — it does not restore in place onto the original
-cluster.
+cluster. Example below is for the core cluster; the brand cluster follows the
+same pattern with its own namespace (`branddb`), cluster name
+(`oms-postgresql-branddb`), ServiceAccount (`oms-postgresql-brand-workload`),
+and backup bucket.
 
 ```yaml
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: oms-postgresql-restored
-  namespace: postgresql
+  name: oms-postgresql-coredb-restored
+  namespace: coredb
 spec:
   instances: 3
-  imageName: ghcr.io/cloudnative-pg/postgresql:16
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.4
   serviceAccountName: oms-postgresql-workload
   storage:
     storageClass: gp3-postgresql
     size: 50Gi
   bootstrap:
     recovery:
-      source: oms-postgresql
+      source: oms-postgresql-coredb
   externalClusters:
-    - name: oms-postgresql
+    - name: oms-postgresql-coredb
       barmanObjectStore:
-        destinationPath: s3://oms-postgresql-backup
+        destinationPath: s3://oms-postgresql-coredb-backup
         s3Credentials:
           inheritFromIAMRole: true
 ```
@@ -373,7 +376,7 @@ specific point in time instead of the latest available WAL:
 ```yaml
   bootstrap:
     recovery:
-      source: oms-postgresql
+      source: oms-postgresql-coredb
       recoveryTarget:
         targetTime: "2026-08-01T09:00:00Z"
 ```
@@ -382,13 +385,14 @@ specific point in time instead of the latest available WAL:
 
 If an on-demand backup was taken via
 `scripts/export-database-snapshot.sh postgresql` (see the script's own
-`--help` for usage), it is stored in the same `s3://oms-postgresql-backup`
-destination and is restored the same way — CNPG does not distinguish
-scheduled/continuous backups from on-demand ones at restore time.
+`--help` for usage), it is stored in the same per-cluster backup bucket
+(e.g. `s3://oms-postgresql-coredb-backup`) and is restored the same way —
+CNPG does not distinguish scheduled/continuous backups from on-demand ones
+at restore time.
 
 **Verify the restore:**
 ```bash
-kubectl -n postgresql get cluster oms-postgresql-restored
+kubectl -n coredb get cluster oms-postgresql-coredb-restored
 # Expect: status=Ready once recovery completes
 ```
 

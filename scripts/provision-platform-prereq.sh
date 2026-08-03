@@ -11,10 +11,16 @@ Scopes:
   mongodb     Apply only MongoDB prerequisite resources from the dedicated mongodb root.
   mongo       Alias of mongodb.
   pg          Alias of pg-core (kept for backward compatibility).
-  pg-core     Apply only PostgreSQL "core" resources from the postgresql-core root.
+  pg-core     Apply only PostgreSQL "core" resources from the postgresql-core root (Aurora, UAT/Prod).
   postgresql-core  Alias of pg-core.
-  pg-brand    Apply only PostgreSQL "brand" resources from the postgresql-brand root.
+  pg-brand    Apply only PostgreSQL "brand" resources from the postgresql-brand root (Aurora, UAT/Prod).
   postgresql-brand  Alias of pg-brand.
+  pg-coredb   Apply only the core CNPG cluster's prerequisites (namespace/bucket/IAM role) from the
+              postgresql-coredb root (dev/SIT, independent of pg-branddb).
+  postgresql-coredb  Alias of pg-coredb.
+  pg-branddb  Apply only the brand CNPG cluster's prerequisites (namespace/bucket/IAM role) from the
+              postgresql-branddb root (dev/SIT, independent of pg-coredb).
+  postgresql-branddb  Alias of pg-branddb.
 
 Examples:
   scripts/provision-platform-prereq.sh all
@@ -22,6 +28,8 @@ Examples:
   scripts/provision-platform-prereq.sh mongo
   scripts/provision-platform-prereq.sh pg-core --auto-approve
   scripts/provision-platform-prereq.sh pg-brand --auto-approve
+  scripts/provision-platform-prereq.sh pg-coredb --auto-approve
+  scripts/provision-platform-prereq.sh pg-branddb --auto-approve
 EOF
 }
 
@@ -98,8 +106,18 @@ case "$SCOPE" in
     TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/postgresql-brand"
     DEFAULT_TF_STATE_KEY="${POSTGRESQL_BRAND_STATE_KEY:-oms/dev/postgresql-brand.tfstate}"
     ;;
+  pg-coredb|postgresql-coredb)
+    SCOPE="pg-coredb"
+    TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/postgresql-coredb"
+    DEFAULT_TF_STATE_KEY="${POSTGRESQL_COREDB_STATE_KEY:-oms/dev/postgresql-coredb.tfstate}"
+    ;;
+  pg-branddb|postgresql-branddb)
+    SCOPE="pg-branddb"
+    TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/postgresql-branddb"
+    DEFAULT_TF_STATE_KEY="${POSTGRESQL_BRANDDB_STATE_KEY:-oms/dev/postgresql-branddb.tfstate}"
+    ;;
   *)
-    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg-core, pg-brand" >&2
+    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg-core, pg-brand, pg-coredb, pg-branddb" >&2
     usage
     exit 1
     ;;
@@ -134,6 +152,12 @@ ensure_tfvars() {
     elif [[ "$SCOPE" == "pg-brand" ]]; then
       echo "  cp platform-prerequisites/terraform/postgresql-brand/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-brand/$TFVARS_FILE" >&2
       echo "  # set vpc_id, database_subnet_ids, allowed_source_security_group_id, cluster_kms_key_arn, aurora_engine_version" >&2
+    elif [[ "$SCOPE" == "pg-coredb" ]]; then
+      echo "  cp platform-prerequisites/terraform/postgresql-coredb/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-coredb/$TFVARS_FILE" >&2
+      echo "  # set cluster_name, backup_bucket_name" >&2
+    elif [[ "$SCOPE" == "pg-branddb" ]]; then
+      echo "  cp platform-prerequisites/terraform/postgresql-branddb/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-branddb/$TFVARS_FILE" >&2
+      echo "  # set cluster_name, backup_bucket_name" >&2
     else
       echo "  cp platform-prerequisites/terraform/postgresql-core/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-core/$TFVARS_FILE" >&2
       echo "  # set vpc_id, database_subnet_ids, allowed_source_security_group_id, cnpg_backup_bucket_name, postgresql_operator_iam_role_arn, cluster_kms_key_arn" >&2
