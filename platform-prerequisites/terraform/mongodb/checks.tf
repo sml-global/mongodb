@@ -1,20 +1,20 @@
-check "operator_role_is_provided" {
-  assert {
-    condition     = length(var.operator_iam_role_arn) > 0 && startswith(var.operator_iam_role_arn, "arn:aws:iam::")
-    error_message = "operator_iam_role_arn must be a valid IAM role ARN from Phase 2 platform_contract. Direct IAM bypass is not allowed."
-  }
-}
-
-check "pbm_bucket_is_provided" {
+check "pbm_bucket_name_is_provided" {
   assert {
     condition     = length(var.pbm_bucket_name) > 0
-    error_message = "pbm_bucket_name must be provided from Phase 2 platform_contract."
+    error_message = "pbm_bucket_name must be provided; this root's reusable module creates the bucket using this name."
   }
 }
 
-check "cluster_kms_key_is_valid_arn" {
+check "cluster_name_is_provided" {
   assert {
-    condition     = startswith(var.cluster_kms_key_arn, "arn:aws:kms:")
-    error_message = "cluster_kms_key_arn must be a valid KMS key ARN."
+    condition     = length(var.cluster_name) > 0
+    error_message = "cluster_name must be provided for the Pod Identity association."
+  }
+}
+
+check "kms_key_arn_is_valid_when_provided" {
+  assert {
+    condition     = var.kms_key_arn == "" || startswith(var.kms_key_arn, "arn:aws:kms:")
+    error_message = "kms_key_arn must be a valid KMS key ARN when provided, or empty to skip KMS access."
   }
 }

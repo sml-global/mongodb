@@ -22,18 +22,17 @@ class MongodbTerraformContractTests(unittest.TestCase):
         )
         self.assertIn("632674123947", tfvars.read_text())
 
-    def test_checks_tf_has_operator_role_check_block(self):
+    def test_checks_tf_has_pbm_bucket_name_check_block(self):
         content = (TF_DIR / "checks.tf").read_text()
-        self.assertIn('check "operator_role_is_provided"', content)
-        self.assertIn("Direct IAM bypass is not allowed", content)
+        self.assertIn('check "pbm_bucket_name_is_provided"', content)
 
-    def test_checks_tf_has_pbm_bucket_check_block(self):
+    def test_checks_tf_has_cluster_name_check_block(self):
         content = (TF_DIR / "checks.tf").read_text()
-        self.assertIn('check "pbm_bucket_is_provided"', content)
+        self.assertIn('check "cluster_name_is_provided"', content)
 
     def test_checks_tf_has_kms_arn_check_block(self):
         content = (TF_DIR / "checks.tf").read_text()
-        self.assertIn('check "cluster_kms_key_is_valid_arn"', content)
+        self.assertIn('check "kms_key_arn_is_valid_when_provided"', content)
 
     def test_main_tf_grants_both_s3_and_kms_permissions(self):
         content = (TF_DIR / "main.tf").read_text()
@@ -51,6 +50,21 @@ class MongodbTerraformContractTests(unittest.TestCase):
         content = (TF_DIR / "versions.tf").read_text()
         self.assertIn(">= 1.10.0", content)
         self.assertIn(">= 6.0, < 7.0", content)
+
+    def test_versions_tf_uses_s3_native_state_locking(self):
+        content = (TF_DIR / "versions.tf").read_text()
+        self.assertIn("use_lockfile = true", content)
+
+    def test_main_tf_embeds_reusable_module(self):
+        content = (TF_DIR / "main.tf").read_text()
+        self.assertIn('module "mongodb_prerequisites"', content)
+        self.assertIn('source = "../reusable"', content)
+
+    def test_outputs_tf_exposes_reusable_module_outputs(self):
+        content = (TF_DIR / "outputs.tf").read_text()
+        self.assertIn('output "mongodb_namespace"', content)
+        self.assertIn('output "pbm_bucket_name"', content)
+        self.assertIn('output "operator_iam_role_arn"', content)
 
 
 if __name__ == "__main__":
