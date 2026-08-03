@@ -497,7 +497,7 @@ apply_policies() {
 }
 
 apply_overlay() {
-  kubectl apply -k "$ROOT_DIR/k8s/overlays/dev"
+  kubectl apply -k "$ROOT_DIR/k8s/overlays/${ENVIRONMENT:-dev}"
 }
 
 apply_signoz() {
@@ -552,7 +552,7 @@ apply_postgresql_operator() {
 }
 
 apply_postgresql_overlay() {
-  kubectl apply -k "$ROOT_DIR/gitops/postgresql/overlays/dev"
+  kubectl apply -k "$ROOT_DIR/gitops/postgresql/overlays/${ENVIRONMENT:-dev}"
 }
 
 wait_for_mongodb_crd() {

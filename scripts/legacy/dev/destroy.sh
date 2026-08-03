@@ -10,8 +10,10 @@ Scopes:
   all         Remove SigNoz + MongoDB + PostgreSQL resources (dev teardown).
   mongodb     Remove MongoDB Kubernetes workloads/secrets, then destroy MongoDB Terraform scope.
   mongo       Alias of mongodb.
-  pg          Remove PostgreSQL Kubernetes workloads (Cluster, operator), then destroy PostgreSQL Terraform scope.
+  pg          Remove PostgreSQL Kubernetes workloads (Cluster, operator), then destroy the postgresql-core Terraform scope.
   postgresql  Alias of pg.
+  pg-brand    Destroy the postgresql-brand Terraform scope only (no Kubernetes workload is associated with brand today).
+  postgresql-brand  Alias of pg-brand.
   signoz      Remove SigNoz HelmRelease and namespace resources.
   signoz-observability  Destroy dashboards/alerts Terraform state (run before 'signoz' so the API is still reachable).
   overlay     Remove only the MongoDB workload overlay (k8s/overlays/dev) — PSMDB Cluster CR, TLS certs,
@@ -46,6 +48,9 @@ EOF
 
 ROOT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
 BOOTSTRAP_BACKEND_SCRIPT="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
+
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/legacy/dev/load-env-config.sh"
 
 TF_STATE_BUCKET="${TF_STATE_BUCKET:-sml-oms-dev-tfstate}"
 TF_STATE_REGION="${TF_STATE_REGION:-ap-east-1}"
@@ -100,10 +105,60 @@ require_cmd() {
   fi
 }
 
+describe_destruction() {
+  local scope="$1"
+  local -a components=()
+
+  case "$scope" in
+    signoz)
+      components=("SigNoz HelmRelease and workload resources" "signoz namespace (unless --keep-signoz-namespace)")
+      ;;
+    signoz-observability)
+      components=("SigNoz dashboards/alerts Terraform state (signoz-observability root)")
+      ;;
+    mongodb|mongo)
+      components=("MongoDB PerconaServerMongoDB CR, operator HelmRelease, TLS certs/issuers" "MongoDB secrets (psmdb-encryption-key, psmdb-secrets, internal-psmdb-users, oms-audit-writer) + local escrow files" "MongoDB Terraform scope (mongodb root) — EBS volumes are Retained, not deleted")
+      ;;
+    pg|postgresql)
+      components=("PostgreSQL Kubernetes workloads (CNPG Cluster, operator)" "postgresql-core Terraform scope (Aurora cluster, if applicable)")
+      ;;
+    pg-brand|postgresql-brand)
+      components=("postgresql-brand Terraform scope (Aurora brand cluster) — no associated Kubernetes workload")
+      ;;
+    overlay)
+      components=("MongoDB workload overlay only (k8s/overlays/dev) — PSMDB Cluster CR, TLS certs, PDB, metrics collectors" "Operator and Kyverno policies are left in place")
+      ;;
+    postgresql-overlay)
+      components=("PostgreSQL workload overlay only (gitops/postgresql/overlays/dev) — CNPG Cluster CR" "Operator and Kyverno policies are left in place")
+      ;;
+    policies)
+      components=("Shared Kyverno ClusterPolicies (policies/kyverno)")
+      ;;
+    operators)
+      components=("Shared Flux-managed operator HelmReleases (gitops/operators/base) — run only after overlay/postgresql-overlay")
+      ;;
+    all)
+      components=("SigNoz dashboards/alerts Terraform state" "SigNoz HelmRelease, workload resources, and namespace" "MongoDB workloads, secrets, local escrow files, and Terraform scope" "PostgreSQL Kubernetes workloads and postgresql-core Terraform scope")
+      ;;
+    *)
+      components=("(unknown scope — see usage)")
+      ;;
+  esac
+
+  echo "The following will be removed for scope '$scope':"
+  local component
+  for component in "${components[@]}"; do
+    echo "  - $component"
+  done
+}
+
 confirm_destruction() {
   local scope="$1"
 
+  describe_destruction "$scope"
+
   if [[ "$AUTO_APPROVE" == "true" ]]; then
+    echo "--auto-approve set; skipping interactive confirmation."
     return 0
   fi
 
@@ -171,8 +226,12 @@ terraform_destroy_scope() {
       tf_state_key="oms/dev/mongo.tfstate"
       ;;
     pg|postgresql)
-      tf_dir="$ROOT_DIR/platform-prerequisites/terraform/postgresql"
-      tf_state_key="oms/dev/pg.tfstate"
+      tf_dir="$ROOT_DIR/platform-prerequisites/terraform/postgresql-core"
+      tf_state_key="oms/dev/postgresql-core.tfstate"
+      ;;
+    pg-brand|postgresql-brand)
+      tf_dir="$ROOT_DIR/platform-prerequisites/terraform/postgresql-brand"
+      tf_state_key="oms/dev/postgresql-brand.tfstate"
       ;;
     *)
       echo "Error: unsupported terraform destroy scope '$scope'" >&2
@@ -267,15 +326,15 @@ destroy_pg() {
 }
 
 destroy_mongodb_overlay() {
-  echo "Removing MongoDB workload overlay (k8s/overlays/dev) only..."
+  echo "Removing MongoDB workload overlay (k8s/overlays/${ENVIRONMENT:-dev}) only..."
   echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
-  kubectl delete -k "$ROOT_DIR/k8s/overlays/dev" --ignore-not-found=true || true
+  kubectl delete -k "$ROOT_DIR/k8s/overlays/${ENVIRONMENT:-dev}" --ignore-not-found=true || true
 }
 
 destroy_postgresql_overlay() {
-  echo "Removing PostgreSQL workload overlay (gitops/postgresql/overlays/dev) only..."
+  echo "Removing PostgreSQL workload overlay (gitops/postgresql/overlays/${ENVIRONMENT:-dev}) only..."
   echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
-  kubectl delete -k "$ROOT_DIR/gitops/postgresql/overlays/dev" --ignore-not-found=true || true
+  kubectl delete -k "$ROOT_DIR/gitops/postgresql/overlays/${ENVIRONMENT:-dev}" --ignore-not-found=true || true
 }
 
 destroy_policies() {
@@ -355,10 +414,10 @@ main() {
 
   # Validate scope before confirmation prompt
   case "$SCOPE" in
-    signoz|signoz-observability|mongodb|mongo|pg|postgresql|all|overlay|postgresql-overlay|policies|operators)
+    signoz|signoz-observability|mongodb|mongo|pg|postgresql|pg-brand|postgresql-brand|all|overlay|postgresql-overlay|policies|operators)
       ;;
     *)
-      echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, postgresql, signoz, signoz-observability, overlay, postgresql-overlay, policies, operators" >&2
+      echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg, postgresql, pg-brand, postgresql-brand, signoz, signoz-observability, overlay, postgresql-overlay, policies, operators" >&2
       usage
       exit 1
       ;;
@@ -379,6 +438,9 @@ main() {
       ;;
     pg|postgresql)
       destroy_pg
+      ;;
+    pg-brand|postgresql-brand)
+      terraform_destroy_scope pg-brand
       ;;
     overlay)
       destroy_mongodb_overlay

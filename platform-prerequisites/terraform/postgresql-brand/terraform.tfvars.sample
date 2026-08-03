@@ -1,0 +1,24 @@
+# PostgreSQL "brand" Terraform Configuration Sample — Aurora (uat/prod only).
+# Sibling of postgresql-core: same VPC/subnet/security-group inputs, its own
+# independent Aurora cluster, database name, and instance count.
+aws_region          = "ap-east-1"
+expected_account_id = "REPLACE_ME"
+environment         = "REPLACE_ME"
+name_prefix         = "oms-REPLACE_ME-brand"
+
+# From eks-platform's platform_contract output — copy manually, this root has no remote_state dependency.
+vpc_id                            = "REPLACE_ME_VPC_ID"
+database_subnet_ids               = ["REPLACE_ME_SUBNET_ID_1", "REPLACE_ME_SUBNET_ID_2"]
+allowed_source_security_group_id  = "REPLACE_ME_WORKLOAD_SG_ID"
+cluster_kms_key_arn                = "REPLACE_ME"
+
+# Kept in lockstep with postgresql-core's engine version per the Database Engine Decision.
+aurora_engine_version  = "REPLACE_ME"
+aurora_instance_class  = "db.r6g.large"
+# 1 for UAT (cost); >= 2 for Prod (Multi-AZ) — see docs/guides/enterprise-architecture.md
+# § Production Readiness Assessment — Now — "Aurora Multi-AZ: Prod only".
+aurora_instance_count  = 1
+aurora_database_name   = "brand"
+aurora_master_username = "brand_admin"
+
+tags = { Environment = "REPLACE_ME", ManagedBy = "Terraform" }

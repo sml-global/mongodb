@@ -117,7 +117,7 @@ flowchart TD
   SCOPE -->|signoz-observability| SO1[provision-signoz-observability.sh]
 
   M1 --> TF_M["provision-platform-prereq.sh mongodb<br/>terraform apply (platform-prerequisites/terraform/mongodb)<br/>state key: oms/dev/mongo.tfstate<br/><b>Creates:</b> IAM role for PBM backup access, references<br/>an existing PBM S3 bucket"]
-  P1 --> TF_P["provision-platform-prereq.sh pg<br/>terraform apply (platform-prerequisites/terraform/postgresql)<br/>state key: oms/dev/pg.tfstate<br/><b>Creates:</b> Aurora DB subnet group, Aurora security group,<br/>Aurora RDS cluster + writer instance, backup-access IAM policy"]
+  P1 --> TF_P["provision-platform-prereq.sh pg (alias of pg-core)<br/>terraform apply (platform-prerequisites/terraform/postgresql-core)<br/>state key: oms/dev/postgresql-core.tfstate<br/><b>Creates:</b> Aurora DB subnet group, Aurora security group,<br/>Aurora RDS cluster + writer instance, backup-access IAM policy<br/>(via shared modules/postgresql module — also invoked by the<br/>independent postgresql-brand root, run separately via 'pg-brand')"]
 
   M2 --> K8S_M[provision-k8s-components.sh mongodb — see §3a]
   P2 --> K8S_P[provision-k8s-components.sh postgresql — see §3b]
@@ -147,7 +147,7 @@ flowchart TD
   C --> D["bootstrap-dev-secrets.sh<br/>Provisions: encryption-key Secret + 4 Percona user-credential<br/>Secrets (backup, clusterAdmin, clusterMonitor, userAdmin)<br/>SKIPS any secret that already exists"]
   D --> E["apply_policies()<br/>kubectl apply -k policies/kyverno<br/>Provisions 4 ClusterPolicies:<br/>• block-app-mongodb-password-secrets<br/>• require-wffc-for-mongodb-storageclass<br/>• require-wffc-for-postgresql-storageclass<br/>• require-pbm-sidecar-resource-fencing<br/>(requires Kyverno ClusterPolicy CRD)"]
   E --> F["wait_for_mongodb_crd<br/>poll until PerconaServerMongoDB CRD is Established"]
-  F --> G["apply_overlay()<br/>kubectl apply -k k8s/overlays/dev<br/>Provisions: PSMDB Cluster CR (replica set),<br/>cert-manager TLS Certificates, PodDisruptionBudget,<br/>gp3 StorageClass, MongoDB+PostgreSQL metrics collectors"]
+  F --> G["apply_overlay()<br/>kubectl apply -k k8s/overlays/${ENVIRONMENT:-dev}<br/>Provisions: PSMDB Cluster CR (replica set),<br/>cert-manager TLS Certificates, PodDisruptionBudget,<br/>gp3 StorageClass, MongoDB+PostgreSQL metrics collectors"]
   G --> H[Done: MongoDB replica set provisioning triggered]
 ```
 
@@ -252,7 +252,7 @@ flowchart TD
   I -->|pg / postgresql| K["kubectl delete CNPG Cluster/operator<br/>THEN terraform destroy (postgresql root — destroys Aurora!)"]
   I -->|signoz| L["kubectl delete HelmRelease + namespace<br/>(finalizer-safe teardown for stuck ClickHouse installations)"]
   I -->|signoz-observability| M["terraform destroy (signoz-observability root)<br/>— run before 'signoz' itself, while the API is still reachable"]
-  I -->|overlay| N["kubectl delete -k k8s/overlays/dev<br/>MongoDB workload only — leaves operator + policies in place"]
+  I -->|overlay| N["kubectl delete -k k8s/overlays/${ENVIRONMENT:-dev}<br/>MongoDB workload only — leaves operator + policies in place"]
   I -->|postgresql-overlay| O["kubectl delete -k gitops/postgresql/overlays/dev<br/>CNPG Cluster CR only — leaves operator + policies in place"]
   I -->|policies| P["kubectl delete -k policies/kyverno<br/>Safe to run independently, any time"]
   I -->|operators| Q["kubectl delete -k gitops/operators/base<br/>⚠ Run LAST — orphans live CRs' Pods if run before overlay teardown"]
@@ -455,13 +455,13 @@ Checked directly against §1's stated scope:
 | Component | Status | Evidence |
 |---|---|---|
 | VPC, subnets, IGW, NAT Gateway, route tables, S3 VPC endpoint | ✅ Real | `platform-prerequisites/terraform/modules/network/main.tf` |
-| Security groups | ✅ Real (for Aurora) | `platform-prerequisites/terraform/postgresql/main.tf` |
+| Security groups | ✅ Real (for Aurora) | `platform-prerequisites/terraform/modules/postgresql/main.tf` |
 | IAM (cluster/node/OIDC/autoscaler/LBC roles) | ✅ Real | `platform-prerequisites/terraform/modules/iam/main.tf` |
 | EKS cluster + node group + addons | ✅ Real | `platform-prerequisites/terraform/modules/eks/main.tf` |
 | EFS, AWS Backup vault | ✅ Real | `modules/efs/`, `modules/backup/` |
 | S3 (general-purpose) | ✅ Real (reusable module) | `platform-prerequisites/terraform/reusable/main.tf` |
-| Aurora PostgreSQL — **core** | ✅ Real | `platform-prerequisites/terraform/postgresql/main.tf` |
-| Aurora PostgreSQL — **brand** | ❌ **Does not exist** | `postgresql-brand` appears only as a state-key name in `config/environments/*.env` and as a stub orchestrator handler — no second Terraform root or resource block for a "brand" database exists anywhere in the repo |
+| Aurora PostgreSQL — **core** | ✅ Real | `platform-prerequisites/terraform/postgresql-core/main.tf` |
+| Aurora PostgreSQL — **brand** | ✅ Built, not yet applied | `platform-prerequisites/terraform/postgresql-brand/` — independent sibling root invoking the same `modules/postgresql` module; `terraform.tfvars.sample` has placeholder VPC/subnet/IAM values pending real UAT/prod infra IDs |
 | MongoDB (Percona/PSMDB via K8s) | ✅ Real, dev only | §3a |
 | SigNoz (K8s/GitOps) + dashboards/alerts as code | ✅ Real, dev only | §3c, §3d |
 | Boomi runtime | ✅ By design, not a gap | No Boomi workload exists, and none should — see [§ Boomi Provisioning Boundary](#boomi-provisioning-boundary) below |
@@ -529,11 +529,13 @@ started without an explicit go-ahead and its own plan:
    environment, including dev. This also requires reconciling scope naming
    — legacy `pg`/`mongo` have no unified equivalent yet (unified splits `pg`
    into `postgresql-core`/`postgresql-brand`).
-2. **Aurora "brand" database.** Needs a design decision before any Terraform
-   is written: is "brand" a second Aurora cluster, a second database on the
-   same cluster, or a schema-level split? Required for production per the
-   platform owner, not just UAT. Tracked in
-   [enterprise-architecture.md § Production Readiness — Now](../guides/enterprise-architecture.md#now).
+
+~~2. Aurora "brand" database~~ — **done.** `platform-prerequisites/terraform/modules/postgresql/`
+is a reusable module invoked by two independent sibling roots
+(`postgresql-core/`, `postgresql-brand/`), matching the state-key convention
+already defined in `config/environments/*.env`. See
+[enterprise-architecture.md § Production Readiness — Now](../guides/enterprise-architecture.md#now)
+for current status (built, not yet applied to any real environment).
 
 ---
 
