@@ -121,7 +121,7 @@ no agent runs on Aurora since it is a fully-managed service. Deployed as a
 two-container pod in the `mongodb` namespace:
 
 - Manifest: [k8s/base/postgres-metrics-collector.yaml](../../k8s/base/postgres-metrics-collector.yaml)
-- IAM role + Pod Identity association: `platform-prerequisites/terraform/postgresql/main.tf`
+- IAM role + Pod Identity association: `platform-prerequisites/terraform/postgresql-core/main.tf`
   (`aws_iam_role.postgres_cloudwatch_monitor`, `aws_eks_pod_identity_association.postgres_cloudwatch_monitor`)
 - Applied by: `bash scripts/provision-platform-prereq.sh pg` (creates the IAM
   role/pod identity) then `kubectl apply -k k8s/overlays/dev` (creates the pod)
@@ -245,7 +245,8 @@ The OMS data layer separates shared Terraform logic from runnable roots and Kube
 platform-prerequisites/terraform/
   reusable/          ← Shared module: MongoDB prerequisites (IAM, S3, namespace, SA)
   mongodb/           ← Runnable root: MongoDB scope (state: oms/dev/mongo.tfstate)
-  postgresql/        ← Runnable root: PostgreSQL scope (state: oms/dev/pg.tfstate)
+  postgresql-core/   ← Runnable root: PostgreSQL core scope (state: oms/dev/postgresql-core.tfstate)
+  postgresql-brand/  ← Runnable root: PostgreSQL brand scope (state: oms/dev/postgresql-brand.tfstate)
 
 k8s/
   base/              ← Base Kubernetes manifests (PSMDB CR, StorageClass, certs, PDB)
@@ -315,7 +316,8 @@ Terraform root and state key are selected by script scope:
 |---|---|---|
 | `all` | Runs `mongodb` then `pg` sequentially | Two separate keys |
 | `mongodb` | `platform-prerequisites/terraform/mongodb` | `oms/dev/mongo.tfstate` |
-| `pg` | `platform-prerequisites/terraform/postgresql` | `oms/dev/pg.tfstate` |
+| `pg` / `pg-core` | `platform-prerequisites/terraform/postgresql-core` | `oms/dev/postgresql-core.tfstate` |
+| `pg-brand` | `platform-prerequisites/terraform/postgresql-brand` | `oms/dev/postgresql-brand.tfstate` |
 
 Safety rules:
 - `all` is a shortcut that runs both — does not create a third state
@@ -353,11 +355,11 @@ flowchart TD
   A[scripts/provision-platform-prereq.sh scope] --> B{scope}
   B -->|all| C[Run mongodb then pg]
   B -->|mongodb| D[Root: mongodb]
-  B -->|pg| E[Root: postgresql]
+  B -->|pg| E[Root: postgresql-core]
   C --> D
   C --> E
   D --> G[State key: oms/dev/mongo.tfstate]
-  E --> H[State key: oms/dev/pg.tfstate]
+  E --> H[State key: oms/dev/postgresql-core.tfstate]
   G --> I[Plan and apply]
   H --> I
 ```
@@ -400,7 +402,7 @@ flowchart TD
 | File | Purpose |
 |---|---|
 | `platform-prerequisites/terraform/mongodb/tfplan` | MongoDB scope plan artifact |
-| `platform-prerequisites/terraform/postgresql/tfplan` | PostgreSQL scope plan artifact |
+| `platform-prerequisites/terraform/postgresql-core/tfplan` | PostgreSQL core scope plan artifact |
 | `.local-dev-encryption-key.txt` | Encryption key escrow |
 | `.local-dev-user-passwords.txt` | User credentials escrow |
 | `/tmp/mongodb-dev.yaml` | Rendered dev overlay for validation |
@@ -411,7 +413,8 @@ flowchart TD
 |---|---|
 | `platform-prerequisites/terraform/reusable` | Shared module: MongoDB prerequisites |
 | `platform-prerequisites/terraform/mongodb` | MongoDB runnable root |
-| `platform-prerequisites/terraform/postgresql` | PostgreSQL runnable root |
+| `platform-prerequisites/terraform/postgresql-core` | PostgreSQL core runnable root |
+| `platform-prerequisites/terraform/postgresql-brand` | PostgreSQL brand runnable root |
 | `k8s/base/` | Base Kubernetes manifests |
 | `k8s/overlays/dev/` | Dev overlay patches |
 | `gitops/operators/base/` | Percona Operator HelmRelease |
@@ -584,7 +587,7 @@ aws rds describe-db-engine-versions --engine aurora-postgresql \
 ```
 
 **Steps:**
-1. Update `platform-prerequisites/terraform/postgresql/variables.tf` → `engine_version`
+1. Update `platform-prerequisites/terraform/postgresql-core/variables.tf` → `engine_version`
 2. Run `bash scripts/provision-platform-prereq.sh pg`
 3. Review plan — Aurora performs in-place upgrade (brief downtime for writer)
 

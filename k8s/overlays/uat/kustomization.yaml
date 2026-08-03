@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# UAT uses a distinct namespace (mongodb-uat) from dev's (mongodb) — both
+# environments share one physical EKS cluster (EKS-boomi-runtime-cluster),
+# separated by namespace. See config/environments/uat.env's MONGODB_NAMESPACE.
+namespace: mongodb-uat
+
+patches:
+  - path: patch-psmdb.yaml

@@ -7,21 +7,29 @@ Usage:
   provision-platform-prereq.sh <scope> [--auto-approve]
 
 Scopes:
-  all       Apply MongoDB then PostgreSQL prerequisites (separate roots and states).
-  mongodb   Apply only MongoDB prerequisite resources from the dedicated mongodb root.
-  mongo     Alias of mongodb.
-  pg        Apply only PostgreSQL resources from the dedicated postgresql root.
+  all         Apply MongoDB then PostgreSQL core+brand prerequisites (separate roots and states).
+  mongodb     Apply only MongoDB prerequisite resources from the dedicated mongodb root.
+  mongo       Alias of mongodb.
+  pg          Alias of pg-core (kept for backward compatibility).
+  pg-core     Apply only PostgreSQL "core" resources from the postgresql-core root.
+  postgresql-core  Alias of pg-core.
+  pg-brand    Apply only PostgreSQL "brand" resources from the postgresql-brand root.
+  postgresql-brand  Alias of pg-brand.
 
 Examples:
   scripts/provision-platform-prereq.sh all
   scripts/provision-platform-prereq.sh mongodb
   scripts/provision-platform-prereq.sh mongo
-  scripts/provision-platform-prereq.sh pg --auto-approve
+  scripts/provision-platform-prereq.sh pg-core --auto-approve
+  scripts/provision-platform-prereq.sh pg-brand --auto-approve
 EOF
 }
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BOOTSTRAP_BACKEND_SCRIPT="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
+
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/legacy/dev/load-env-config.sh"
 
 TF_STATE_BUCKET="${TF_STATE_BUCKET:-sml-oms-dev-tfstate}"
 TF_STATE_REGION="${TF_STATE_REGION:-ap-east-1}"
@@ -62,27 +70,36 @@ done
 
 case "$SCOPE" in
   all)
-    # Run mongodb then pg sequentially, each with its own root and state.
+    # Run mongodb then pg-core sequentially, each with its own root and state.
+    # pg-brand is intentionally NOT run by 'all' — brand is opt-in, applied
+    # explicitly, matching the "independent lifecycle" design in
+    # docs/guides/enterprise-architecture.md.
     if [[ "$AUTO_APPROVE" == "true" ]]; then
       bash "$0" mongodb --auto-approve
-      bash "$0" pg --auto-approve
+      bash "$0" pg-core --auto-approve
     else
       bash "$0" mongodb
-      bash "$0" pg
+      bash "$0" pg-core
     fi
-    echo "Completed scope: all (mongodb + pg)"
+    echo "Completed scope: all (mongodb + pg-core)"
     exit 0
     ;;
   mongodb|mongo)
     TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/mongodb"
-    DEFAULT_TF_STATE_KEY="oms/dev/mongo.tfstate"
+    DEFAULT_TF_STATE_KEY="${MONGODB_STATE_KEY:-oms/dev/mongo.tfstate}"
     ;;
-  pg)
-    TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/postgresql"
-    DEFAULT_TF_STATE_KEY="oms/dev/pg.tfstate"
+  pg|pg-core|postgresql-core)
+    SCOPE="pg-core"
+    TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/postgresql-core"
+    DEFAULT_TF_STATE_KEY="${POSTGRESQL_CORE_STATE_KEY:-oms/dev/postgresql-core.tfstate}"
+    ;;
+  pg-brand|postgresql-brand)
+    SCOPE="pg-brand"
+    TF_DIR="$ROOT_DIR/platform-prerequisites/terraform/postgresql-brand"
+    DEFAULT_TF_STATE_KEY="${POSTGRESQL_BRAND_STATE_KEY:-oms/dev/postgresql-brand.tfstate}"
     ;;
   *)
-    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg" >&2
+    echo "Error: unknown scope '$SCOPE'. Expected one of: all, mongodb, mongo, pg-core, pg-brand" >&2
     usage
     exit 1
     ;;
@@ -90,8 +107,18 @@ esac
 
 TF_STATE_KEY="${TF_STATE_KEY:-$DEFAULT_TF_STATE_KEY}"
 
+# Per-environment tfvars: if the orchestrator has set ENVIRONMENT (via
+# load_platform_env) and a terraform.<env>.tfvars file exists for this root,
+# use it. Otherwise fall back to the single terraform.tfvars file, exactly
+# matching this script's pre-existing standalone/legacy-dev behavior when
+# invoked without an environment context.
+TFVARS_FILE="terraform.tfvars"
+if [[ -n "${ENVIRONMENT:-}" && -f "$TF_DIR/terraform.${ENVIRONMENT}.tfvars" ]]; then
+  TFVARS_FILE="terraform.${ENVIRONMENT}.tfvars"
+fi
+
 ensure_tfvars() {
-  local tfvars_file="$TF_DIR/terraform.tfvars"
+  local tfvars_file="$TF_DIR/$TFVARS_FILE"
   local sample_file="$TF_DIR/terraform.tfvars.sample"
 
   if [[ -f "$tfvars_file" ]]; then
@@ -102,11 +129,14 @@ ensure_tfvars() {
   if [[ -f "$sample_file" ]]; then
     echo "Create it from sample, then edit required values:" >&2
     if [[ "$SCOPE" == "mongodb" || "$SCOPE" == "mongo" ]]; then
-      echo "  cp platform-prerequisites/terraform/mongodb/terraform.tfvars.sample platform-prerequisites/terraform/mongodb/terraform.tfvars" >&2
+      echo "  cp platform-prerequisites/terraform/mongodb/terraform.tfvars.sample platform-prerequisites/terraform/mongodb/$TFVARS_FILE" >&2
       echo "  # set cluster_name" >&2
+    elif [[ "$SCOPE" == "pg-brand" ]]; then
+      echo "  cp platform-prerequisites/terraform/postgresql-brand/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-brand/$TFVARS_FILE" >&2
+      echo "  # set vpc_id, database_subnet_ids, allowed_source_security_group_id, cluster_kms_key_arn, aurora_engine_version" >&2
     else
-      echo "  cp platform-prerequisites/terraform/postgresql/terraform.tfvars.sample platform-prerequisites/terraform/postgresql/terraform.tfvars" >&2
-      echo "  # set vpc_id, private_subnet_ids, db_master_password" >&2
+      echo "  cp platform-prerequisites/terraform/postgresql-core/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-core/$TFVARS_FILE" >&2
+      echo "  # set vpc_id, database_subnet_ids, allowed_source_security_group_id, cnpg_backup_bucket_name, postgresql_operator_iam_role_arn, cluster_kms_key_arn" >&2
     fi
   else
     echo "Error: sample file also missing: $sample_file" >&2
@@ -138,7 +168,7 @@ run_apply() {
 
 resolve_tfvar_string() {
   local key="$1"
-  local tfvars_file="$TF_DIR/terraform.tfvars"
+  local tfvars_file="$TF_DIR/$TFVARS_FILE"
 
   if [[ ! -f "$tfvars_file" ]]; then
     return 1
@@ -191,9 +221,10 @@ terraform -chdir="$TF_DIR" validate
 
 auto_import_pbm_bucket_if_needed
 
-terraform -chdir="$TF_DIR" plan -out=tfplan
+terraform -chdir="$TF_DIR" plan -var-file="$TFVARS_FILE" -out=tfplan
 run_apply tfplan
 
 echo "Completed scope: $SCOPE"
 echo "Terraform root: $TF_DIR"
+echo "Tfvars file: $TFVARS_FILE"
 echo "State key: $TF_STATE_KEY"

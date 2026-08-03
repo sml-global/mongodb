@@ -14,6 +14,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [[ "${1:-}" != "--env" ]]; then
+  if [[ "${1:-}" != "-h" && "${1:-}" != "--help" ]]; then
+    echo "No --env specified — routing to the legacy DEV-ONLY path (account 815402439714, ap-east-1)." >&2
+    echo "This will only ever destroy resources in the 'dev' environment. Use 'scripts/destroy.sh --env uat <scope>' for UAT." >&2
+    echo "See docs/references/provisioning-flows-and-infra-diagrams.md for what each path actually does." >&2
+    echo >&2
+  fi
   exec bash "$ROOT_DIR/scripts/legacy/dev/destroy.sh" "$@"
 fi
 
