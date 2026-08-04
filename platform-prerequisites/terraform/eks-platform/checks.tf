@@ -1,14 +1,7 @@
-check "eks_private_endpoint_required" {
+check "eks_endpoint_access_matches_boomi_precedent" {
   assert {
-    condition     = var.endpoint_private_access
-    error_message = "endpoint_private_access must be true for this platform stack."
-  }
-}
-
-check "eks_public_endpoint_disabled" {
-  assert {
-    condition     = !var.endpoint_public_access
-    error_message = "endpoint_public_access must be false for this platform stack."
+    condition     = var.endpoint_public_access && !var.endpoint_private_access
+    error_message = "endpoint_public_access must be true and endpoint_private_access must be false, matching the live Boomi dev cluster's proven access pattern (../boomi-infra/terraform/eks.tf, infra/tf/modules/eks/main.tf)."
   }
 }
 
