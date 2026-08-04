@@ -2,7 +2,7 @@ apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDB
 metadata:
   name: psmdb
-  namespace: mongodb-uat
+  namespace: mongodb
 spec:
   replsets:
     - name: rs0
@@ -23,13 +23,30 @@ spec:
           resources:
             requests:
               storage: 100Gi
+      # Sidecar resource fencing for PBM-intensive operations (required by
+      # the require-pbm-sidecar-resource-fencing Kyverno policy whenever
+      # spec.backup.enabled is true, as it is here). This is a strategic
+      # merge patch, and replsets is a list -- overriding replsets[0]
+      # without repeating sidecars here would drop the base's sidecars
+      # entry entirely rather than merge it. See #59.
+      sidecars:
+        - name: pbm-agent
+          image: percona/percona-backup-mongodb:2.6.0
+          command: ["pbm-agent"]
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 1Gi
   backup:
     enabled: true
     storages:
       s3-main:
         type: s3
         s3:
-          # REPLACE_ME: no real UAT PBM backup bucket name exists in this
-          # repo yet — fill in the actual bucket before applying to UAT.
-          bucket: REPLACE_ME_UAT_PBM_BUCKET
+          # PBM backup bucket created by platform-prerequisites/terraform/
+          # mongodb/terraform.uat.tfvars (pbm_bucket_name) -- see #51.
+          bucket: sml-oms-uat-mongodb-pbm-672172129937
           region: ap-east-1
