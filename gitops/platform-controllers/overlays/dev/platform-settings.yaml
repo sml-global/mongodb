@@ -15,6 +15,7 @@ data:
   CLUSTER_ARN: arn:aws:eks:ap-east-1:815402439714:cluster/oms-dev-eks-cluster
   AUTOSCALER_SERVICE_ACCOUNT: cluster-autoscaler
   CLUSTER_AUTOSCALER_ROLE_ARN: arn:aws:iam::815402439714:role/oms-dev-eks-eks-cluster-autoscaler-role
+  LOAD_BALANCER_CONTROLLER_ROLE_ARN: arn:aws:iam::815402439714:role/oms-dev-eks-eks-lbc-role
   SUSPEND_METRICS_SERVER: "true"
   SUSPEND_AWS_LOAD_BALANCER_CONTROLLER: "true"
   RENDER_VISIBILITY: private
