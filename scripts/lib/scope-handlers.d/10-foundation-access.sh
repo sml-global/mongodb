@@ -17,3 +17,4 @@ source_package_internal_library "10-foundation-access/internal/access-scopes.sh"
 foundation_provision_backend() { provision_backend_scope "$@"; }
 foundation_provision_access_governance() { provision_access_governance_scope "$@"; }
 foundation_provision_eks_access() { provision_eks_access_scope "$@"; }
+foundation_provision_eks_platform() { provision_eks_platform_scope "$@"; }

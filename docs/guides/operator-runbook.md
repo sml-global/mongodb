@@ -43,7 +43,7 @@ This shortcut does not replace plan review. Stop before apply if the generated p
 
 This procedure is separate from, and does not replace, the existing dev data
 layer procedures in this runbook. It is limited to UAT account `672172129937`,
-region `ap-east-1`, cluster `EKS-boomi-runtime-cluster`, and namespace
+region `ap-east-1`, cluster `oms-uat-eks-cluster`, and namespace
 `boomi-uat`. Dev account `815402439714` is read-only evidence for this work and
 must not be mutated; no other AWS account may be accessed.
 

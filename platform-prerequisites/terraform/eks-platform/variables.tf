@@ -114,11 +114,6 @@ variable "node_spot_enabled" {
   type        = bool
 }
 
-variable "cluster_kms_key_arn" {
-  description = "KMS key ARN for EKS secret encryption."
-  type        = string
-}
-
 variable "cluster_oidc_thumbprint" {
   description = "OIDC thumbprint used by IAM OIDC provider."
   type        = string
@@ -154,13 +149,8 @@ variable "backup_retention_days" {
   type        = number
 }
 
-variable "backup_kms_key_arn" {
-  description = "Approved KMS key ARN used by backup vault."
-  type        = string
-}
-
 variable "backup_service_role_arn" {
-  description = "IAM role ARN used by AWS Backup selection."
+  description = "IAM role ARN used by AWS Backup selection. This is the AWS-account-wide AWSServiceRoleForBackup service-linked role, shared by every environment's Backup usage in this account -- it is never created or destroyed by this module; supply the existing ARN (create once via `aws iam create-service-linked-role --aws-service-name backup.amazonaws.com` if the account has never used AWS Backup before)."
   type        = string
 }
 

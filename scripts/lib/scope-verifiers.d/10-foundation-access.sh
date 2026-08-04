@@ -22,3 +22,4 @@ source_package_internal_library "10-foundation-access/internal/access-scopes.sh"
 scope_registry_verify_backend() { verify_backend_scope_readiness "$@"; }
 scope_registry_verify_access_governance() { verify_access_governance_scope_readiness "$@"; }
 scope_registry_verify_eks_access() { verify_eks_access_scope_readiness "$@"; }
+scope_registry_verify_eks_platform() { verify_eks_platform_scope_readiness "$@"; }

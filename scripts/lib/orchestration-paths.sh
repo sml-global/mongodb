@@ -183,7 +183,7 @@ cleanup_orchestration_artifacts() {
   local cleanup_status=0
   local artifact_path
 
-  for artifact_path in "${_ORCHESTRATION_ACTIVE_PATHS[@]}"; do
+  for artifact_path in "${_ORCHESTRATION_ACTIVE_PATHS[@]+"${_ORCHESTRATION_ACTIVE_PATHS[@]}"}"; do
     [[ -n "$artifact_path" ]] || continue
     if [[ -e "$artifact_path" || -L "$artifact_path" ]]; then
       if ! rm -f "$artifact_path"; then
