@@ -308,26 +308,33 @@ class HandlerBehaviorTests(unittest.TestCase):
         self.assertIn("pre-destroy guard", self.contract_content)
 
 
-class NoExecutionClaimsTests(unittest.TestCase):
-    """Validate no execution/deployment/acceptance claims."""
+class DeploymentStatusAccuracyTests(unittest.TestCase):
+    """Validate the contract's deployment-status claims match reality.
+
+    Originally this class (as NoExecutionClaimsTests) asserted the document
+    always claims NOT deployed/accepted -- correct while the component was
+    static scaffolding only. eks-platform, workload-identity, and
+    platform-controllers are now live-provisioned, live-verified, and
+    destroy-tested against real UAT (see #35/#37/#38/#41/#43/#44/#46 and
+    their PRs) -- the document must say so, not the opposite."""
 
     def setUp(self):
         """Load the contract document."""
         self.contract_path = Path(__file__).parent.parent.parent / "docs" / "references" / "eks-platform-contract.md"
         self.contract_content = self.contract_path.read_text()
 
-    def test_no_deployment_claims(self):
-        """Contract must state component is NOT deployed."""
-        self.assertIn("NOT deployed", self.contract_content)
+    def test_states_deployed_and_verified_status(self):
+        """Contract must state the component is deployed and verified in UAT."""
+        self.assertIn("Deployed", self.contract_content)
+        self.assertIn("live-verified", self.contract_content.lower())
 
-    def test_no_acceptance_claims(self):
-        """Contract must state component is NOT accepted for production."""
-        self.assertIn("NOT", self.contract_content)
-        self.assertIn("accepted", self.contract_content.lower())
+    def test_does_not_claim_not_deployed(self):
+        """Contract must not carry the stale 'NOT deployed' claim."""
+        self.assertNotIn("NOT deployed", self.contract_content)
 
-    def test_static_implementation_only(self):
-        """Contract must state implementation is static and not runtime-tested."""
-        self.assertIn("Static implementation", self.contract_content)
+    def test_references_the_operator_runbook_procedure(self):
+        """Contract must point operators to the actual how-to procedure."""
+        self.assertIn("Operator Runbook", self.contract_content)
 
 
 if __name__ == "__main__":
