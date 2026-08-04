@@ -1001,6 +1001,30 @@ _orchestrator_destroy_preparation_pass() {
     [[ -n "$step" ]] && create_args+=(--confirmation "$step")
   done
 
+  # Enumerate resources that will be destroyed (preview for infra admin)
+  if [[ -f "${_ORCHESTRATOR_LIB_DIR}/enumerate-destroy-resources.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${_ORCHESTRATOR_LIB_DIR}/enumerate-destroy-resources.sh"
+
+    if type -t enumerate_destroy_resources_for_scope >/dev/null 2>&1; then
+      # Show preview for each scope in the destroy order
+      for step in "${order[@]}"; do
+        if type -t format_destroy_preview_header >/dev/null 2>&1; then
+          format_destroy_preview_header "$step" "$environment_name"
+        fi
+
+        if ! enumerate_destroy_resources_for_scope "$step" "$environment_name"; then
+          printf "  (Resource enumeration not available for scope '%s')\n" "$step"
+          printf "  Run with --confirmation-artifact to proceed with destroy.\n"
+        fi
+
+        if type -t format_destroy_preview_footer >/dev/null 2>&1; then
+          format_destroy_preview_footer
+        fi
+      done
+    fi
+  fi
+
   if ! "$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/confirmation-artifact.py" "${create_args[@]}"; then
     _orchestrator_error "unable to create confirmation artifact"
     cleanup_orchestration_artifacts 1
@@ -1008,6 +1032,8 @@ _orchestrator_destroy_preparation_pass() {
   fi
 
   printf 'Confirmation artifact: %s\n' "$artifact_relative_path"
+  printf 'Expires: %s (15 minutes)\n\n' "$expires_at"
+  printf '⚠️  Review the resources listed above before proceeding.\n\n'
   printf 'Re-run with:\n'
   printf '  --confirmation-artifact %s \\\n' "$artifact_relative_path"
   for step in "${REQUIRED_CONFIRMATIONS[@]:-}"; do
