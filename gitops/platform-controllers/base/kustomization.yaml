@@ -5,6 +5,7 @@ resources:
   - namespaces.yaml
   - sources.yaml
   - releases.yaml
+  - serviceaccounts.yaml
 
 labels:
   - includeSelectors: false
