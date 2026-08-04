@@ -402,11 +402,8 @@ state_key_variable_for_scope() {
 # has no independent implementation status of its own.
 implementation_requirement_for_scope() {
   case "${1:-}" in
-    backend|access-governance|eks-access|eks-platform)
+    backend|access-governance|eks-access|eks-platform|platform-controllers|workload-identity)
       printf '%s\n' "foundation-fragment-pending"
-      ;;
-    platform-controllers|workload-identity)
-      printf '%s\n' "external-work-package-3"
       ;;
     mongodb|postgresql-core|postgresql-brand|mongodb-access|database-access-core|database-access-brand|signoz|signoz-observability)
       printf '%s\n' "external-work-package-4"

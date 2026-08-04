@@ -41,6 +41,7 @@ _ACCESS_SCOPES_ROOT_DIR="$(cd "${_ACCESS_SCOPES_SCRIPTS_DIR}/.." && pwd)"
 GOVERNANCE_TF_DIR="${_ACCESS_SCOPES_ROOT_DIR}/platform-prerequisites/terraform/access-governance"
 EKS_ACCESS_TF_DIR="${_ACCESS_SCOPES_ROOT_DIR}/platform-prerequisites/terraform/eks-access"
 EKS_PLATFORM_TF_DIR="${_ACCESS_SCOPES_ROOT_DIR}/platform-prerequisites/terraform/eks-platform"
+WORKLOAD_IDENTITY_TF_DIR="${_ACCESS_SCOPES_ROOT_DIR}/platform-prerequisites/terraform/workload-identity"
 PRINCIPAL_VALIDATOR="${_ACCESS_SCOPES_SCRIPTS_DIR}/validate-uat-workforce-principals.sh"
 
 # Once-per-orchestration-run memoization key for provision_backend_scope. Not
@@ -76,8 +77,9 @@ provision_backend_scope() {
     access-governance) target_tf_dir="$GOVERNANCE_TF_DIR" ;;
     eks-access) target_tf_dir="$EKS_ACCESS_TF_DIR" ;;
     eks-platform) target_tf_dir="$EKS_PLATFORM_TF_DIR" ;;
+    workload-identity) target_tf_dir="$WORKLOAD_IDENTITY_TF_DIR" ;;
     *)
-      _access_scopes_error "provision_backend_scope accepts only access-governance, eks-access, or eks-platform, got: ${target_scope}"
+      _access_scopes_error "provision_backend_scope accepts only access-governance, eks-access, eks-platform, or workload-identity, got: ${target_scope}"
       return 1
       ;;
   esac
@@ -250,6 +252,126 @@ destroy_eks_platform_scope() {
 
   provision_backend_scope "eks-platform" || return 1
   terraform -chdir="$EKS_PLATFORM_TF_DIR" destroy -input=false -auto-approve -var-file="$var_file"
+}
+
+# ---------------------------------------------------------------------------
+# _workload_identity_var_file_for_environment
+# ---------------------------------------------------------------------------
+#
+# Same per-environment tfvars layout as eks-platform:
+# platform-prerequisites/terraform/environments/<env>/workload-identity.tfvars
+_workload_identity_var_file_for_environment() {
+  printf '%s/platform-prerequisites/terraform/environments/%s/workload-identity.tfvars' \
+    "${_ACCESS_SCOPES_ROOT_DIR}" "${ENVIRONMENT}"
+}
+
+# ---------------------------------------------------------------------------
+# provision_workload_identity_scope
+# ---------------------------------------------------------------------------
+#
+# Provisions the generic map-driven EKS Pod Identity root. The committed
+# tfvars ship `identities = {}`, so a from-scratch apply creates zero
+# identity resources today -- this wires the scope's Terraform lifecycle to
+# the orchestrator; populating real identity entries is a data-owned change
+# to the tfvars file, not a code change here.
+provision_workload_identity_scope() {
+  local var_file
+
+  var_file="$(_workload_identity_var_file_for_environment)"
+  [[ -r "$var_file" ]] || {
+    _access_scopes_error "workload-identity tfvars file is not readable: ${var_file}"
+    return 1
+  }
+
+  provision_backend_scope "workload-identity" || return 1
+  run_saved_terraform_plan "workload-identity" "$WORKLOAD_IDENTITY_TF_DIR" "$var_file"
+}
+
+# ---------------------------------------------------------------------------
+# destroy_workload_identity_scope
+# ---------------------------------------------------------------------------
+#
+# Destroys the workload-identity Terraform root. Called only after
+# eks_internal_workload_identity_destroy_handler's foundation guards and
+# drift recheck have already passed.
+destroy_workload_identity_scope() {
+  local var_file
+
+  var_file="$(_workload_identity_var_file_for_environment)"
+  [[ -r "$var_file" ]] || {
+    _access_scopes_error "workload-identity tfvars file is not readable: ${var_file}"
+    return 1
+  }
+
+  provision_backend_scope "workload-identity" || return 1
+  terraform -chdir="$WORKLOAD_IDENTITY_TF_DIR" destroy -input=false -auto-approve -var-file="$var_file"
+}
+
+# ---------------------------------------------------------------------------
+# _platform_controllers_overlay_dir_for_environment
+# ---------------------------------------------------------------------------
+_platform_controllers_overlay_dir_for_environment() {
+  printf '%s/gitops/platform-controllers/overlays/%s' \
+    "${_ACCESS_SCOPES_ROOT_DIR}" "${ENVIRONMENT}"
+}
+
+# ---------------------------------------------------------------------------
+# provision_platform_controllers_scope
+# ---------------------------------------------------------------------------
+#
+# platform-controllers is gitops/Flux-managed, not Terraform-owned: this
+# scope has no *_STATE_KEY, matching how `mongodb`/`signoz`/`postgresql`
+# already apply their gitops overlays directly via `kubectl apply -k`
+# (scripts/provision-k8s-components.sh) rather than through a Terraform
+# root. This follows that established, already-proven pattern -- Flux's own
+# HelmRelease/HelmRepository CRDs must already be registered on the cluster
+# (installed by the `eks-platform` scope's managed add-ons/bootstrap), and
+# Flux reconciles the applied manifests asynchronously after `kubectl apply`
+# returns.
+provision_platform_controllers_scope() {
+  local overlay_dir
+
+  overlay_dir="$(_platform_controllers_overlay_dir_for_environment)"
+  [[ -d "$overlay_dir" ]] || {
+    _access_scopes_error "platform-controllers overlay directory does not exist: ${overlay_dir}"
+    return 1
+  }
+
+  verify_kubernetes_context || return 1
+  verify_eks_authentication_mode || return 1
+
+  kubectl get crd helmreleases.helm.toolkit.fluxcd.io >/dev/null 2>&1 || {
+    _access_scopes_error "Flux HelmRelease CRD is not registered on this cluster; install Flux controllers before provisioning platform-controllers"
+    return 1
+  }
+  kubectl get crd helmrepositories.source.toolkit.fluxcd.io >/dev/null 2>&1 || {
+    _access_scopes_error "Flux HelmRepository CRD is not registered on this cluster; install Flux controllers before provisioning platform-controllers"
+    return 1
+  }
+
+  kubectl apply -k "$overlay_dir"
+}
+
+# ---------------------------------------------------------------------------
+# destroy_platform_controllers_scope
+# ---------------------------------------------------------------------------
+#
+# Deletes the platform-controllers gitops overlay. Called only after
+# eks_internal_platform_controllers_destroy_handler's foundation guards and
+# drift recheck have already passed.
+destroy_platform_controllers_scope() {
+  local overlay_dir
+
+  overlay_dir="$(_platform_controllers_overlay_dir_for_environment)"
+  [[ -d "$overlay_dir" ]] || {
+    _access_scopes_error "platform-controllers overlay directory does not exist: ${overlay_dir}"
+    return 1
+  }
+
+  verify_kubernetes_context || return 1
+  verify_eks_authentication_mode || return 1
+
+  kubectl delete -k "$overlay_dir" --ignore-not-found
 }
 
 # ---------------------------------------------------------------------------

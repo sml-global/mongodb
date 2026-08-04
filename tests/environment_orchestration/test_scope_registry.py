@@ -60,8 +60,6 @@ EXPECTED_DESTROY_ALL_ORDER = (
 
 # Deferred work-package mapping, exactly as specified in Task 3 Step 3.
 EXPECTED_WORK_PACKAGE_FOR_SCOPE = {
-    "platform-controllers": 3,
-    "workload-identity": 3,
     "mongodb": 4,
     "postgresql-core": 4,
     "postgresql-brand": 4,
@@ -73,13 +71,27 @@ EXPECTED_WORK_PACKAGE_FOR_SCOPE = {
     "boomi-runtime": 5,
 }
 
-EXPECTED_EXISTING_PLATFORM_SCOPES = ("eks-platform",)
+EXPECTED_EXISTING_PLATFORM_SCOPES = ()
 
 # Scopes whose real implementation is pending only this plan's own Task 5
 # foundation access fragment (not an external work package). Provision
 # handler mapping only -- eks-access's destroy handler is separately
 # deferred to work package 3 (see EXPECTED_DESTROY_HANDLER below).
 FRAGMENT_PENDING_SCOPES = ("backend", "access-governance", "eks-access")
+
+# Scopes classified `foundation-fragment-pending` in
+# implementation_requirement_for_scope specifically -- distinct from
+# FRAGMENT_PENDING_SCOPES above, which also asserts each scope's *raw*
+# canonical stub symbol reports the Task-5 message (a property only true for
+# scopes whose stub is still the file's own placeholder). eks-platform,
+# workload-identity, and platform-controllers are classified
+# foundation-fragment-pending for provision-order pre-resolution purposes,
+# but their canonical symbols are overridden by the EKS package fragment
+# (scope-handlers.d/20-eks-platform.sh) to real handlers, so they do not
+# belong in FRAGMENT_PENDING_SCOPES's raw-stub-message assertion.
+IMPLEMENTATION_REQUIREMENT_FRAGMENT_PENDING_SCOPES = FRAGMENT_PENDING_SCOPES + (
+    "eks-platform", "workload-identity", "platform-controllers",
+)
 
 EXPECTED_PROVISION_HANDLER = {
     "backend": "foundation_provision_backend",
@@ -406,7 +418,17 @@ class SymbolMappingTests(ScopeRegistryFixture):
             with self.subTest(scope=scope):
                 result = self.run_registry(f"provision_handler_for_scope {scope}")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.strip(), symbol)
+                if scope == "eks-platform":
+                    # eks-platform's real provision handler
+                    # (foundation_provision_eks_platform) is defined only
+                    # once the EKS package fragment overrides the raw
+                    # registry mapping -- see EksFragmentRegistryLoadTests,
+                    # which exercises that full load path. Bare
+                    # scope-registry.sh sourcing (this fixture) only proves
+                    # the pre-override mapping still resolves.
+                    self.assertEqual(result.stdout.strip(), "foundation_provision_eks_platform")
+                else:
+                    self.assertEqual(result.stdout.strip(), symbol)
 
     def test_destroy_handler_for_scope_is_exact(self):
         for scope, symbol in EXPECTED_DESTROY_HANDLER.items():
@@ -556,7 +578,7 @@ class ImplementationRequirementTests(ScopeRegistryFixture):
                 self.assertEqual(result.stdout.strip(), "external-existing-platform")
 
     def test_fragment_pending_scopes_are_distinguished_from_work_packages(self):
-        for scope in FRAGMENT_PENDING_SCOPES:
+        for scope in IMPLEMENTATION_REQUIREMENT_FRAGMENT_PENDING_SCOPES:
             with self.subTest(scope=scope):
                 result = self.run_registry(f"implementation_requirement_for_scope {scope}")
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -625,15 +647,21 @@ class VerificationModeTests(ScopeRegistryFixture):
 
 class DecisiveDispatchTests(ScopeRegistryFixture):
     """The decisive provision test: `all` reports
-    "workload-identity requires work package 3" with an empty handler command
+    "boomi-runtime requires work package 5" with an empty handler command
     log, and neither backend nor access-governance may run before the
-    unsupported graph is rejected."""
+    unsupported graph is rejected.
+
+    workload-identity and platform-controllers are no longer the first
+    deferred scope in `all` order -- both were reclassified to
+    foundation-fragment-pending once #35 wired their real provision/destroy
+    handlers, leaving boomi-runtime (work package 5) as the first scope `all`
+    still fails closed on."""
 
     def test_all_provision_fails_on_eks_platform_before_backend_or_governance_run(self):
         result = self.run_registry("dispatch_scope_handler provision all")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("workload-identity requires work package 3", result.stderr)
+        self.assertIn("boomi-runtime requires work package 5", result.stderr)
         self.assertNotIn("backend requires the foundation access fragment", result.stderr)
         self.assertNotIn("access-governance requires the foundation access fragment", result.stderr)
         self.assertEqual(result.stdout, "")
@@ -681,7 +709,9 @@ class EksFragmentRegistryLoadTests(ScopeRegistryFixture):
             "scripts/lib/scope-handlers.d/20-eks-platform.sh",
             "scripts/lib/scope-verifiers.d/10-foundation-access.sh",
             "scripts/lib/packages/10-foundation-access/internal/access-scopes.sh",
+            "scripts/lib/packages/20-eks-platform/internal/live-observations.sh",
             "scripts/lib/packages/20-eks-platform/internal/lifecycle-handlers.sh",
+            "scripts/lib/packages/20-eks-platform/internal/pre-destroy-guards.sh",
         )
 
     def test_loading_eks_fragment_preserves_registry_data_and_resolves_mapped_symbols(self):
@@ -765,6 +795,7 @@ class EksVerifierFragmentRegistryLoadTests(ScopeRegistryFixture):
             "scripts/lib/scope-verifiers.d/10-foundation-access.sh",
             "scripts/lib/scope-verifiers.d/20-eks-platform.sh",
             "scripts/lib/packages/10-foundation-access/internal/access-scopes.sh",
+            "scripts/lib/packages/20-eks-platform/internal/live-observations.sh",
             "scripts/lib/packages/20-eks-platform/internal/lifecycle-handlers.sh",
             "scripts/lib/packages/20-eks-platform/internal/verifiers.sh",
             "scripts/lib/packages/20-eks-platform/internal/pre-destroy-guards.sh",

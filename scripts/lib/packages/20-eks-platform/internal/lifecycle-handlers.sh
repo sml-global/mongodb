@@ -168,10 +168,10 @@ eks_internal_execute_provision_mutation() {
       provision_eks_platform_scope
       ;;
     workload-identity)
-      _scope_registry_fail_work_package "workload-identity" 3
+      provision_workload_identity_scope
       ;;
     platform-controllers)
-      _scope_registry_fail_work_package "platform-controllers" 3
+      provision_platform_controllers_scope
       ;;
     *)
       eks_internal_error "unknown EKS provision scope: ${scope_name}"
@@ -188,10 +188,10 @@ eks_internal_execute_destroy_mutation() {
       destroy_eks_platform_scope
       ;;
     workload-identity)
-      _scope_registry_fail_work_package "workload-identity" 3
+      destroy_workload_identity_scope
       ;;
     platform-controllers)
-      _scope_registry_fail_work_package "platform-controllers" 3
+      destroy_platform_controllers_scope
       ;;
     *)
       eks_internal_error "unknown EKS destroy scope: ${scope_name}"
