@@ -13,8 +13,8 @@ nat_mode              = "single"
 
 kubernetes_version      = "1.33"
 authentication_mode     = "API"
-endpoint_public_access  = false
-endpoint_private_access = true
+endpoint_public_access  = true
+endpoint_private_access = false
 deletion_protection     = true
 
 node_instance_type    = "m6i.large"
