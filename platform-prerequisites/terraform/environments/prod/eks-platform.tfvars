@@ -29,7 +29,6 @@ node_root_volume_size = 100
 node_spot_enabled     = false
 
 # Placeholder — operator must replace with the real KMS key ARN before apply.
-cluster_kms_key_arn     = "arn:aws:kms:ap-east-1:632674123947:key/REPLACE-ME-PROD-CLUSTER-KEY"
 cluster_oidc_thumbprint = "9e99a48a9960b14926bb7f3b02e22da0afd40a4d"
 cluster_oidc_issuer_url = "https://oidc.eks.ap-east-1.amazonaws.com/id/REPLACE-ME-PROD-OIDC"
 enable_load_balancer_controller = true
@@ -39,7 +38,6 @@ efs_throughput_mode = "bursting"
 
 backup_enabled            = true
 backup_retention_days     = 35
-backup_kms_key_arn        = "arn:aws:kms:ap-east-1:632674123947:key/REPLACE-ME-PROD-BACKUP-KEY"
 backup_service_role_arn   = "arn:aws:iam::632674123947:role/service-role/AWSBackupDefaultServiceRole"
 vault_min_retention_days  = 35
 vault_max_retention_days  = 365

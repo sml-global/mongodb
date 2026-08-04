@@ -271,10 +271,12 @@ main() {
 
   echo "Preparing Terraform backend in: $tf_dir"
 
+  # NOTE: expected_bucket_owner is not a valid -backend-config argument for
+  # the S3 backend (confirmed against Terraform 1.15.7 with use_lockfile =
+  # true) -- it is rejected with "Invalid backend configuration argument".
+  # Bucket-ownership verification is already performed above via
+  # verify_bucket_controls; Terraform itself is not asked to re-check it.
   local backend_owner_config=()
-  if [[ -n "$expected_owner" ]]; then
-    backend_owner_config=(-backend-config="expected_bucket_owner=$expected_owner")
-  fi
 
   local remote_state_status=0
   if inspect_remote_state "$bucket" "$key" "$expected_owner"; then

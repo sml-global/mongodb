@@ -165,7 +165,7 @@ eks_internal_execute_provision_mutation() {
 
   case "$scope_name" in
     eks-platform)
-      return 0
+      provision_eks_platform_scope
       ;;
     workload-identity)
       _scope_registry_fail_work_package "workload-identity" 3
@@ -185,7 +185,7 @@ eks_internal_execute_destroy_mutation() {
 
   case "$scope_name" in
     eks-platform)
-      _scope_registry_fail_work_package "eks-platform" 3
+      destroy_eks_platform_scope
       ;;
     workload-identity)
       _scope_registry_fail_work_package "workload-identity" 3

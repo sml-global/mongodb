@@ -69,9 +69,8 @@ resource "aws_eks_node_group" "primary" {
   node_role_arn   = var.node_role_arn
   subnet_ids      = var.private_subnet_ids
 
-  ami_type       = "AL2023_x86_64_STANDARD"
-  capacity_type  = var.node_spot_enabled ? "SPOT" : "ON_DEMAND"
-  instance_types = [var.node_instance_type]
+  ami_type      = "AL2023_x86_64_STANDARD"
+  capacity_type = var.node_spot_enabled ? "SPOT" : "ON_DEMAND"
 
   launch_template {
     id      = aws_launch_template.node.id
