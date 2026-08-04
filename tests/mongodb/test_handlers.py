@@ -32,11 +32,19 @@ CANONICAL_WRAPPERS = {
 
 # Symbols that must NOT appear in the handler fragment or internal file.
 DISALLOWED_CANONICAL_SYMBOLS = (
-    "scope_registry_pre_destroy_guard_mongodb",
-    "scope_registry_pre_destroy_guard_mongodb_access",
     "scope_registry_verify_mongodb",
     "scope_registry_verify_mongodb_access",
 )
+
+# Pre-destroy guard wrappers the fragment must ALSO define, delegating to
+# the real guard implementations in pre-destroy-guards.sh -- registered
+# here (rather than left as scope-registry.sh's stub) once #50 unblocked
+# mongodb/mongodb-access dispatch the same way #35 did for the EKS-family
+# scopes.
+PRE_DESTROY_GUARD_WRAPPERS = {
+    "scope_registry_pre_destroy_guard_mongodb": "mongodb_internal_mongodb_pre_destroy_guard",
+    "scope_registry_pre_destroy_guard_mongodb_access": "mongodb_internal_mongodb_access_pre_destroy_guard",
+}
 
 
 class HandlerFragmentStaticContractTests(unittest.TestCase):
@@ -49,10 +57,11 @@ class HandlerFragmentStaticContractTests(unittest.TestCase):
         function_names = re.findall(
             r"^([A-Za-z_][A-Za-z0-9_]*)\(\)", content, flags=re.MULTILINE
         )
+        expected_names = set(CANONICAL_WRAPPERS) | set(PRE_DESTROY_GUARD_WRAPPERS)
         self.assertEqual(
             set(function_names),
-            set(CANONICAL_WRAPPERS),
-            f"expected exactly {sorted(CANONICAL_WRAPPERS)}, got {sorted(function_names)}",
+            expected_names,
+            f"expected exactly {sorted(expected_names)}, got {sorted(function_names)}",
         )
 
         source_lines = [
@@ -63,15 +72,21 @@ class HandlerFragmentStaticContractTests(unittest.TestCase):
         self.assertEqual(
             source_lines,
             [
-                'source_package_internal_library "30-mongodb/internal/lifecycle-handlers.sh" || return 1'
+                'source_package_internal_library "30-mongodb/internal/lifecycle-handlers.sh" || return 1',
+                'source_package_internal_library "30-mongodb/internal/pre-destroy-guards.sh" || return 1',
             ],
-            "fragment must source exactly lifecycle-handlers.sh via validated helper",
+            "fragment must source lifecycle-handlers.sh then pre-destroy-guards.sh via validated helper",
         )
 
-        self.assertNotIn("verifiers.sh", content)
-        self.assertNotIn("pre-destroy-guards.sh", content)
-        self.assertNotIn("../", content)
-        self.assertNotIn("$(", source_lines[0])
+    def test_pre_destroy_guard_wrappers_delegate_exactly_to_mapped_internal_guards(self):
+        content = self._content()
+        for wrapper, internal in PRE_DESTROY_GUARD_WRAPPERS.items():
+            with self.subTest(wrapper=wrapper):
+                pattern = re.compile(
+                    r"^" + re.escape(wrapper) + r"\(\)\s*\{\s*" + re.escape(internal) + r'\s+"\$@";\s*\}',
+                    flags=re.MULTILINE,
+                )
+                self.assertRegex(content, pattern)
 
     def test_fragment_sources_no_direct_source_or_dot_statements(self):
         content = self._content()
