@@ -24,9 +24,8 @@ node_max_size         = 6
 node_root_volume_size = 100
 node_spot_enabled     = false
 
-cluster_kms_key_arn     = "arn:aws:kms:ap-east-1:672172129937:key/33333333-3333-3333-3333-333333333333"
 cluster_oidc_thumbprint = "9e99a48a9960b14926bb7f3b02e22da0afd40a4d"
-cluster_oidc_issuer_url = "https://oidc.eks.ap-east-1.amazonaws.com/id/UATEXAMPLEOIDC"
+cluster_oidc_issuer_url = "https://oidc.eks.ap-east-1.amazonaws.com/id/F74F00D1B221D739A7EB432D0F6E375D"
 enable_load_balancer_controller = true
 
 efs_enabled         = true
@@ -34,8 +33,7 @@ efs_throughput_mode = "bursting"
 
 backup_enabled            = true
 backup_retention_days     = 35
-backup_kms_key_arn        = "arn:aws:kms:ap-east-1:672172129937:key/44444444-4444-4444-4444-444444444444"
-backup_service_role_arn   = "arn:aws:iam::672172129937:role/service-role/AWSBackupDefaultServiceRole"
+backup_service_role_arn   = "arn:aws:iam::672172129937:role/aws-service-role/backup.amazonaws.com/AWSServiceRoleForBackup"
 vault_min_retention_days  = 35
 vault_max_retention_days  = 365
 
@@ -45,7 +43,7 @@ addons = {
     addon_version        = "v1.20.4-eksbuild.1"
     resolve_conflicts    = "OVERWRITE"
     service_account_role = false
-    configuration_values = jsonencode({ env = { ENABLE_PREFIX_DELEGATION = "true", WARM_PREFIX_TARGET = "1" } })
+    configuration_values = "{\"env\":{\"ENABLE_PREFIX_DELEGATION\":\"true\",\"WARM_PREFIX_TARGET\":\"1\"}}"
   }
   coredns = {
     enabled              = true

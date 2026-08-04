@@ -301,7 +301,7 @@ provision_handler_for_scope() {
     backend) printf '%s\n' "foundation_provision_backend" ;;
     access-governance) printf '%s\n' "foundation_provision_access_governance" ;;
     eks-access) printf '%s\n' "foundation_provision_eks_access" ;;
-    eks-platform) printf '%s\n' "scope_registry_deferred_eks_platform_provision" ;;
+    eks-platform) printf '%s\n' "foundation_provision_eks_platform" ;;
     platform-controllers) printf '%s\n' "scope_registry_deferred_platform_controllers_provision" ;;
     workload-identity) printf '%s\n' "scope_registry_deferred_workload_identity_provision" ;;
     boomi-runtime) printf '%s\n' "scope_registry_deferred_boomi_runtime_provision" ;;
@@ -402,11 +402,8 @@ state_key_variable_for_scope() {
 # has no independent implementation status of its own.
 implementation_requirement_for_scope() {
   case "${1:-}" in
-    backend|access-governance|eks-access)
+    backend|access-governance|eks-access|eks-platform)
       printf '%s\n' "foundation-fragment-pending"
-      ;;
-    eks-platform)
-      printf '%s\n' "external-existing-platform"
       ;;
     platform-controllers|workload-identity)
       printf '%s\n' "external-work-package-3"

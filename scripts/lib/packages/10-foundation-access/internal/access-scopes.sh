@@ -40,6 +40,7 @@ _ACCESS_SCOPES_ROOT_DIR="$(cd "${_ACCESS_SCOPES_SCRIPTS_DIR}/.." && pwd)"
 
 GOVERNANCE_TF_DIR="${_ACCESS_SCOPES_ROOT_DIR}/platform-prerequisites/terraform/access-governance"
 EKS_ACCESS_TF_DIR="${_ACCESS_SCOPES_ROOT_DIR}/platform-prerequisites/terraform/eks-access"
+EKS_PLATFORM_TF_DIR="${_ACCESS_SCOPES_ROOT_DIR}/platform-prerequisites/terraform/eks-platform"
 PRINCIPAL_VALIDATOR="${_ACCESS_SCOPES_SCRIPTS_DIR}/validate-uat-workforce-principals.sh"
 
 # Once-per-orchestration-run memoization key for provision_backend_scope. Not
@@ -74,8 +75,9 @@ provision_backend_scope() {
   case "$target_scope" in
     access-governance) target_tf_dir="$GOVERNANCE_TF_DIR" ;;
     eks-access) target_tf_dir="$EKS_ACCESS_TF_DIR" ;;
+    eks-platform) target_tf_dir="$EKS_PLATFORM_TF_DIR" ;;
     *)
-      _access_scopes_error "provision_backend_scope accepts only access-governance or eks-access, got: ${target_scope}"
+      _access_scopes_error "provision_backend_scope accepts only access-governance, eks-access, or eks-platform, got: ${target_scope}"
       return 1
       ;;
   esac
@@ -110,7 +112,7 @@ confirm_saved_plan_apply() {
 }
 
 # ---------------------------------------------------------------------------
-# run_saved_terraform_plan <scope-name> <terraform-root> [extra-var-file]
+# run_saved_terraform_plan <scope-name> <terraform-root> <var-file> [extra-var-file]
 # ---------------------------------------------------------------------------
 #
 # Formats/validates the Terraform root, saves a plan to an environment-local
@@ -120,7 +122,8 @@ confirm_saved_plan_apply() {
 run_saved_terraform_plan() {
   local scope_name="$1"
   local terraform_root="$2"
-  local extra_var_file="${3:-}"
+  local var_file="$3"
+  local extra_var_file="${4:-}"
   local plan_path
   local -a extra_var_file_args=()
 
@@ -141,7 +144,7 @@ run_saved_terraform_plan() {
   terraform -chdir="$terraform_root" fmt -check -recursive || return 1
   terraform -chdir="$terraform_root" validate || return 1
   terraform -chdir="$terraform_root" plan -input=false \
-    -out="$plan_path" -var-file=uat.tfvars "${extra_var_file_args[@]+"${extra_var_file_args[@]}"}" || return 1
+    -out="$plan_path" -var-file="$var_file" "${extra_var_file_args[@]+"${extra_var_file_args[@]}"}" || return 1
 
   if [[ -n "$extra_var_file" ]]; then
     rm -f "$extra_var_file"
@@ -156,7 +159,97 @@ run_saved_terraform_plan() {
 # ---------------------------------------------------------------------------
 provision_access_governance_scope() {
   provision_backend_scope "access-governance" || return 1
-  run_saved_terraform_plan "access-governance" "$GOVERNANCE_TF_DIR"
+  run_saved_terraform_plan "access-governance" "$GOVERNANCE_TF_DIR" "uat.tfvars"
+}
+
+# ---------------------------------------------------------------------------
+# _eks_platform_var_file_for_environment
+# ---------------------------------------------------------------------------
+#
+# Per-environment tfvars for eks-platform live under
+# platform-prerequisites/terraform/environments/<env>/eks-platform.tfvars
+# (a different layout than access-governance/eks-access's in-directory
+# uat.tfvars), because this root is also used by dev/prod, not only uat.
+_eks_platform_var_file_for_environment() {
+  printf '%s/platform-prerequisites/terraform/environments/%s/eks-platform.tfvars' \
+    "${_ACCESS_SCOPES_ROOT_DIR}" "${ENVIRONMENT}"
+}
+
+# ---------------------------------------------------------------------------
+# provision_eks_platform_scope
+# ---------------------------------------------------------------------------
+#
+# Provisions the real EKS cluster (network, EKS, IAM, KMS, EFS, AWS Backup)
+# for the current environment. Runs the two-phase OIDC bootstrap
+# automatically on a from-scratch apply: the committed tfvars carries a
+# placeholder cluster_oidc_issuer_url (the real value cannot exist before
+# the cluster does); the first apply succeeds regardless since the OIDC
+# provider resource only needs an explicit thumbprint, not URL
+# reachability. Once the cluster exists, this reads the real issuer via
+# `aws eks describe-cluster` and re-applies so the OIDC provider and every
+# IRSA trust policy point at the correct issuer.
+provision_eks_platform_scope() {
+  local var_file
+  local real_issuer
+  local current_issuer
+
+  var_file="$(_eks_platform_var_file_for_environment)"
+  [[ -r "$var_file" ]] || {
+    _access_scopes_error "eks-platform tfvars file is not readable: ${var_file}"
+    return 1
+  }
+
+  provision_backend_scope "eks-platform" || return 1
+  run_saved_terraform_plan "eks-platform" "$EKS_PLATFORM_TF_DIR" "$var_file" || return 1
+
+  real_issuer="$(aws eks describe-cluster \
+    --name "$EKS_CLUSTER_NAME" \
+    --region "$AWS_REGION" \
+    --query 'cluster.identity.oidc.issuer' \
+    --output text 2>/dev/null)" || {
+    _access_scopes_error "unable to read the real OIDC issuer for cluster ${EKS_CLUSTER_NAME}"
+    return 1
+  }
+  [[ -n "$real_issuer" && "$real_issuer" != "None" ]] || {
+    _access_scopes_error "cluster ${EKS_CLUSTER_NAME} reported an empty OIDC issuer"
+    return 1
+  }
+
+  current_issuer="$(rg -N 'cluster_oidc_issuer_url\s*=\s*"([^"]*)"' -r '$1' "$var_file")" || {
+    _access_scopes_error "unable to read cluster_oidc_issuer_url from ${var_file}"
+    return 1
+  }
+
+  if [[ "$current_issuer" == "$real_issuer" ]]; then
+    return 0
+  fi
+
+  sed -i.bak "s#cluster_oidc_issuer_url = \"${current_issuer}\"#cluster_oidc_issuer_url = \"${real_issuer}\"#" "$var_file" || return 1
+  rm -f "${var_file}.bak"
+
+  run_saved_terraform_plan "eks-platform" "$EKS_PLATFORM_TF_DIR" "$var_file"
+}
+
+# ---------------------------------------------------------------------------
+# destroy_eks_platform_scope
+# ---------------------------------------------------------------------------
+#
+# Destroys the eks-platform Terraform root. Called only after
+# eks_internal_eks_platform_destroy_handler's foundation guards and drift
+# recheck have already passed (identity/region/context verified, backup
+# retention/lock/deletion-protection confirmed, no live drift since the
+# pre-destroy guard ran).
+destroy_eks_platform_scope() {
+  local var_file
+
+  var_file="$(_eks_platform_var_file_for_environment)"
+  [[ -r "$var_file" ]] || {
+    _access_scopes_error "eks-platform tfvars file is not readable: ${var_file}"
+    return 1
+  }
+
+  provision_backend_scope "eks-platform" || return 1
+  terraform -chdir="$EKS_PLATFORM_TF_DIR" destroy -input=false -auto-approve -var-file="$var_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -202,7 +295,7 @@ provision_eks_access_scope() {
   "$PRINCIPAL_VALIDATOR" --input "$principal_input" --output "$generated_tfvars" || return 1
 
   provision_backend_scope "eks-access" || return 1
-  run_saved_terraform_plan "eks-access" "$EKS_ACCESS_TF_DIR" "$generated_tfvars"
+  run_saved_terraform_plan "eks-access" "$EKS_ACCESS_TF_DIR" "uat.tfvars" "$generated_tfvars"
 }
 
 # ---------------------------------------------------------------------------
@@ -233,4 +326,16 @@ verify_eks_access_scope_readiness() {
     --bucket "$TF_STATE_BUCKET" \
     --key "$EKS_ACCESS_STATE_KEY" \
     --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID" >/dev/null
+}
+
+verify_eks_platform_scope_readiness() {
+  aws s3api head-object \
+    --bucket "$TF_STATE_BUCKET" \
+    --key "$EKS_PLATFORM_STATE_KEY" \
+    --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID" >/dev/null || return 1
+  aws eks describe-cluster \
+    --name "$EKS_CLUSTER_NAME" \
+    --region "$AWS_REGION" \
+    --query 'cluster.status' \
+    --output text 2>/dev/null | grep -qx "ACTIVE"
 }

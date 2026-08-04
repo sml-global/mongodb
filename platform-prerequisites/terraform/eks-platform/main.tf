@@ -11,6 +11,12 @@ module "network" {
   nat_mode              = var.nat_mode
 }
 
+module "kms" {
+  source = "../modules/kms"
+
+  name_prefix = var.name_prefix
+}
+
 module "eks" {
   source = "../modules/eks"
 
@@ -31,7 +37,7 @@ module "eks" {
   node_max_size         = var.node_max_size
   node_root_volume_size = var.node_root_volume_size
   node_spot_enabled     = var.node_spot_enabled
-  cluster_kms_key_arn   = var.cluster_kms_key_arn
+  cluster_kms_key_arn   = module.kms.cluster_kms_key_arn
   addons                = var.addons
 
   depends_on = [module.network]
@@ -67,7 +73,7 @@ module "backup" {
   name_prefix              = var.name_prefix
   deployment_environment   = var.environment
   backup_retention_days    = var.backup_retention_days
-  backup_kms_key_arn       = var.backup_kms_key_arn
+  backup_kms_key_arn       = module.kms.backup_kms_key_arn
   backup_service_role_arn  = var.backup_service_role_arn
   vault_min_retention_days = var.vault_min_retention_days
   vault_max_retention_days = var.vault_max_retention_days
