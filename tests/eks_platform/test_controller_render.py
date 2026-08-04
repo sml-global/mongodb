@@ -41,16 +41,35 @@ class ControllerRenderTests(unittest.TestCase):
     def test_sources_use_explicit_pinned_tags(self):
         text = read(BASE_ROOT / "sources.yaml")
 
-        self.assertEqual(text.count("kind: OCIRepository"), 5)
-        self.assertRegex(text, r"name:\s*cert-manager[\s\S]*?tag:\s*v1\.17\.2")
-        self.assertRegex(text, r"name:\s*kyverno[\s\S]*?tag:\s*v3\.3\.7")
-        self.assertRegex(text, r"name:\s*cluster-autoscaler[\s\S]*?tag:\s*9\.46\.6")
-        self.assertRegex(text, r"name:\s*metrics-server[\s\S]*?tag:\s*3\.12\.2")
-        self.assertRegex(text, r"name:\s*aws-load-balancer-controller[\s\S]*?tag:\s*1\.13\.0")
+        # kyverno is a real published OCI artifact and uses OCIRepository;
+        # cert-manager, cluster-autoscaler, metrics-server, and
+        # aws-load-balancer-controller either aren't published as OCI
+        # artifacts at all by their upstream projects, or (cert-manager)
+        # have a real OCI artifact that Flux's source-controller v1.9.2
+        # fails to extract ("requires gzip-compressed body: gzip: invalid
+        # header", confirmed against a live cluster even though `helm
+        # pull`/`helm show chart` fetch the identical artifact successfully)
+        # -- see #43. All four use HelmRepository against each project's
+        # plain HTTPS chart-repo index instead.
+        self.assertEqual(text.count("kind: OCIRepository"), 1)
+        self.assertEqual(text.count("kind: HelmRepository"), 4)
+        self.assertRegex(text, r"name:\s*cert-manager[\s\S]*?url:\s*https://charts\.jetstack\.io")
+        self.assertRegex(text, r"name:\s*kyverno[\s\S]*?tag:\s*\"?3\.3\.7\"?")
+        self.assertRegex(text, r"name:\s*cluster-autoscaler[\s\S]*?url:\s*https://kubernetes\.github\.io/autoscaler")
+        self.assertRegex(text, r"name:\s*metrics-server[\s\S]*?url:\s*https://kubernetes-sigs\.github\.io/metrics-server/")
+        self.assertRegex(text, r"name:\s*aws-load-balancer-controller[\s\S]*?url:\s*https://aws\.github\.io/eks-charts")
 
         self.assertNotRegex(text, r"tag:\s*latest")
         self.assertNotRegex(text, r"tag:\s*main")
         self.assertNotRegex(text, r"tag:\s*master")
+
+    def test_helm_repository_releases_pin_explicit_chart_versions(self):
+        text = read(BASE_ROOT / "releases.yaml")
+        self.assertRegex(text, r"name:\s*cert-manager[\s\S]*?version:\s*\"?v1\.17\.2\"?")
+        self.assertRegex(text, r"name:\s*cluster-autoscaler[\s\S]*?version:\s*\"?9\.46\.6\"?")
+        self.assertRegex(text, r"name:\s*metrics-server[\s\S]*?version:\s*\"?3\.12\.2\"?")
+        self.assertRegex(text, r"name:\s*aws-load-balancer-controller[\s\S]*?version:\s*\"?1\.13\.0\"?")
+        self.assertNotRegex(text, r"version:\s*latest")
 
     def test_releases_have_bounded_timeout_and_remediation(self):
         text = read(BASE_ROOT / "releases.yaml")
