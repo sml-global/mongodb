@@ -1,0 +1,41 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# UAT's MongoDB namespace is mongodb-uat (see
+# k8s/overlays/uat/kustomization.yaml and
+# platform-prerequisites/terraform/mongodb/terraform.uat.tfvars), distinct
+# from dev's mongodb -- retarget both the operator's own namespace and its
+# watchNamespace so it actually watches the PerconaServerMongoDB CR applied
+# by k8s/overlays/uat.
+patches:
+  - patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: mongodb-uat
+    target:
+      kind: HelmRelease
+      name: percona-server-mongodb-operator
+  - patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: mongodb-uat
+    target:
+      kind: HelmRepository
+      name: percona
+  - patch: |-
+      - op: replace
+        path: /spec/chart/spec/sourceRef/namespace
+        value: mongodb-uat
+    target:
+      kind: HelmRelease
+      name: percona-server-mongodb-operator
+  - patch: |-
+      - op: replace
+        path: /spec/values/watchNamespace
+        value: mongodb-uat
+    target:
+      kind: HelmRelease
+      name: percona-server-mongodb-operator

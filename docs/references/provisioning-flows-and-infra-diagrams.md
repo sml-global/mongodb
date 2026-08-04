@@ -145,7 +145,7 @@ flowchart TD
   A["provision-k8s-components.sh mongodb"] --> B["preflight_scope mongodb<br/>(cluster/context checks)"]
   B --> C["apply_operators()<br/>kubectl apply -k gitops/operators/base<br/>Provisions: Percona Operator HelmRelease + HelmRepository<br/>(requires Flux CRDs already installed)"]
   C --> D["bootstrap-dev-secrets.sh<br/>Provisions: encryption-key Secret + 4 Percona user-credential<br/>Secrets (backup, clusterAdmin, clusterMonitor, userAdmin)<br/>SKIPS any secret that already exists"]
-  D --> E["apply_policies()<br/>kubectl apply -k policies/kyverno<br/>Provisions 4 ClusterPolicies:<br/>• block-app-mongodb-password-secrets<br/>• require-wffc-for-mongodb-storageclass<br/>• require-wffc-for-postgresql-storageclass<br/>• require-pbm-sidecar-resource-fencing<br/>(requires Kyverno ClusterPolicy CRD)"]
+  D --> E["apply_policies()<br/>kubectl apply -k policies/kyverno<br/>Provisions 3 ClusterPolicies:<br/>• require-wffc-for-mongodb-storageclass<br/>• require-wffc-for-postgresql-storageclass<br/>• require-pbm-sidecar-resource-fencing<br/>(requires Kyverno ClusterPolicy CRD)"]
   E --> F["wait_for_mongodb_crd<br/>poll until PerconaServerMongoDB CRD is Established"]
   F --> G["apply_overlay()<br/>kubectl apply -k k8s/overlays/${ENVIRONMENT:-dev}<br/>Provisions: PSMDB Cluster CR (replica set),<br/>cert-manager TLS Certificates, PodDisruptionBudget,<br/>gp3 StorageClass, MongoDB+PostgreSQL metrics collectors"]
   G --> H[Done: MongoDB replica set provisioning triggered]

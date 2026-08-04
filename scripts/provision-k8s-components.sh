@@ -491,7 +491,12 @@ apply_operators() {
     "Install Flux source/helm controllers first (HelmRelease CRD is missing), then rerun this command."
   require_crd "helmrepositories.source.toolkit.fluxcd.io" \
     "Install Flux source/helm controllers first (HelmRepository CRD is missing), then rerun this command."
-  kubectl apply -k "$ROOT_DIR/gitops/operators/base"
+  # The Percona operator's namespace/watchNamespace must match this
+  # environment's real MongoDB namespace (mongodb for dev, mongodb-uat for
+  # uat -- see k8s/overlays/<env>/kustomization.yaml's own namespace
+  # override) or the operator never reconciles the PerconaServerMongoDB CR
+  # applied by apply_overlay. See #57.
+  kubectl apply -k "$ROOT_DIR/gitops/operators/overlays/${ENVIRONMENT:-dev}"
 }
 
 apply_policies() {

@@ -18,3 +18,7 @@ docs/operations/command-log.md
 config/environments/*.local/
 .local/
 __pycache__/
+
+.local-uat-encryption-key.txt
+
+.local-uat-user-passwords.txt
