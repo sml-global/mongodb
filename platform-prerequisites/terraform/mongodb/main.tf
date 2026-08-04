@@ -24,17 +24,20 @@ resource "aws_iam_role_policy" "pbm_s3_access" {
   role = element(split("/", module.mongodb_prerequisites.operator_iam_role_arn), length(split("/", module.mongodb_prerequisites.operator_iam_role_arn)) - 1)
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
-      Resource = [
-        "arn:aws:s3:::${var.pbm_bucket_name}",
-        "arn:aws:s3:::${var.pbm_bucket_name}/*"
-      ]
-      }, {
-      Effect   = "Allow"
-      Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
-      Resource = var.kms_key_arn != "" ? [var.kms_key_arn] : []
-    }]
+    Statement = concat(
+      [{
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
+        Resource = [
+          "arn:aws:s3:::${var.pbm_bucket_name}",
+          "arn:aws:s3:::${var.pbm_bucket_name}/*"
+        ]
+      }],
+      var.kms_key_arn != "" ? [{
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
+        Resource = [var.kms_key_arn]
+      }] : []
+    )
   })
 }
