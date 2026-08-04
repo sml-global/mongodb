@@ -1,8 +1,8 @@
 # EKS Platform Component Contract
 
 **Owned by:** Phase 2 EKS Platform (Tasks 1-8)  
-**Documentation Date:** 2026-07-27  
-**Status:** Static implementation complete (not deployed, tested, or accepted)
+**Documentation Date:** 2026-07-27 (implementation); updated 2026-08-04 (deployment status)  
+**Status:** Deployed and live-verified in UAT (`eks-platform`, `workload-identity`, `platform-controllers` all provisioned, verified, and destroy-tested end-to-end)
 
 ## Overview
 
@@ -294,10 +294,11 @@ This component exports **no CLI flags, public modes, or standalone executables**
 
 ## Implementation Status
 
-**As of 2026-07-27:**
-- Tasks 1-8 are complete and committed to the worktree.
-- Static implementation is verified: syntax checks, 129+ test cases, all passing.
-- Component is **NOT deployed, NOT tested in UAT, and NOT accepted** for production use.
-- No runtime execution or real-world validation has been performed.
+**As of 2026-08-04:**
+- Tasks 1-8's static implementation (Terraform modules, gitops manifests, schema fragment, docs, tests) landed 2026-07-27.
+- The runtime dispatch wiring the static implementation initially lacked (provision/destroy mutation for `workload-identity`/`platform-controllers`, pre-destroy guard registration, unified `verify` never loading package fragments) was completed and merged across issues #35/#37/#38/#41/#43/#44/#46 (PRs #39, #40, #42, #45, #47, #48).
+- **All three scopes — `eks-platform`, `workload-identity`, `platform-controllers` — are live-provisioned, live-verified, and destroy-tested against real UAT** (AWS account 672172129937, cluster `oms-uat-eks-cluster`). `bash scripts/provision.sh --env uat <scope> --auto-approve` and `bash scripts/verify-platform-health.sh --env uat --full` both work end-to-end with no manual intervention. See the [Operator Runbook's Unified UAT Provisioning section](../guides/operator-runbook.md#unified-uat-provisioning---env-uat) for the confirmed working procedure.
+- `platform-controllers` brings up cert-manager, Kyverno, cluster-autoscaler, metrics-server, and the AWS Load Balancer Controller — all five confirmed `READY=True` with healthy pods on a fresh provision.
+- `workload-identity`'s `identities` map remains `{}` in committed tfvars (no consumer has registered a Pod Identity association yet) — this is expected, not a gap; the root itself is fully wired and provisions/destroys cleanly.
 
-This document describes the architecture and contract. Actual deployment, acceptance testing, and go-live decisions remain outside the scope of this package implementation.
+This document describes the architecture and contract; the procedural how-to for provisioning lives in the Operator Runbook.
