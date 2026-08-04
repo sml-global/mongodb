@@ -54,16 +54,20 @@ _eks_live_efs_prevent_destroy_declared() {
 }
 
 # Live AWS Backup vault lock state for the environment's backup vault.
+# AWS's `VaultLockState` field only reports a value during the lock's
+# transitional IN_PROGRESS window and is `None`/absent once a lock is fully
+# committed -- `Locked` (boolean) is the durable, committed-state indicator
+# and is what this checks.
 _eks_live_vault_lock_state() {
   local vault_name="$1"
-  local state
-  state="$(aws backup describe-backup-vault \
+  local locked
+  locked="$(aws backup describe-backup-vault \
     --backup-vault-name "$vault_name" \
     --region "$AWS_REGION" \
-    --query 'VaultLockState' \
+    --query 'Locked' \
     --output text 2>/dev/null)" || return 1
-  case "$state" in
-    LOCKED) printf 'locked' ;;
+  case "$locked" in
+    true|True|TRUE) printf 'locked' ;;
     *) printf 'unlocked' ;;
   esac
 }
@@ -94,8 +98,8 @@ eks_internal_live_destroy_drift_vector() {
     return 1
   }
   case "$eks_deletion_protection" in
-    true) eks_deletion_protection="enabled" ;;
-    false) eks_deletion_protection="disabled" ;;
+    true|True|TRUE) eks_deletion_protection="enabled" ;;
+    false|False|FALSE) eks_deletion_protection="disabled" ;;
     *) eks_deletion_protection="disabled" ;;
   esac
 
@@ -149,8 +153,8 @@ eks_internal_live_guard_observations() {
     return 1
   }
   case "$eks_deletion_protection" in
-    true) eks_deletion_protection="enabled" ;;
-    false) eks_deletion_protection="disabled" ;;
+    true|True|TRUE) eks_deletion_protection="enabled" ;;
+    false|False|FALSE) eks_deletion_protection="disabled" ;;
     *) eks_deletion_protection="disabled" ;;
   esac
 

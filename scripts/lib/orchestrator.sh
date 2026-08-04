@@ -1153,7 +1153,9 @@ _orchestrator_destroy_second_pass() {
       _ORCHESTRATOR_VALIDATE_ARGS+=(--resolved-scope "$builder_step")
     done
     for builder_step in "${cli_confirmations[@]:-}"; do
-      [[ -n "$builder_step" ]] && _ORCHESTRATOR_VALIDATE_ARGS+=(--confirmation "$builder_step")
+      if [[ -n "$builder_step" ]]; then
+        _ORCHESTRATOR_VALIDATE_ARGS+=(--confirmation "$builder_step")
+      fi
     done
   }
 
