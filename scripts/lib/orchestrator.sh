@@ -460,6 +460,15 @@ _orchestrator_run_verify() {
     return 1
   fi
 
+  # Package fragments are loaded before graph pre-resolution: they define
+  # the real handler functions that the checks below (and dispatch later)
+  # must be able to name and call. Mirrors the identical call in the
+  # provision/destroy dispatch paths (see _orchestrator_load_package_fragments
+  # usage above) -- without it, every component-scope verifier symbol
+  # resolves to scope-registry.sh's raw placeholder, even for scopes whose
+  # real verifier a package fragment has already overridden.
+  _orchestrator_load_package_fragments verify "${slots[@]}" || return 1
+
   # Fail-closed graph pre-resolution: every slot must have a mapped handler
   # symbol before anything runs.
   for slot in "${slots[@]}"; do

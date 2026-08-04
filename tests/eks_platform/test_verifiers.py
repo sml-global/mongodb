@@ -341,6 +341,7 @@ class EksGuardRuntimeFixture(RepositoryFixture):
             "scripts/lib/scope-verifiers.d/10-foundation-access.sh",
             "scripts/lib/scope-verifiers.d/20-eks-platform.sh",
             "scripts/lib/packages/10-foundation-access/internal/access-scopes.sh",
+            "scripts/lib/packages/20-eks-platform/internal/live-observations.sh",
             "scripts/lib/packages/20-eks-platform/internal/lifecycle-handlers.sh",
             "scripts/lib/packages/20-eks-platform/internal/verifiers.sh",
             "scripts/lib/packages/20-eks-platform/internal/pre-destroy-guards.sh",

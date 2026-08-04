@@ -13,3 +13,5 @@ scope_registry_deferred_workload_identity_destroy() { eks_internal_workload_iden
 scope_registry_deferred_platform_controllers_destroy() { eks_internal_platform_controllers_destroy_handler "$@"; }
 
 scope_registry_pre_destroy_guard_eks_platform() { eks_internal_eks_platform_pre_destroy_guard "$@"; }
+scope_registry_pre_destroy_guard_workload_identity() { eks_internal_workload_identity_pre_destroy_guard "$@"; }
+scope_registry_pre_destroy_guard_platform_controllers() { eks_internal_platform_controllers_pre_destroy_guard "$@"; }

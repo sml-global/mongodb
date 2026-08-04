@@ -18,13 +18,16 @@ CANONICAL_WRAPPERS = {
 }
 
 DISALLOWED_CANONICAL_SYMBOLS = (
-    "scope_registry_pre_destroy_guard_eks_platform",
-    "scope_registry_pre_destroy_guard_workload_identity",
-    "scope_registry_pre_destroy_guard_platform_controllers",
     "scope_registry_verify_eks_platform",
     "scope_registry_verify_workload_identity",
     "scope_registry_verify_platform_controllers",
 )
+
+PRE_DESTROY_GUARD_WRAPPERS = {
+    "scope_registry_pre_destroy_guard_eks_platform": "eks_internal_eks_platform_pre_destroy_guard",
+    "scope_registry_pre_destroy_guard_workload_identity": "eks_internal_workload_identity_pre_destroy_guard",
+    "scope_registry_pre_destroy_guard_platform_controllers": "eks_internal_platform_controllers_pre_destroy_guard",
+}
 
 
 class HandlerFragmentStaticContractTests(unittest.TestCase):
@@ -32,7 +35,8 @@ class HandlerFragmentStaticContractTests(unittest.TestCase):
         content = (REPO_ROOT / HANDLER_FRAGMENT).read_text(encoding="utf-8")
 
         function_names = re.findall(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)", content, flags=re.MULTILINE)
-        self.assertEqual(set(function_names), set(CANONICAL_WRAPPERS))
+        expected_names = set(CANONICAL_WRAPPERS) | set(PRE_DESTROY_GUARD_WRAPPERS)
+        self.assertEqual(set(function_names), expected_names)
 
         source_lines = [
             line.strip() for line in content.splitlines()
@@ -41,15 +45,27 @@ class HandlerFragmentStaticContractTests(unittest.TestCase):
         self.assertEqual(
             source_lines,
             [
-                'source_package_internal_library "20-eks-platform/internal/lifecycle-handlers.sh" || return 1'
+                'source_package_internal_library "20-eks-platform/internal/live-observations.sh" || return 1',
+                'source_package_internal_library "20-eks-platform/internal/lifecycle-handlers.sh" || return 1',
+                'source_package_internal_library "20-eks-platform/internal/pre-destroy-guards.sh" || return 1',
             ],
         )
 
         self.assertNotIn("verifiers.sh", content)
-        self.assertNotIn("pre-destroy-guards.sh", content)
         self.assertNotIn("../", content)
         self.assertNotIn("$(`", content)
-        self.assertNotIn("$(", source_lines[0])
+        for line in source_lines:
+            self.assertNotIn("$(", line)
+
+    def test_pre_destroy_guard_wrappers_delegate_exactly_to_mapped_internal_guards(self):
+        content = (REPO_ROOT / HANDLER_FRAGMENT).read_text(encoding="utf-8")
+        for wrapper, internal in PRE_DESTROY_GUARD_WRAPPERS.items():
+            with self.subTest(wrapper=wrapper):
+                pattern = re.compile(
+                    r"^" + re.escape(wrapper) + r"\(\)\s*\{\s*" + re.escape(internal) + r'\s+"\$@";\s*\}',
+                    flags=re.MULTILINE,
+                )
+                self.assertRegex(content, pattern)
 
     def test_wrapper_definitions_delegate_exactly_to_mapped_internal_helpers(self):
         content = (REPO_ROOT / HANDLER_FRAGMENT).read_text(encoding="utf-8")
@@ -103,7 +119,9 @@ class EksHandlerRuntimeFixture(RepositoryFixture):
             "scripts/lib/scope-handlers.d/20-eks-platform.sh",
             "scripts/lib/scope-verifiers.d/10-foundation-access.sh",
             "scripts/lib/packages/10-foundation-access/internal/access-scopes.sh",
+            "scripts/lib/packages/20-eks-platform/internal/live-observations.sh",
             "scripts/lib/packages/20-eks-platform/internal/lifecycle-handlers.sh",
+            "scripts/lib/packages/20-eks-platform/internal/pre-destroy-guards.sh",
             "config/environment-schema/base.manifest",
             "config/environments/dev.env",
             "config/environments/uat.env",
