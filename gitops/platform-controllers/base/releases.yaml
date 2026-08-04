@@ -70,11 +70,12 @@ spec:
   values:
     autoDiscovery:
       clusterName: REPLACE_CLUSTER_NAME
-    serviceAccount:
-      create: false
-      name: REPLACE_AUTOSCALER_SERVICE_ACCOUNT
-      annotations:
-        eks.amazonaws.com/role-arn: REPLACE_CLUSTER_AUTOSCALER_ROLE_ARN
+    rbac:
+      serviceAccount:
+        create: false
+        name: REPLACE_AUTOSCALER_SERVICE_ACCOUNT
+        annotations:
+          eks.amazonaws.com/role-arn: REPLACE_CLUSTER_AUTOSCALER_ROLE_ARN
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease

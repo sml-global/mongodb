@@ -30,23 +30,43 @@ replacements:
   - source:
       kind: ConfigMap
       name: platform-controller-settings
-      fieldPath: data.AUTOSCALER_SERVICE_ACCOUNT
-    targets:
-      - select:
-          kind: HelmRelease
-          name: cluster-autoscaler
-        fieldPaths:
-          - spec.values.serviceAccount.name
-  - source:
-      kind: ConfigMap
-      name: platform-controller-settings
       fieldPath: data.CLUSTER_AUTOSCALER_ROLE_ARN
     targets:
       - select:
           kind: HelmRelease
           name: cluster-autoscaler
         fieldPaths:
-          - spec.values.serviceAccount.annotations.[eks.amazonaws.com/role-arn]
+          - spec.values.rbac.serviceAccount.annotations.[eks.amazonaws.com/role-arn]
+      - select:
+          kind: ServiceAccount
+          name: REPLACE_AUTOSCALER_SERVICE_ACCOUNT
+        fieldPaths:
+          - metadata.annotations.[eks.amazonaws.com/role-arn]
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.AUTOSCALER_SERVICE_ACCOUNT
+    targets:
+      - select:
+          kind: HelmRelease
+          name: cluster-autoscaler
+        fieldPaths:
+          - spec.values.rbac.serviceAccount.name
+      - select:
+          kind: ServiceAccount
+          name: REPLACE_AUTOSCALER_SERVICE_ACCOUNT
+        fieldPaths:
+          - metadata.name
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.LOAD_BALANCER_CONTROLLER_ROLE_ARN
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: aws-load-balancer-controller
+        fieldPaths:
+          - metadata.annotations.[eks.amazonaws.com/role-arn]
   - source:
       kind: ConfigMap
       name: platform-controller-settings
