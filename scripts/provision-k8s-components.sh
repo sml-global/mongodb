@@ -505,6 +505,19 @@ apply_overlay() {
 }
 
 apply_signoz() {
+  # SigNoz's PVCs (gitops/signoz/base/helmreleases.yaml) request the
+  # gp3-mongodb StorageClass, which is otherwise only ever applied as part
+  # of the mongodb/overlay scope's own manifests (k8s/base/
+  # storageclass-gp3-mongodb.yaml) -- unrelated to SigNoz's own resource
+  # ownership, but reusing the same StorageClass name. Without it, SigNoz's
+  # PVCs stay Pending indefinitely ("unbound immediate
+  # PersistentVolumeClaims") and this function's own readiness wait below
+  # times out with no actionable error. Apply it here too (idempotent) so
+  # this scope is self-sufficient regardless of whether mongodb has been
+  # provisioned first -- same self-sufficiency pattern as the root-user
+  # Secret handling immediately below.
+  kubectl apply -f "$ROOT_DIR/k8s/base/storageclass-gp3-mongodb.yaml"
+
   # gitops/signoz/base/helmreleases.yaml wires SIGNOZ_USER_ROOT_EMAIL/PASSWORD
   # to the 'signoz-root-user' Secret via secretKeyRef (no `optional: true`),
   # so the signoz-0 pod hits CreateContainerConfigError if that Secret
