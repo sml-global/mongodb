@@ -316,6 +316,22 @@ _platform_controllers_overlay_dir_for_environment() {
 }
 
 # ---------------------------------------------------------------------------
+# _bootstrap_flux_controllers
+# ---------------------------------------------------------------------------
+#
+# Installs Flux's source/helm controllers via the same Helm chart and
+# release name as the legacy dev-only flow's bootstrap_flux_controllers
+# (scripts/provision-k8s-components.sh:261-269), so both paths converge on
+# one Flux installation per cluster. Idempotent: `helm upgrade --install`
+# is a no-op reconcile if Flux is already present and current.
+_bootstrap_flux_controllers() {
+  helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts >/dev/null || return 1
+  helm repo update >/dev/null || return 1
+  kubectl create namespace flux-system --dry-run=client -o yaml | kubectl apply -f - >/dev/null || return 1
+  helm upgrade --install flux2 fluxcd-community/flux2 -n flux-system
+}
+
+# ---------------------------------------------------------------------------
 # provision_platform_controllers_scope
 # ---------------------------------------------------------------------------
 #
@@ -323,11 +339,14 @@ _platform_controllers_overlay_dir_for_environment() {
 # scope has no *_STATE_KEY, matching how `mongodb`/`signoz`/`postgresql`
 # already apply their gitops overlays directly via `kubectl apply -k`
 # (scripts/provision-k8s-components.sh) rather than through a Terraform
-# root. This follows that established, already-proven pattern -- Flux's own
-# HelmRelease/HelmRepository CRDs must already be registered on the cluster
-# (installed by the `eks-platform` scope's managed add-ons/bootstrap), and
-# Flux reconciles the applied manifests asynchronously after `kubectl apply`
+# root. This follows that established, already-proven pattern -- Flux
+# reconciles the applied manifests asynchronously after `kubectl apply`
 # returns.
+#
+# Bootstraps Flux itself if its CRDs aren't already registered on the
+# cluster, following the same self-sufficiency pattern as `apply_signoz` in
+# provision-k8s-components.sh (which creates its own required Secret before
+# applying rather than assuming it exists) -- see #41.
 provision_platform_controllers_scope() {
   local overlay_dir
 
@@ -340,14 +359,13 @@ provision_platform_controllers_scope() {
   verify_kubernetes_context || return 1
   verify_eks_authentication_mode || return 1
 
-  kubectl get crd helmreleases.helm.toolkit.fluxcd.io >/dev/null 2>&1 || {
-    _access_scopes_error "Flux HelmRelease CRD is not registered on this cluster; install Flux controllers before provisioning platform-controllers"
-    return 1
-  }
-  kubectl get crd helmrepositories.source.toolkit.fluxcd.io >/dev/null 2>&1 || {
-    _access_scopes_error "Flux HelmRepository CRD is not registered on this cluster; install Flux controllers before provisioning platform-controllers"
-    return 1
-  }
+  if ! kubectl get crd helmreleases.helm.toolkit.fluxcd.io >/dev/null 2>&1 \
+    || ! kubectl get crd helmrepositories.source.toolkit.fluxcd.io >/dev/null 2>&1; then
+    _bootstrap_flux_controllers || {
+      _access_scopes_error "failed to bootstrap Flux controllers for platform-controllers"
+      return 1
+    }
+  fi
 
   kubectl apply -k "$overlay_dir"
 }
