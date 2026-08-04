@@ -122,13 +122,124 @@ same order, use `bash scripts/provision-uat-access.sh all` with the same
 approval rules.
 
 This foundation provisions only UAT Access Analyzer governance and the stated
-EKS workforce entries. Database authorization, workload and CSI identity,
-cross-account S3 access, and Boomi Platform authorization are deferred to later
-work packages. It does not provision or imply any of those capabilities. See
+EKS workforce entries. Database authorization and cross-account S3 access are
+deferred to later work packages. It does not provision or imply either of
+those capabilities. See
 [UAT Access Foundation Verification](../references/verification-commands.md#uat-access-foundation-verification)
 for the current evidence status and future authorized checks.
 
+For EKS cluster provisioning itself, and for platform-controller/workload-
+identity setup (cluster autoscaler, cert-manager, Kyverno, the AWS Load
+Balancer Controller, and the generic Pod Identity root), use the unified
+`--env uat` orchestrator described immediately below rather than this
+narrower access-only script.
+
 ---
+
+## Unified UAT Provisioning (`--env uat`)
+
+`scripts/provision.sh`, `scripts/destroy.sh`, and
+`scripts/verify-platform-health.sh` all accept a leading `--env uat` (or
+`--env dev`) argument that routes to a newer, broader orchestrator covering
+the full scope graph: `backend`, `access-governance`, `eks-platform`,
+`eks-access`, `workload-identity`, `platform-controllers`, and (as later work
+packages land) the data-layer scopes. Omitting `--env` runs the older,
+narrower legacy dev-only flow described elsewhere in this runbook — the two
+paths are separate implementations, not aliases of each other.
+
+### Prerequisites specific to this path
+
+- Complete [Authorized UAT Workstation Setup](environment-setup.md#authorized-uat-workstation-setup)
+  and the UAT Access Foundation Procedure above through at least
+  `eks-platform` — `workload-identity`/`platform-controllers` depend on it.
+- `unset AWS_PROFILE` before running any `--env uat` command. The
+  orchestrator's `reject_execution_environment_overrides` guard blocks
+  `AWS_PROFILE` as an environment variable and expects the `default` AWS CLI
+  profile to already resolve to the target account (see
+  [Authorized UAT Workstation Setup](environment-setup.md#authorized-uat-workstation-setup)
+  for how that profile is configured).
+- `helm` must be installed and on `PATH` — `platform-controllers` bootstraps
+  Flux itself via `helm upgrade --install`, the same mechanism the legacy
+  dev-only flow uses, so no separate Flux install step is required or
+  supported for this path.
+
+### Provisioning order
+
+Provision scopes one at a time, in this order, since each depends on the
+one before it:
+
+```bash
+unset AWS_PROFILE
+bash scripts/provision.sh --env uat backend --auto-approve
+bash scripts/provision.sh --env uat access-governance --auto-approve
+bash scripts/provision.sh --env uat eks-platform --auto-approve
+bash scripts/provision.sh --env uat workload-identity --auto-approve
+bash scripts/provision.sh --env uat platform-controllers --auto-approve
+```
+
+`eks-platform` provisions the real EKS cluster (network, IAM, KMS, EFS, AWS
+Backup) and automatically handles the two-phase OIDC bootstrap on a
+from-scratch apply (a placeholder OIDC issuer is committed in tfvars since the
+real one cannot exist before the cluster does; the script re-applies once the
+cluster is up to correct it — no manual step needed).
+
+`workload-identity` provisions a generic, map-driven EKS Pod Identity root.
+Its committed tfvars ship with `identities = {}` (no entries) by default, so a
+fresh apply creates zero AWS resources — this is expected; populate the map
+only once a real workload needs a dedicated Pod Identity association.
+
+`platform-controllers` is gitops/Flux-managed, not Terraform-owned. Running it
+bootstraps Flux (if its CRDs aren't already registered on the cluster) and
+then applies `gitops/platform-controllers/overlays/uat`, which brings up
+cert-manager, Kyverno, cluster-autoscaler, metrics-server, and (unless
+suspended for the environment) the AWS Load Balancer Controller — including
+the ServiceAccounts each of them needs, already wired to the correct IAM
+role ARNs. Expect the command itself to return in under a minute; the
+underlying Helm installs continue reconciling asynchronously for another
+1-2 minutes after that. Confirm with:
+
+```bash
+kubectl get helmreleases -A
+```
+
+All five releases should reach `READY=True` (`Helm install succeeded ...`) on
+their own, with no manual `helm uninstall`, Flux `reconcile` annotation, or
+other intervention required — a release that stays `False`/`Unknown` for more
+than a few minutes past `install`'s own 10-minute timeout indicates a real
+problem, not an expected transient state.
+
+### Verifying
+
+```bash
+bash scripts/verify-platform-health.sh --env uat --full
+```
+
+Reports a genuine `PASS`/`FAIL` per scope (not a placeholder). `backend`,
+`access-governance`, `eks-platform`, `workload-identity`, and
+`platform-controllers` should all report `PASS` once provisioned in order
+above. Scopes gated on a work package not yet implemented in this repo report
+their honest `requires work package N` message, distinguishable from a real
+failure.
+
+### Destroying
+
+Ordinary destroy for scopes in this path is a two-step confirmation:
+
+```bash
+bash scripts/destroy.sh --env uat platform-controllers --auto-approve
+# prints a confirmation artifact path; re-run supplying it:
+bash scripts/destroy.sh --env uat platform-controllers --auto-approve \
+  --confirmation-artifact .local/uat/generated/destroy-confirmation.<id>.json
+```
+
+Destroy for `workload-identity`/`platform-controllers` runs a real pre-destroy
+guard (verifying live cluster deletion-protection, EFS protection, and AWS
+Backup vault-lock state before proceeding) and writes evidence under
+`.local/uat/evidence/`. The same two-step pattern applies to `eks-platform`
+and every other ordinary-destroy scope in this path.
+
+---
+
 
 ## Provisioning Choices
 
