@@ -45,7 +45,7 @@ addons = {
     addon_version        = "v1.20.4-eksbuild.1"
     resolve_conflicts    = "OVERWRITE"
     service_account_role = false
-    configuration_values = jsonencode({ env = { ENABLE_PREFIX_DELEGATION = "true", WARM_PREFIX_TARGET = "1" } })
+    configuration_values = "{\"env\":{\"ENABLE_PREFIX_DELEGATION\":\"true\",\"WARM_PREFIX_TARGET\":\"1\"}}"
   }
   coredns = {
     enabled              = true
