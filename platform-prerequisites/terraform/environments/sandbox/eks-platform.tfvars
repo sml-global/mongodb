@@ -42,7 +42,6 @@ node_spot_enabled     = false
 
 # KMS Key for EKS encryption (dummy ARN for sandbox validation)
 # Terraform plan validates syntax only; does not check existence
-cluster_kms_key_arn = "arn:aws:kms:us-east-1:632674123947:key/11111111-2222-3333-4444-555555555555"
 
 # OIDC Provider for workload identity (dummy values for sandbox validation)
 cluster_oidc_thumbprint   = "9e99a48a9960b14926bb7f3b02e22da0afd40a4d"
@@ -57,7 +56,6 @@ efs_throughput_mode             = "bursting"
 enable_cluster_autoscaling = false
 backup_enabled             = true
 backup_retention_days      = 7
-backup_kms_key_arn         = "arn:aws:kms:us-east-1:632674123947:key/22222222-3333-4444-5555-666666666666"
 backup_service_role_arn    = "arn:aws:iam::632674123947:role/service-role/AWSBackupDefaultServiceRole"
 vault_min_retention_days   = 7
 vault_max_retention_days   = 35
