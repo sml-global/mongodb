@@ -2,11 +2,24 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-NAMESPACE="mongodb"
+# NAMESPACE/escrow file paths are environment-scoped so dev and uat never
+# collide or overwrite each other's secrets when both are bootstrapped from
+# the same working tree. Defaults preserve the exact pre-existing dev
+# behavior (namespace "mongodb", the original ".local-dev-*" escrow
+# filenames) when ENVIRONMENT is unset -- i.e. the legacy no-`--env` dev
+# flow is unaffected. See #58.
+_ENV="${ENVIRONMENT:-dev}"
+if [[ "$_ENV" == "dev" ]]; then
+  NAMESPACE="${MONGODB_NAMESPACE:-mongodb}"
+  ENCRYPTION_ESCROW_FILE="$ROOT_DIR/.local-dev-encryption-key.txt"
+  USERS_ESCROW_FILE="$ROOT_DIR/.local-dev-user-passwords.txt"
+else
+  NAMESPACE="${MONGODB_NAMESPACE:-mongodb-${_ENV}}"
+  ENCRYPTION_ESCROW_FILE="$ROOT_DIR/.local-${_ENV}-encryption-key.txt"
+  USERS_ESCROW_FILE="$ROOT_DIR/.local-${_ENV}-user-passwords.txt"
+fi
 ENCRYPTION_SECRET_NAME="psmdb-encryption-key"
-ENCRYPTION_ESCROW_FILE="$ROOT_DIR/.local-dev-encryption-key.txt"
 USERS_SECRET_NAME="psmdb-secrets"
-USERS_ESCROW_FILE="$ROOT_DIR/.local-dev-user-passwords.txt"
 GITIGNORE_FILE="$ROOT_DIR/.gitignore"
 
 # Percona PSMDB operator expected user keys in the users secret.
@@ -178,8 +191,8 @@ main() {
   fi
 
   # Ensure escrow files are in .gitignore.
-  ensure_gitignore_entry ".local-dev-encryption-key.txt"
-  ensure_gitignore_entry ".local-dev-user-passwords.txt"
+  ensure_gitignore_entry "$(basename "$ENCRYPTION_ESCROW_FILE")"
+  ensure_gitignore_entry "$(basename "$USERS_ESCROW_FILE")"
 
   # --- Encryption key secret ---
   if kubectl -n "$NAMESPACE" get secret "$ENCRYPTION_SECRET_NAME" >/dev/null 2>&1; then
