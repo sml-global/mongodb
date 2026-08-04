@@ -32,11 +32,17 @@ CANONICAL_WRAPPERS = {
 
 # Symbols that must NOT appear in the handler fragment or internal file.
 DISALLOWED_CANONICAL_SYMBOLS = (
-    "scope_registry_pre_destroy_guard_postgresql_core",
-    "scope_registry_pre_destroy_guard_postgresql_brand",
     "scope_registry_verify_postgresql_core",
     "scope_registry_verify_postgresql_brand",
 )
+
+# Pre-destroy guard wrappers the fragment must ALSO define, registered here
+# once #50 unblocked postgresql-core/postgresql-brand dispatch the same way
+# #35 did for the EKS-family scopes.
+PRE_DESTROY_GUARD_WRAPPERS = {
+    "scope_registry_pre_destroy_guard_postgresql_core": "postgresql_internal_postgresql_core_pre_destroy_guard",
+    "scope_registry_pre_destroy_guard_postgresql_brand": "postgresql_internal_postgresql_brand_pre_destroy_guard",
+}
 
 
 class HandlerFragmentStaticContractTests(unittest.TestCase):
@@ -53,10 +59,18 @@ class HandlerFragmentStaticContractTests(unittest.TestCase):
         self.assertEqual(
             source_lines,
             [
-                'source_package_internal_library "40-postgresql/internal/lifecycle-handlers.sh" || return 1'
+                'source_package_internal_library "40-postgresql/internal/lifecycle-handlers.sh" || return 1',
+                'source_package_internal_library "40-postgresql/internal/pre-destroy-guards.sh" || return 1',
             ],
-            "fragment must source exactly lifecycle-handlers.sh via validated helper",
+            "fragment must source lifecycle-handlers.sh then pre-destroy-guards.sh via validated helper",
         )
+
+    def test_pre_destroy_guard_wrappers_delegate_exactly_to_mapped_internal_guards(self):
+        content = self._content()
+        for wrapper, internal in PRE_DESTROY_GUARD_WRAPPERS.items():
+            with self.subTest(wrapper=wrapper):
+                expected_line = f'{wrapper}() {{ {internal} "$@"; }}'
+                self.assertIn(expected_line, content)
 
     def test_handler_wrappers_delegate_correctly_to_internal(self):
         content = self._content()

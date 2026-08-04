@@ -60,14 +60,8 @@ EXPECTED_DESTROY_ALL_ORDER = (
 
 # Deferred work-package mapping, exactly as specified in Task 3 Step 3.
 EXPECTED_WORK_PACKAGE_FOR_SCOPE = {
-    "mongodb": 4,
-    "postgresql-core": 4,
-    "postgresql-brand": 4,
-    "mongodb-access": 4,
     "database-access-core": 4,
     "database-access-brand": 4,
-    "signoz": 4,
-    "signoz-observability": 4,
     "boomi-runtime": 5,
 }
 
@@ -84,13 +78,17 @@ FRAGMENT_PENDING_SCOPES = ("backend", "access-governance", "eks-access")
 # FRAGMENT_PENDING_SCOPES above, which also asserts each scope's *raw*
 # canonical stub symbol reports the Task-5 message (a property only true for
 # scopes whose stub is still the file's own placeholder). eks-platform,
-# workload-identity, and platform-controllers are classified
-# foundation-fragment-pending for provision-order pre-resolution purposes,
-# but their canonical symbols are overridden by the EKS package fragment
-# (scope-handlers.d/20-eks-platform.sh) to real handlers, so they do not
-# belong in FRAGMENT_PENDING_SCOPES's raw-stub-message assertion.
+# workload-identity, platform-controllers, mongodb, mongodb-access,
+# postgresql-core, postgresql-brand, signoz, and signoz-observability are
+# classified foundation-fragment-pending for provision-order pre-resolution
+# purposes, but their canonical symbols are overridden by their own package
+# fragments (scope-handlers.d/20-eks-platform.sh, 30-mongodb.sh,
+# 40-postgresql.sh, 50-signoz.sh) to real handlers, so they do not belong in
+# FRAGMENT_PENDING_SCOPES's raw-stub-message assertion.
 IMPLEMENTATION_REQUIREMENT_FRAGMENT_PENDING_SCOPES = FRAGMENT_PENDING_SCOPES + (
     "eks-platform", "workload-identity", "platform-controllers",
+    "mongodb", "mongodb-access", "postgresql-core", "postgresql-brand",
+    "signoz", "signoz-observability",
 )
 
 EXPECTED_PROVISION_HANDLER = {
