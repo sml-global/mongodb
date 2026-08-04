@@ -113,8 +113,63 @@ resource "aws_iam_role" "cluster_autoscaler_role" {
   assume_role_policy = data.aws_iam_policy_document.service_account_assume.json
 }
 
+# Standard upstream cluster-autoscaler IAM policy (see
+# https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/cloudprovider/aws/README.md#IAM-Policy).
+# Read actions are unscoped (cluster-autoscaler must discover ASGs across
+# the account by tag); mutating actions are restricted to ASGs tagged for
+# autoscaler management, so this role can never scale/terminate instances
+# in an unrelated ASG.
+data "aws_iam_policy_document" "cluster_autoscaler" {
+  statement {
+    sid    = "ClusterAutoscalerRead"
+    effect = "Allow"
+    actions = [
+      "autoscaling:DescribeAutoScalingGroups",
+      "autoscaling:DescribeAutoScalingInstances",
+      "autoscaling:DescribeLaunchConfigurations",
+      "autoscaling:DescribeScalingActivities",
+      "autoscaling:DescribeTags",
+      "ec2:DescribeInstanceTypes",
+      "ec2:DescribeLaunchTemplateVersions",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "ClusterAutoscalerWrite"
+    effect = "Allow"
+    actions = [
+      "autoscaling:SetDesiredCapacity",
+      "autoscaling:TerminateInstanceInAutoScalingGroup",
+    ]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/k8s.io/cluster-autoscaler/enabled"
+      values   = ["true"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "cluster_autoscaler" {
+  name   = "${var.name_prefix}-eks-cluster-autoscaler-policy"
+  role   = aws_iam_role.cluster_autoscaler_role.id
+  policy = data.aws_iam_policy_document.cluster_autoscaler.json
+}
+
 resource "aws_iam_role" "lbc_role" {
   count              = var.enable_load_balancer_controller ? 1 : 0
   name               = "${var.name_prefix}-eks-lbc-role"
   assume_role_policy = data.aws_iam_policy_document.service_account_assume.json
+}
+
+# AWS's own published IAM policy for this exact controller
+# (https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json),
+# vendored verbatim rather than hand-transcribed to avoid drift/mistakes.
+resource "aws_iam_role_policy" "lbc" {
+  count  = var.enable_load_balancer_controller ? 1 : 0
+  name   = "${var.name_prefix}-eks-lbc-policy"
+  role   = aws_iam_role.lbc_role[0].id
+  policy = file("${path.module}/aws-load-balancer-controller-policy.json")
 }
