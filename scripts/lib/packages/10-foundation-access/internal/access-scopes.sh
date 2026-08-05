@@ -462,10 +462,13 @@ verify_access_governance_scope_readiness() {
 
 verify_eks_access_scope_readiness() {
   verify_existing_eks_platform_dependency || return 1
-  aws s3api head-object \
+  if ! aws s3api head-object \
     --bucket "$TF_STATE_BUCKET" \
     --key "$EKS_ACCESS_STATE_KEY" \
-    --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID" >/dev/null
+    --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID" >/dev/null 2>&1; then
+    _access_scopes_error "eks-access not provisioned (Terraform state not found: ${EKS_ACCESS_STATE_KEY})"
+    return 1
+  fi
 }
 
 verify_eks_platform_scope_readiness() {
