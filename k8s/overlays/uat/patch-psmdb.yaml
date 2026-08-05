@@ -9,7 +9,7 @@ spec:
       serviceAccountName: psmdb-db
       size: 3
       affinity:
-        antiAffinityTopologyKey: topology.kubernetes.io/zone
+        antiAffinityTopologyKey: kubernetes.io/hostname
       resources:
         requests:
           cpu: "1"
@@ -23,25 +23,12 @@ spec:
           resources:
             requests:
               storage: 100Gi
-      # Sidecar resource fencing for PBM-intensive operations (required by
-      # the require-pbm-sidecar-resource-fencing Kyverno policy whenever
-      # spec.backup.enabled is true, as it is here). This is a strategic
-      # merge patch, and replsets is a list -- overriding replsets[0]
-      # without repeating sidecars here would drop the base's sidecars
-      # entry entirely rather than merge it. See #59.
-      sidecars:
-        - name: pbm-agent
-          image: percona/percona-backup-mongodb:2.6.0
-          command: ["pbm-agent"]
-          resources:
-            requests:
-              cpu: "500m"
-              memory: 1Gi
-            limits:
-              cpu: "2"
-              memory: 1Gi
   backup:
     enabled: true
+    # Resource requests/limits for the operator-managed backup-agent
+    # container are inherited from the base (k8s/base/psmdb-cluster.yaml
+    # spec.backup.resources) and do not need to be repeated here. The base
+    # already sets cpu: 500m-2, memory: 1Gi-1Gi. See #60.
     storages:
       s3-main:
         type: s3
