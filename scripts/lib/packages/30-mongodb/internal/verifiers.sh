@@ -18,8 +18,17 @@ mongodb_internal_mongodb_verifier() {
   local namespace="${MONGODB_NAMESPACE:-mongodb}"
   local replica_set="${MONGODB_REPLICA_SET_NAME:-rs0}"
 
-  if ! kubectl get namespace "$namespace" >/dev/null 2>&1; then
-    mongodb_internal_verifier_error "namespace '$namespace' not found"
+  # Check if namespace exists and is in Active state (not Terminating)
+  local ns_phase
+  ns_phase="$(kubectl get namespace "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null)"
+
+  if [[ -z "$ns_phase" ]]; then
+    # Namespace doesn't exist - this is expected if mongodb was never provisioned
+    mongodb_internal_verifier_error "mongodb not provisioned (namespace '$namespace' not found)"
+    return 1
+  elif [[ "$ns_phase" == "Terminating" ]]; then
+    # Namespace is terminating - treat this as "not provisioned" for verification
+    mongodb_internal_verifier_error "mongodb is being destroyed (namespace '$namespace' is Terminating)"
     return 1
   fi
 
@@ -38,6 +47,18 @@ mongodb_internal_mongodb_verifier() {
 
 mongodb_internal_mongodb_access_verifier() {
   local namespace="${MONGODB_NAMESPACE:-mongodb}"
+
+  # Check if namespace exists and is Active
+  local ns_phase
+  ns_phase="$(kubectl get namespace "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null)"
+
+  if [[ -z "$ns_phase" ]]; then
+    mongodb_internal_verifier_error "mongodb-access not configured (namespace '$namespace' not found)"
+    return 1
+  elif [[ "$ns_phase" == "Terminating" ]]; then
+    mongodb_internal_verifier_error "mongodb-access is being destroyed (namespace '$namespace' is Terminating)"
+    return 1
+  fi
 
   if ! kubectl -n "$namespace" get secret oms-audit-writer >/dev/null 2>&1; then
     mongodb_internal_verifier_error "oms-audit-writer secret not found in namespace '$namespace'"
