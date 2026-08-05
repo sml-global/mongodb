@@ -485,29 +485,29 @@ _orchestrator_run_verify() {
   for slot in "${slots[@]}"; do
     case "$slot" in
       foundation-contract)
-        printf 'PASS: foundation-contract (environment loaded and validated)\n'
+        printf 'PASS: foundation-contract — environment config loaded and validated (AWS account, region, state prefix)\n'
         ;;
       aws-identity-region)
         if verify_aws_identity_and_region; then
-          printf 'PASS: aws-identity-region\n'
+          printf 'PASS: aws-identity-region — AWS credentials match expected account and region\n'
         else
-          printf 'FAIL: aws-identity-region\n' >&2
+          printf 'FAIL: aws-identity-region — AWS credentials do not match expected account/region (check: aws sso login)\n' >&2
           failures=$((failures + 1))
         fi
         ;;
       kubernetes-context)
         if verify_kubernetes_context; then
-          printf 'PASS: kubernetes-context\n'
+          printf 'PASS: kubernetes-context — kubectl is configured for the correct EKS cluster\n'
         else
-          printf 'FAIL: kubernetes-context\n' >&2
+          printf 'FAIL: kubernetes-context — kubectl context does not match expected cluster (check: kubectl config current-context)\n' >&2
           failures=$((failures + 1))
         fi
         ;;
       eks-authentication-mode)
         if verify_eks_authentication_mode; then
-          printf 'PASS: eks-authentication-mode\n'
+          printf 'PASS: eks-authentication-mode — EKS cluster authentication method verified\n'
         else
-          printf 'FAIL: eks-authentication-mode\n' >&2
+          printf 'FAIL: eks-authentication-mode — EKS cluster authentication method incorrect or unreachable\n' >&2
           failures=$((failures + 1))
         fi
         ;;
