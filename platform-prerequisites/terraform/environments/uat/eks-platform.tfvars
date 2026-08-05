@@ -17,10 +17,10 @@ endpoint_public_access  = true
 endpoint_private_access = false
 deletion_protection     = true
 
-node_instance_type    = "m6i.large"
+node_instance_type    = "m6i.xlarge"
 node_min_size         = 2
-node_desired_size     = 3
-node_max_size         = 6
+node_desired_size     = 2
+node_max_size         = 4
 node_root_volume_size = 100
 node_spot_enabled     = false
 
