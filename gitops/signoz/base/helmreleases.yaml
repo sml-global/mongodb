@@ -13,15 +13,19 @@ spec:
         kind: HelmRepository
         name: signoz
         namespace: signoz
+  # valuesFrom injects values from Secrets/ConfigMaps at the HelmRelease level
+  # (a Flux feature). The SigNoz chart doesn't support valueFrom.secretKeyRef
+  # natively at the values level (it expects a plain password string), so we
+  # use Flux's valuesFrom to template it in. See #54.
+  valuesFrom:
+    - kind: Secret
+      name: signoz-clickhouse
+      valuesKey: password
+      targetPath: clickhouse.password
   values:
     global:
       storageClass: gp3-mongodb
     clickhouse:
-      password:
-        valueFrom:
-          secretKeyRef:
-            name: signoz-clickhouse
-            key: password
       # Dedicated ServiceAccount name so the live ClickHouse pod can be
       # bound to its own least-privilege IAM identity via EKS Pod Identity
       # (write-only s3:PutObject/ListBucket scoped to
@@ -42,9 +46,13 @@ spec:
       # not a fabricated key. See scripts/dr-drill-clickhouse-backup-restore.sh
       # and Phase 4 design spec
       # docs/superpowers/specs/2026-07-28-phase4-day2-operations-design.md (D1).
+      # Runs in server mode (REST API on port 7171) so kubectl exec commands
+      # (clickhouse-backup create/upload/download/restore) work correctly.
+      # See #54.
       extraContainers:
         - name: clickhouse-backup
           image: altinity/clickhouse-backup:2.5.19
+          command: ["clickhouse-backup", "server"]
           env:
             - name: REMOTE_STORAGE
               value: s3
