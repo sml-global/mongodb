@@ -81,9 +81,9 @@ Single source of truth for all deployed versions. Update this table when any com
 | Aspect | Detail |
 |---|---|
 | **What** | A distributed document database running as a 3-node replica set on EKS, managed by the Percona Operator. |
-| **Why** | Stores the OMS audit trail — immutable event records for compliance and traceability. Document model fits audit log schemas naturally (nested objects, flexible fields, append-heavy writes). |
-| **How it helps** | Provides durable, encrypted-at-rest audit storage with point-in-time recoverability via PBM backups. Application services write structured audit events; compliance teams query them. |
-| **Namespace** | `mongodb` |
+| **Why** | **Primary audit trail storage** — immutable business event records for compliance and traceability (7+ year retention). Document model fits audit log schemas naturally (nested objects, flexible fields, append-heavy writes). |
+| **How it helps** | Provides durable, encrypted-at-rest audit storage with point-in-time recoverability via PBM backups. Application services write structured audit events; compliance teams query them. **Note:** SigNoz telemetry provides disaster recovery backup using the same schema — see `docs/guides/architect-reference.md` § Logging Architecture. |
+| **Namespace** | `mongodb` (dev), `mongodb-uat` (UAT) |
 | **Owner** | Infra Architect / Platform team |
 | **Depends on** | EBS CSI Driver (storage), cert-manager (TLS), Percona Operator (lifecycle), Pod Identity (IAM), Kyverno (policy) |
 | **Depended on by** | Boomi audit log library, SigNoz (telemetry correlation) |
@@ -109,12 +109,12 @@ Single source of truth for all deployed versions. Update this table when any com
 | Aspect | Detail |
 |---|---|
 | **What** | Open-source application telemetry platform providing distributed tracing, metrics collection, and log aggregation. Backed by ClickHouse for storage. |
-| **Why** | Unified observability for OMS services — correlates traces, metrics, and logs in one dashboard. No enterprise license required. |
-| **How it helps** | Boomi processes and application services send OTLP telemetry (traces + logs). Operators use the SigNoz dashboard to diagnose latency, errors, and audit-log flow. Supports alerting rules. |
-| **Namespace** | `signoz` |
+| **Why** | **Unified observability for OMS services** — correlates traces, metrics, and logs in one dashboard. **Disaster recovery backup** for business audit logs when MongoDB is unavailable (90-day retention). No enterprise license required. |
+| **How it helps** | Boomi processes and application services send OTLP telemetry (traces + logs) using the same 10-field schema as MongoDB audit logs. Operators use the SigNoz dashboard to diagnose latency, errors, and audit-log flow. Supports alerting rules. During MongoDB outages, SigNoz retains full business context (`action`, `resource_type`, `resource_id`, `tpl_message`) for manual audit recreation. See `docs/guides/architect-reference.md` § Logging Architecture. |
+| **Namespace** | `signoz` (dev), `signoz-uat` (UAT) |
 | **Owner** | Infra Architect / Boomi Admin (shared) |
 | **Depends on** | Flux (HelmRelease delivery), EBS CSI Driver (ClickHouse storage) |
-| **Depended on by** | Boomi audit log library (telemetry send), operators (dashboard) |
+| **Depended on by** | Boomi audit log library (telemetry send), operators (dashboard), MongoDB (disaster recovery correlation via `trace_id`) |
 | **Provisioned by** | `scripts/provision.sh signoz` |
 | **Verification** | [Verification Commands § SigNoz](verification-commands.md#signoz) |
 
