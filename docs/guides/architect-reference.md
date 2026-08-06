@@ -237,6 +237,117 @@ clicked together by hand:
 
 ---
 
+## Logging Architecture
+
+> **Added:** 2026-08-06 (issue #72)  
+> **Audience:** Architect, DBA, Developer
+
+### Two Types of Logs, One Unified Schema
+
+The OMS platform maintains two log systems with distinct purposes but a **shared
+10-field base schema** for disaster recovery and OMS backend integration:
+
+**1. Business Audit Logs** (MongoDB `oms_audit.auditlogs`)
+- **Purpose:** Compliance, immutable business event records
+- **Retention:** 7+ years
+- **Access:** Security team, compliance officers
+- **Schema:** `docs/references/audit-log-contract.md`
+- **Example:** Order confirmed, EDI file loaded, customer created
+
+**2. Operational Telemetry Logs** (SigNoz)
+- **Purpose:** Debugging, monitoring, alerting, performance
+- **Retention:** 90 days
+- **Access:** All engineers, on-call teams
+- **Schema:** Same 10 base fields + `severity`, `exception.*`
+- **Example:** MongoDB write latency, config warning, retry attempt
+
+### Unified Base Schema (10 Fields)
+
+Both systems use these mandatory fields:
+
+| Field | Type | Example | Notes |
+|---|---|---|---|
+| `trace_id` | String (UUID) | `"a47ac10b..."` | Correlation ID across systems |
+| `ip` | String | `"10.0.1.45"` or `null` | Source IP |
+| `time` | ISO 8601 | `"2026-08-06T10:00:00.123Z"` | Event timestamp |
+| `action` | String | `"boomi.document.load"` | `{resource_type}.{verb}` |
+| `error_code` | String | `"BOM-OD-0001"` or `null` | Error category (`null` = success) |
+| `resource_type` | String | `"boomi.document"` | Resource type (`{context}.{scope}`) |
+| `resource_id` | String | `"TCHIBO-0001.csv"` or `null` | Resource identifier |
+| `user_id` | String | `"admin@oms.local"` or `null` | Actor (null = automated) |
+| `message` | String | `"EDI file transformed"` or `null` | Plain text (optional) |
+| `tpl_message` | JSON Object | `{key: "...", params: {...}}` | i18n template (optional) |
+| `meta` | JSON Object | `{"boomi_process_id": "..."}` | Application-specific data |
+
+**Key principle:** Same field names, same semantics. An OMS backend query filter
+for `resource_type:"boomi.document"` works identically against MongoDB or SigNoz.
+
+### When to Log Where
+
+**Business events** (order, document, customer operations):
+- ✅ Write to **MongoDB** (primary audit, immutable, long retention)
+- ✅ Write to **SigNoz** (disaster recovery backup + operational context)
+
+**Infrastructure events** (config warnings, health checks, performance metrics):
+- ❌ NOT in MongoDB (operational detail, not business audit)
+- ✅ Write to **SigNoz** only
+
+### Disaster Recovery Pattern
+
+**Problem:** If MongoDB becomes unavailable during a write, the business audit
+record is lost forever.
+
+**Solution:** When a business event's audit write fails, SigNoz telemetry retains
+the full business context (`action`, `resource_type`, `resource_id`,
+`tpl_message.key`, `meta`) because both systems use the same schema.
+
+**Recovery query (SigNoz):**
+```
+time:[2026-08-06T10:00:00Z TO 2026-08-06T11:00:00Z]
+AND error_code:"MONGO_TIMEOUT"
+AND resource_type:*
+```
+
+Returns all business events that failed to write to MongoDB, with complete context
+for manual recreation after the outage is resolved.
+
+**Retention trade-off:** SigNoz keeps these for 90 days (operational policy);
+MongoDB keeps audit records for 7+ years (compliance policy). The telemetry copy
+is disaster recovery only, not a replacement for the canonical audit store.
+
+### Correlation via trace_id
+
+Both audit (MongoDB) and telemetry (SigNoz) share `trace_id` for cross-system
+correlation:
+
+1. Find audit event in MongoDB by `action` + `resource_id`
+2. Get its `trace_id`
+3. Search SigNoz: `trace_id:"<same-id>"` to see operational errors, retries, timing
+
+**Industry alignment:** This is the same pattern used by AWS (CloudTrail + CloudWatch
+Logs), Google Cloud (Audit Logs + Cloud Logging), and Microsoft Azure (Activity Log
++ Monitor Logs) — separate systems with distinct retention/access policies,
+correlated via a shared request/trace identifier.
+
+### Implementation
+
+**Groovy (Boomi):**
+- `BoomiAuditLogLibrary.writeAuditLog()` — writes to MongoDB
+- `BoomiOtelLibrary` — writes to SigNoz (unified schema)
+
+**Bash scripts:**
+- `scripts/lib/logging-helpers.sh` — `log_telemetry()` function (planned)
+
+**Python services:**
+- `scripts/lib/telemetry_logger.py` — `log_telemetry()` function (planned)
+
+**See also:**
+- Issue #72 — Unified logging architecture implementation
+- `docs/references/audit-log-contract.md` § Disaster Recovery Via Telemetry
+- `docs/references/logging-vocabulary.md` — Action/resource type/error code registries (planned)
+
+---
+
 ## Architecture Summary
 
 The OMS data layer separates shared Terraform logic from runnable roots and Kubernetes manifests.

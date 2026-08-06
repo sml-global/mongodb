@@ -7,6 +7,14 @@ model is the source of truth for the field set; this document explains how to
 use it and adds producer-side conventions on top where the model itself is
 permissive.
 
+**Unified schema note:** This same base schema (10 core fields: `trace_id`, `ip`,
+`time`, `action`, `error_code`, `resource_type`, `resource_id`, `user_id`,
+`message`/`tpl_message`, `meta`) is also used by operational telemetry logs in
+SigNoz for disaster recovery — if MongoDB is unavailable, SigNoz telemetry
+retains the full business context (action, resource type, resource ID, template
+key) needed to reconstruct lost audit events. See issue #72 and
+`docs/guides/architect-reference.md` § Logging Architecture.
+
 **Who this is for:** Developers and architects who produce or validate audit
 records. If you are a Boomi process owner, read
 [Boomi Audit Log Guide (Process Owner Edition)](../guides/boomi-audit-log-owner-guide.md)
@@ -15,13 +23,13 @@ background needed.
 
 | Field | Value |
 |---|---|
-| **Contract version** | 2.2 |
+| **Contract version** | 2.3 |
 | **Status** | Required for new audit-log integrations |
-| **Effective date** | 2026-07-16 |
+| **Effective date** | 2026-08-06 |
 | **Owner / approver** | OMS Architecture |
-| **Supersedes** | 2.1 (2026-07-14) |
+| **Supersedes** | 2.2 (2026-07-16) |
 | **Source of truth** | `oms-backend` `apps/core/schemas.py` — `AuditLogEntry`, `TplMessage`, `AuditLogMeta` |
-| **Per-record marker** | `tpl_message.params.contract_version: "2.2"` (optional; see [Reserved Params](#reserved-params)) |
+| **Per-record marker** | `tpl_message.params.contract_version: "2.3"` (optional; see [Reserved Params](#reserved-params)) |
 
 **Related docs:**
 - [Boomi Integration Guide](../guides/boomi-integration-guide.md) — how Boomi calls the audit writer
@@ -868,10 +876,49 @@ change, but the module must register and document the template before production
 use. Existing template meanings must not be changed; introduce a new template
 key when the business meaning changes.
 
+## Disaster Recovery Via Telemetry
+
+> **Audience:** Architect, DBA, SRE.
+
+**Problem:** If MongoDB becomes unavailable during a write, the business audit
+record is lost forever — the event occurred, but there is no permanent record of
+it in the audit collection.
+
+**Solution:** Operational telemetry logs sent to SigNoz use this same base schema
+(the 10 core fields: `trace_id`, `ip`, `time`, `action`, `error_code`,
+`resource_type`, `resource_id`, `user_id`, `message`/`tpl_message`, `meta`) so
+when a business event's audit write fails, SigNoz retains the full business
+context needed to reconstruct it. SigNoz adds `severity` (ERROR/WARN/INFO/DEBUG)
+and `exception.*` fields for operational detail, but the audit-contract fields
+remain identical across both systems.
+
+**When to populate business context in telemetry:**
+- ✅ Business operation attempted (even if MongoDB write fails) → full context
+- ❌ Pure infrastructure/debug events → business fields may be `null`
+
+**Recovery query example (SigNoz):**
+```
+time:[2026-08-06T10:00:00Z TO 2026-08-06T11:00:00Z]
+AND error_code:"MONGO_TIMEOUT"
+AND resource_type:*
+```
+
+Returns all business events that failed to write to MongoDB during the outage
+window, with `action`, `resource_type`, `resource_id`, `tpl_message.key`, and
+`meta` preserved for manual recreation or post-incident analysis.
+
+**Retention:** SigNoz retains these for 90 days (operational telemetry policy);
+MongoDB retains audit records for 7+ years (compliance policy). The telemetry
+copy is disaster recovery only, not a replacement for the canonical audit store.
+
+See issue #72 and `docs/guides/architect-reference.md` § Logging Architecture
+for the full unified-schema design and implementation.
+
 ## Changelog
 
 | Version | Date | Change |
 |---|---|---|
+| 2.3 | 2026-08-06 | **Added disaster recovery via telemetry section.** Documented that SigNoz operational telemetry uses the same 10-field base schema (trace_id, ip, time, action, error_code, resource_type, resource_id, user_id, message/tpl_message, meta) so business context is preserved when MongoDB writes fail. Added unified-schema note at top referencing issue #72. No field-set changes; this is documentation-only to clarify the cross-system schema alignment. |
 | 2.2 | 2026-07-16 | Documented the canonical `error_code` convention as `<SYSTEM>-<MODULE>-<NNNN>`, with architecture-controlled system/module registries and examples. The stored field type remains `String`/`null`; runtime enforcement of the naming convention is deferred. |
 | 2.1 | 2026-07-14 | **Refined trace correlation, meta ergonomics, and messaging wording** — no field-set changes. `trace_id` now reuses an active OpenTelemetry span's trace ID when one exists (implementing correlation-rules step 2), instead of only ever generating a UUID; it is documented as an opaque correlation string since an OTel trace ID is not UUID-formatted. Write-failure telemetry is now emitted through the real OpenTelemetry Logs SDK (OTLP/HTTP) instead of a hand-built payload, and the exception is also recorded on the active span (`Span.recordException`) when one exists. The Groovy library now auto-defaults `meta` for Boomi callers that omit it entirely (`method: "BOOMI"`, `path: action`, `status` derived from `error_code`) — `meta` stays required in the persisted document (per the production Pydantic model) but is effectively optional for a Boomi caller. Tightened the `tpl_message` explanation: `key` is the template-lookup identifier, `params` are the substitution values the template engine interpolates into it. Fixed lenient date parsing in the Groovy library (`SimpleDateFormat` now runs with `setLenient(false)`, rejecting invalid dates like month 13 instead of silently rolling them over). Added `mo` (manufacturing order) to the `scope` registry as its own business entity distinct from `order`. Clarified that `resource_changes` is expected to stay `null` for Boomi/EDI-loading actions (no natural before/after diff) while remaining available to other modules. |
 | 2.0 | 2026-07-14 | **Realigned with the production `AuditLogEntry` schema** in `oms-backend` (`apps/core/schemas.py`), which had diverged from this contract. Only `time`, `action`, `resource_type`, and `meta` (with `method`/`path`/`status`) are required — every other field, including `resource_id`, `user_id`, and `tpl_message`, is optional. `action` reverts to the full `{resource_type}.{verb}` string (matching production) instead of a bare verb. Reinstated `resource_changes` (`{field: [old, new]}`) and `meta` as real top-level fields. Added the missing `impersonator_id` field. Dropped the mandatory UUID constraint on `resource_id`/`trace_id`/`operation_id` (recommended for internal entities, but external entities should use their own stable identifier) — the backend schema never enforced this. `tpl_message.key` is no longer library-derived; it is a free-form producer-chosen string, matching the production `TplMessage` model, and `tpl_message` itself is optional. |
