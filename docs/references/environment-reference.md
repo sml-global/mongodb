@@ -287,7 +287,11 @@ flowchart LR
 | **Production** | `mongodb-prod` (expected) | `signoz-prod` (expected) | Aurora (no namespace, AWS managed) |
 | **SIT** | `mongodb-sit` (expected) | `signoz-sit` (expected) | CNPG pods in `postgresql-sit` namespace (expected) |
 
-**Rationale**: Explicit environment suffixes prevent confusion when operating in UAT/Prod. DEV retains legacy names for backward compatibility with existing scripts.
+**Rationale**: Explicit environment suffixes prevent confusion when operating in UAT/Prod. DEV retains legacy names (`mongodb`, `signoz` without `-dev` suffix) for backward compatibility with existing secrets, PVCs, and scripts. UAT was the first environment to introduce the `-{env}` suffix convention; all future environments follow this pattern.
+
+**Verification**:
+- DEV: `kubectl get namespace | grep -E "mongodb|signoz"` → returns `mongodb`, `signoz`
+- UAT: `kubectl get namespace | grep -E "mongodb|signoz"` → returns `mongodb-uat`, `signoz-uat`
 
 ---
 
