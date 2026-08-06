@@ -243,14 +243,16 @@ Update `docs/index.md` to link to single consolidated doc.
 
 ## What Needs to Happen Next Session
 
-### Priority 1: Consolidate Documentation (MUST DO)
-1. Create `docs/references/aws-organization-requirements.md`
-2. Move content from:
+### Priority 1: Consolidate Documentation ✅ COMPLETED (2026-08-06)
+1. ✅ Created `docs/references/aws-organization-requirements.md`
+2. ✅ Moved content from:
    - `/docs/UAT-IDENTITY-CENTER-SETUP-REQUIRED.md` → Section 1
    - `/docs/references/cross-account-s3-permissions.md` → Section 2
-3. Delete both old docs
-4. Update `docs/index.md` to link to consolidated doc
-5. Search for any other references to deleted docs
+3. ✅ Deleted both old docs
+4. ✅ Updated `docs/index.md` to link to consolidated doc
+5. ✅ Updated `platform-prerequisites/terraform/boomi-elt-s3/README.md` reference
+
+**Result**: Single consolidated document for AWS Organization administrator covering both Identity Center permission sets and cross-account S3 IAM policies.
 
 ### Priority 2: Deployment (When User Has Account IDs)
 1. Get real AWS account IDs from org admin
@@ -313,19 +315,20 @@ From summary:
 
 ## Resume Instructions for Next Agent
 
-1. **Immediate action**: Consolidate docs (Priority 1 above)
-2. **Context**: User wants cross-account S3 access for Boomi ELT, all code is done but not deployed
-3. **User preference**: Minimal documents, consolidate similar topics
-4. **Blocker**: Waiting on real AWS account IDs from org admin before deployment
-5. **Testing strategy**: AWS CLI test first, then Groovy library test, then verify telemetry
+1. **Documentation consolidation**: ✅ COMPLETED — single `aws-organization-requirements.md` now exists
+2. **Next action**: Deploy Boomi ELT S3 infrastructure (Priority 2 above)
+3. **Context**: User wants cross-account S3 access for Boomi ELT, all code is done but not deployed
+4. **User preference**: Minimal documents, consolidate similar topics ✅ DONE
+5. **Blocker**: Waiting on real AWS account IDs from org admin before deployment
+6. **Testing strategy**: AWS CLI test first, then Groovy library test, then verify telemetry
 
 ---
 
 ## Questions User Might Ask Next Session
 
-1. **"Did you consolidate the docs?"** → Check if Priority 1 above is done
+1. **"Did you consolidate the docs?"** → ✅ YES — `docs/references/aws-organization-requirements.md` created, old docs deleted, index updated
 2. **"How do I deploy this?"** → Follow Priority 2 deployment steps
-3. **"What account IDs do I use?"** → Need real IDs from AWS org admin, see questions in cross-account-s3-permissions.md
+3. **"What account IDs do I use?"** → Need real IDs from AWS org admin, see questions in `aws-organization-requirements.md` § "Questions for AWS Organization Administrator"
 4. **"How do I test it?"** → Follow Priority 3 testing steps
 5. **"Can I close issue #72 and #73?"** → Yes, both complete
 
