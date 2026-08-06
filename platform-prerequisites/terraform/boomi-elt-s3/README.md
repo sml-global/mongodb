@@ -195,7 +195,7 @@ aws s3 ls s3://sml-elt-uat/ --profile uat-assumed
 
 ## Detailed Documentation
 
-See `docs/references/cross-account-s3-permissions.md` for:
+See `docs/references/aws-organization-requirements.md` § "Cross-Account S3 Access for Boomi ELT" for:
 - Full IAM policy JSON
 - Security controls explanation
 - Troubleshooting guide
