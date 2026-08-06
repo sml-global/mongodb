@@ -190,6 +190,37 @@ When you click a log entry, you'll see these fields:
 
 ---
 
+## Why Are Attributes Flattened? (Not Nested JSON)
+
+**You might expect:**
+```json
+{
+  "meta": {
+    "boomi_process_id": "EU-TC-0001",
+    "failure_type": "mongo_write_error"
+  }
+}
+```
+
+**But SigNoz shows:**
+```json
+{
+  "meta.boomi_process_id": "EU-TC-0001",
+  "meta.failure_type": "mongo_write_error"
+}
+```
+
+**Why:** This is the OTLP Logs API specification. All attributes are stored as flat key-value pairs (dot-notation), not nested objects.
+
+**Benefits:**
+- **Easier querying:** `meta.boomi_process_id = 'EU-TC-0001'` (direct attribute lookup)
+- **Faster indexing:** Flat attributes are more efficient to index than nested JSON paths
+- **Standard convention:** Matches OpenTelemetry semantic conventions (e.g., `k8s.pod.name`, `service.name`)
+
+**This is NOT a bug** — it's the correct OpenTelemetry format, and our code sends it this way intentionally.
+
+---
+
 ## Troubleshooting Tips
 
 ### Problem: No logs found for my process ID
