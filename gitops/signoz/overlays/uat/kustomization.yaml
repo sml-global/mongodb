@@ -29,3 +29,6 @@ patches:
       - op: replace
         path: /spec/values/global/deploymentEnvironment
         value: uat
+      - op: replace
+        path: /spec/values/otelCollectorEndpoint
+        value: http://signoz-otel-collector.signoz-uat.svc.cluster.local:4318
