@@ -6,6 +6,7 @@
 |---|---|---|
 | **Boomi Process Owner** (builds processes; use-case-level knowledge) | Understand what/why to record, then call `writeAuditLog` and the span (stopwatch) calls with the right business values | [Process Owner Edition](guides/boomi-audit-log-owner-guide.md) → [Integration Guide § Public API](guides/boomi-integration-guide.md#public-api) for exact parameters |
 | **Boomi Admin** (in-depth; trains process owners) | Master the libraries end-to-end: API semantics, contract rules, failure behavior, testing, SigNoz monitoring | [Boomi Integration Guide](guides/boomi-integration-guide.md) → [Audit Log Contract](references/audit-log-contract.md) |
+| **Boomi Developer** (troubleshoots process executions) | Find audit logs for specific process executions in SigNoz, build dashboards, trace end-to-end flows | [Boomi Audit Log Guide](guides/boomi-audit-log-guide.md) (how to search logs by process ID, execution ID, trace errors) |
 | **Infra Operator** | Provision infrastructure (including the Boomi audit-writer secret), run day-2 maintenance, troubleshoot issues, run verification | [Environment Setup](guides/environment-setup.md) → [Operator Runbook](guides/operator-runbook.md) |
 | **Infra Architect / Admin** | Understand components, architecture, maintain the platform | [Component Catalog](references/component-catalog.md) → [Architect Reference](guides/architect-reference.md) |
 | **Enterprise Architect** | Understand design decisions, security, compliance, roadmap, review telemetry reports | [Enterprise Architecture](guides/enterprise-architecture.md) |
@@ -20,6 +21,7 @@ Boomi-facing guides deliberately contain none of it.
 |---|---|---|
 | Unfamiliar term or acronym | [Glossary & Concept Reference](references/glossary.md) | Plain-language lookup for every jargon term used in these docs, organized by category, with diagrams for the trickiest concepts |
 | Audit logging explained without jargon | [Boomi Audit Log Guide (Process Owner Edition)](guides/boomi-audit-log-owner-guide.md) | Plain-language walkthrough for non-technical process owners — what gets recorded and what to fill in |
+| Finding audit logs in SigNoz | [Boomi Audit Log Guide](guides/boomi-audit-log-guide.md) | How to search logs by process ID, execution ID, trace errors, build dashboards (for Boomi developers/admins) |
 | Canonical audit record schema | [Audit Log Contract](references/audit-log-contract.md) | Fixed fields, naming rules, template-key format, module-owned params, and data-protection constraints |
 | Boomi Groovy library internals | [Boomi Groovy Library Architecture](references/boomi-groovy-library-architecture.md) | For people who maintain the two Groovy library files: why two libraries, precise signatures, design mechanisms, build/test/deploy (callers use the Integration Guide instead) |
 | Boomi audit-writer secret & accounts | [Operator Runbook § Boomi Audit Writer](guides/operator-runbook.md#boomi-audit-writer-credentials-secrets-and-accounts) | Secret provisioning/formats, MongoDB account mapping, diagnostic methods (operators only) |
