@@ -35,10 +35,26 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
 |---|---|---|---|---|
 | **DEV** | `10.200.0.0/18` (16,384 IPs) | `10.200.0.0/24` (AZ-a), `10.200.1.0/24` (AZ-b) | `10.200.10.0/23` (AZ-a), `10.200.12.0/23` (AZ-b) | N/A (CNPG in-cluster) |
 | **UAT** | `10.200.64.0/18` (16,384 IPs) | `10.200.64.0/24` (AZ-a), `10.200.65.0/24` (AZ-b) | `10.200.74.0/23` (AZ-a), `10.200.76.0/23` (AZ-b) | `10.200.80.0/24` (AZ-a), `10.200.81.0/24` (AZ-b) |
-| **Production** | `10.200.128.0/18` (16,384 IPs) | `10.200.128.0/24` (AZ-a), `10.200.129.0/24` (AZ-b) | `10.200.138.0/23` (AZ-a), `10.200.140.0/23` (AZ-b) | `10.200.144.0/24` (AZ-a), `10.200.145.0/24` (AZ-b) |
-| **SIT** | `10.200.192.0/18` (16,384 IPs) | `10.200.192.0/24` (AZ-a), `10.200.193.0/24` (AZ-b) | `10.200.202.0/23` (AZ-a), `10.200.204.0/23` (AZ-b) | N/A (CNPG in-cluster) |
+| **Production** | `10.200.128.0/18` (16,384 IPs) | `10.200.128.0/26` (AZ-a), `10.200.128.64/26` (AZ-b), `10.200.128.128/26` (AZ-c) | `10.200.132.0/22` (AZ-a), `10.200.136.0/22` (AZ-b), `10.200.140.0/22` (AZ-c) | `10.200.144.0/24` (AZ-a), `10.200.145.0/24` (AZ-b), `10.200.146.0/24` (AZ-c) |
+| **SIT1** | `10.200.192.0/20` (4,096 IPs) | `10.200.192.0/26` (AZ-a), `10.200.192.64/26` (AZ-b) | `10.200.194.0/21` (AZ-a), `10.200.202.0/21` (AZ-b) | N/A (CNPG in-cluster) |
+| **SIT2** | `10.200.208.0/20` (4,096 IPs) | `10.200.208.0/26` (AZ-a), `10.200.208.64/26` (AZ-b) | `10.200.210.0/21` (AZ-a), `10.200.218.0/21` (AZ-b) | N/A (CNPG in-cluster) |
+| **SIT3** | `10.200.224.0/20` (4,096 IPs) | `10.200.224.0/26` (AZ-a), `10.200.224.64/26` (AZ-b) | `10.200.226.0/21` (AZ-a), `10.200.234.0/21` (AZ-b) | N/A (CNPG in-cluster) |
+| **Reserved** | `10.200.240.0/20` (4,096 IPs) | Available for SIT4 or future expansion | | |
 
-**Design rationale**: See `docs/superpowers/specs/2026-07-29-vpc-subnet-and-boomi-routing-design.md` for full CIDR allocation math, AWS hard constraints (ALB requires `/27` + 8 free IPs, RDS requires ≥2 AZs), and Boomi networking requirements.
+**Design decisions**:
+- **Production uses 3 AZs** (`ap-east-1a`, `ap-east-1b`, `ap-east-1c`) for true high availability
+  - MongoDB 3-node replica set (1 per AZ): losing 1 AZ still maintains quorum (2/3)
+  - EKS worker nodes (1 per AZ minimum): distributes pods across AZs
+  - Aurora (3 AZs): better read replica distribution
+- **Public subnets right-sized to `/26`** (64 IPs per AZ) — sufficient for NAT Gateways, ALBs, bastion hosts
+  - DEV/UAT use `/24` (256 IPs) for legacy reasons — not recommended for new environments
+  - Production `/26` saves 192 IPs per AZ vs. `/24`
+- **Private subnets sized to `/22`** (1,024 IPs per AZ) for production scale
+  - Allows scaling to **1,024 pods per AZ** if needed
+  - DEV/UAT use `/23` (512 IPs per AZ) — adequate for test environments
+- **SIT environments right-sized to `/20`** (4,096 IPs total) — test-only, not production scale
+  - 3 SIT instances planned (SIT1, SIT2, SIT3) for parallel testing
+  - 1 reserved `/20` block for SIT4 or future use
 
 **Cross-account connectivity**: Managed by a separate infrastructure team via company-wide AWS Landing Zone. This repository's Terraform never creates Transit Gateway or VPC peering resources.
 
