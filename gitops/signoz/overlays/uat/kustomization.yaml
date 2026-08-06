@@ -7,5 +7,25 @@ namespace: signoz-uat
 bases:
   - ../../base
 
-patchesStrategicMerge:
-  - helmrelease-patch.yaml
+patches:
+  # Patch HelmRelease sourceRef.namespace for both charts
+  - target:
+      kind: HelmRelease
+      name: signoz
+    patch: |-
+      - op: replace
+        path: /spec/chart/spec/sourceRef/namespace
+        value: signoz-uat
+  - target:
+      kind: HelmRelease
+      name: signoz-k8s-infra
+    patch: |-
+      - op: replace
+        path: /spec/chart/spec/sourceRef/namespace
+        value: signoz-uat
+      - op: replace
+        path: /spec/values/global/clusterName
+        value: EKS-uat-cluster
+      - op: replace
+        path: /spec/values/global/deploymentEnvironment
+        value: uat
