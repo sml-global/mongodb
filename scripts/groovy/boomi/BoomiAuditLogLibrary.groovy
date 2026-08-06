@@ -501,16 +501,60 @@ class BoomiAuditLogLibrary {
 
   /**
    * Reports a critical, sanitized failure to SigNoz before the caller sees
-   * the exception, per "Write Failure Handling" in the contract. All of the
-   * actual OpenTelemetry work (building the logger, emitting the log
-   * record, recording the exception on the active span) lives in
-   * {@link BoomiOtelLibrary#emitCriticalFailure} -- this method is just a
-   * thin call into that library with this class's `service.name` and the
-   * record's `trace_id`. Best-effort: {@link BoomiOtelLibrary} swallows its
-   * own errors internally, so this can never replace or hide the real
-   * validation/write failure.
+   * the exception, per "Write Failure Handling" in the contract. Uses the
+   * UNIFIED SCHEMA (same 10 base fields as MongoDB audit logs) so if MongoDB
+   * is unavailable, SigNoz retains full business context (action,
+   * resource_type, resource_id, tpl_message) for disaster recovery.
+   *
+   * All of the actual OpenTelemetry work lives in {@link
+   * BoomiOtelLibrary#emitCriticalFailureWithContext}. Best-effort: {@link
+   * BoomiOtelLibrary} swallows its own errors internally, so this can never
+   * replace or hide the real validation/write failure.
    */
   private static void emitFailureTelemetry(Map<String, Object> record, String failureType, String message, Throwable cause = null) {
-    BoomiOtelLibrary.emitCriticalFailure(SERVICE_NAME, failureType, message, record?.trace_id?.toString(), cause)
+    // Map old failureType to unified error_code
+    String errorCode = mapFailureTypeToErrorCode(failureType)
+
+    // Extract business context from record (may be null if not a business event)
+    String action = record?.action?.toString()
+    String resourceType = record?.resource_type?.toString()
+    String resourceId = record?.resource_id?.toString()
+    String userId = record?.user_id?.toString()
+    String ip = record?.ip?.toString()
+    Map<String, Object> tplMessage = record?.tpl_message instanceof Map ? (Map) record.tpl_message : null
+    Map<String, Object> meta = record?.meta instanceof Map ? (Map) record.meta : null
+
+    // Add failure context to meta
+    if (meta == null) {
+      meta = [:]
+    }
+    meta['failure_type'] = failureType
+    meta['attempted_write'] = 'audit_log'
+
+    BoomiOtelLibrary.emitCriticalFailureWithContext(
+      record?.trace_id?.toString(),
+      ip,
+      action,
+      errorCode,
+      resourceType,
+      resourceId,
+      userId,
+      message,
+      tplMessage,
+      meta,
+      cause
+    )
+  }
+
+  /**
+   * Map old failure type to unified error code vocabulary
+   */
+  private static String mapFailureTypeToErrorCode(String failureType) {
+    switch (failureType) {
+      case 'mongo_write': return 'MONGO_WRITE_FAILED'
+      case 'configuration': return 'CONFIG_NOT_FOUND'
+      case 'validation': return 'VALIDATION_ERROR'
+      default: return failureType?.toUpperCase()?.replaceAll(/[^A-Z0-9_]/, '_')
+    }
   }
 }

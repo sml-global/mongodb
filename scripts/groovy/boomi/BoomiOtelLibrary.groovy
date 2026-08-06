@@ -203,6 +203,175 @@ class BoomiOtelLibrary {
   }
 
   /**
+   * Emit structured telemetry log using the UNIFIED SCHEMA (same 10 base
+   * fields as MongoDB audit logs). Use this for operational telemetry that
+   * should preserve full business context for disaster recovery.
+   *
+   * Unified schema fields (all mandatory, use null/empty string if N/A):
+   * - trace_id, ip, action, error_code, resource_type, resource_id, user_id
+   * - message, tpl_message (both optional), meta
+   *
+   * @param traceId Correlation ID (same as MongoDB audit)
+   * @param ip Source IP (null if N/A)
+   * @param action Action being performed (e.g., "boomi.document.load", "config.fallback")
+   * @param errorCode Error category (null if success, e.g., "BOM-OD-0001", "MONGO_TIMEOUT")
+   * @param resourceType Type of resource (e.g., "boomi.document", "config.secret")
+   * @param resourceId Specific resource ID (null if N/A)
+   * @param userId User performing action (null if automated)
+   * @param message Plain text message (null if using tpl_message)
+   * @param tplMessage i18n template: [key: "...", params: [...]] (null if using message)
+   * @param meta Structured metadata (Map)
+   * @param severity Log severity (ERROR | WARN | INFO | DEBUG)
+   * @param cause Optional exception (for exception.* fields)
+   */
+  static void emitTelemetry(
+      String traceId,
+      String ip,
+      String action,
+      String errorCode,
+      String resourceType,
+      String resourceId,
+      String userId,
+      String message,
+      Map<String, Object> tplMessage,
+      Map<String, Object> meta,
+      String severity = 'INFO',
+      Throwable cause = null
+  ) {
+    try {
+      Logger otelLogger = getOrCreateLogger(resolveEndpoint(), 'oms-telemetry')
+
+      AttributesBuilder attrs = Attributes.builder()
+        // Core unified fields (same as MongoDB audit)
+        .put('trace_id', traceId ?: '')
+        .put('ip', ip ?: '')
+        .put('action', action ?: '')
+        .put('error_code', errorCode ?: '')  // null becomes empty string
+        .put('resource_type', resourceType ?: '')
+        .put('resource_id', resourceId ?: '')
+        .put('user_id', userId ?: '')
+
+      // message is optional (use null if not provided)
+      if (message != null) {
+        attrs.put('message', message)
+      }
+
+      // tpl_message is optional structured template
+      if (tplMessage != null && tplMessage['key']) {
+        attrs.put('tpl_message.key', tplMessage['key'] as String)
+        if (tplMessage['params'] instanceof Map) {
+          ((Map) tplMessage['params']).each { k, v ->
+            attrs.put("tpl_message.params.${k}" as String, v?.toString() ?: '')
+          }
+        }
+      }
+
+      // meta fields (flatten Map into attributes)
+      if (meta != null) {
+        meta.each { k, v ->
+          attrs.put("meta.${k}" as String, v?.toString() ?: '')
+        }
+      }
+
+      // Exception details (SigNoz-specific)
+      if (cause != null) {
+        attrs.put('exception.type', cause.getClass().name)
+        attrs.put('exception.message', cause.message ?: '')
+        attrs.put('exception.stacktrace', stackTraceToString(cause))
+      }
+
+      // Emit log
+      Severity otelSeverity = parseSeverity(severity)
+      otelLogger.logRecordBuilder()
+        .setSeverity(otelSeverity)
+        .setSeverityText(severity)
+        .setBody(message ?: (tplMessage?['key'] as String) ?: '')
+        .setAllAttributes(attrs.build())
+        .emit()
+
+      // Record exception on active span if present
+      Span currentSpan = Span.current()
+      if (cause != null && currentSpan?.spanContext?.isValid()) {
+        currentSpan.recordException(cause)
+      }
+    } catch (Exception ignored) {
+      // Telemetry is best-effort
+    }
+  }
+
+  /**
+   * Convenience wrapper: emit critical failure with full business context.
+   * Use when MongoDB write fails or business operation fails — full audit
+   * context preserved for disaster recovery.
+   */
+  static void emitCriticalFailureWithContext(
+      String traceId,
+      String ip,
+      String action,
+      String errorCode,
+      String resourceType,
+      String resourceId,
+      String userId,
+      String message,
+      Map<String, Object> tplMessage,
+      Map<String, Object> meta,
+      Throwable cause = null
+  ) {
+    emitTelemetry(
+      traceId, ip, action, errorCode, resourceType, resourceId, userId,
+      message, tplMessage, meta, 'ERROR', cause
+    )
+  }
+
+  /**
+   * Convenience wrapper: emit warning (config fallback, retry, etc.)
+   */
+  static void emitWarning(
+      String traceId,
+      String action,
+      String errorCode,
+      String resourceType,
+      String resourceId,
+      String message,
+      Map<String, Object> meta
+  ) {
+    emitTelemetry(
+      traceId, null, action, errorCode, resourceType, resourceId, null,
+      message, null, meta, 'WARN', null
+    )
+  }
+
+  /**
+   * Convenience wrapper: emit success (audit write succeeded, etc.)
+   */
+  static void emitSuccess(
+      String traceId,
+      String action,
+      String resourceType,
+      String resourceId,
+      String message,
+      Map<String, Object> meta
+  ) {
+    emitTelemetry(
+      traceId, null, action, null, resourceType, resourceId, null,
+      message, null, meta, 'INFO', null
+    )
+  }
+
+  /**
+   * Parse severity string to OpenTelemetry Severity enum
+   */
+  private static Severity parseSeverity(String severity) {
+    switch (severity?.toUpperCase()) {
+      case 'ERROR': return Severity.ERROR
+      case 'WARN': return Severity.WARN
+      case 'INFO': return Severity.INFO
+      case 'DEBUG': return Severity.DEBUG
+      default: return Severity.INFO
+    }
+  }
+
+  /**
    * Closes and clears the cached OpenTelemetry logger/tracer provider(s).
    * Call this from short-lived batch jobs or tests that need a clean
    * shutdown; not required for long-running Boomi runtimes, which should
