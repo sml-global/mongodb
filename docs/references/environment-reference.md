@@ -33,10 +33,10 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
 
 | Environment | VPC CIDR | Default AZs | Public Subnets | Private Subnets | DB Subnets (Aurora only) | VPC Utilization | Capacity |
 |---|---|---|---|---|---|---|---|
-| **Production** | `10.200.0.0/19` (8,192 IPs) | 3 | `10.200.0.0/26` (AZ-a), `10.200.0.64/26` (AZ-b), `10.200.0.128/26` (AZ-c) | `10.200.8.0/21` (AZ-a), `10.200.16.0/21` (AZ-b), `10.200.24.0/21` (AZ-c) | `10.200.1.0/24` (AZ-a), `10.200.2.0/24` (AZ-b), `10.200.3.0/24` (AZ-c) | 87% | ~3,000 pods |
-| **UAT** | `10.200.32.0/21` (2,048 IPs) | 1 (scalable to 3) | `10.200.32.0/26` (AZ-a), [`10.200.32.64/26` (AZ-b), `10.200.32.128/26` (AZ-c)] | `10.200.33.0/24` (AZ-a), [`10.200.34.0/24` (AZ-b), `10.200.35.0/24` (AZ-c)] | `10.200.36.0/24` (AZ-a), [`10.200.37.0/24` (AZ-b), `10.200.38.0/24` (AZ-c)] | 94% | ~200 pods (1 AZ), ~600 pods (3 AZ stress test) |
-| **DEV** | `10.200.40.0/23` (512 IPs) | 1 | `10.200.40.0/26` (AZ-a) | `10.200.40.128/25` (AZ-a) | N/A (CNPG in-cluster) | 75% | ~100 pods (single dev env) |
-| **SIT (shared)** | `10.200.42.0/20` (4,096 IPs) | 1 | `10.200.42.0/26` (AZ-a) | `10.200.43.0/21` (AZ-a) | N/A (CNPG in-cluster) | 51% | ~90 SIT envs (shared cluster) |
+| **Production** | `10.200.0.0/19` (8,192 IPs) | 3 | `10.200.0.0/25` (AZ-a), `10.200.0.128/25` (AZ-b), `10.200.1.0/25` (AZ-c) | `10.200.8.0/21` (AZ-a), `10.200.16.0/21` (AZ-b), `10.200.24.0/21` (AZ-c) | `10.200.2.0/27` (AZ-a), `10.200.2.32/27` (AZ-b), `10.200.2.64/27` (AZ-c) | 77% | ~3,000 pods |
+| **UAT** | `10.200.32.0/21` (2,048 IPs) | 1 (scalable to 3) | `10.200.32.0/25` (AZ-a), [`10.200.32.128/25` (AZ-b), `10.200.33.0/25` (AZ-c)] | `10.200.34.0/24` (AZ-a), [`10.200.35.0/24` (AZ-b), `10.200.36.0/24` (AZ-c)] | `10.200.37.0/27` (AZ-a), [`10.200.37.32/27` (AZ-b), `10.200.37.64/27` (AZ-c)] | 95% | ~200 pods (1 AZ), ~600 pods (3 AZ stress test) |
+| **DEV** | `10.200.40.0/23` (512 IPs) | 1 | `10.200.40.0/25` (AZ-a) | `10.200.40.128/25` (AZ-a) | N/A (CNPG in-cluster) | 50% | ~100 pods (single dev env) |
+| **SIT (shared)** | `10.200.42.0/20` (4,096 IPs) | 1 | `10.200.42.0/25` (AZ-a) | `10.200.43.0/21` (AZ-a) | N/A (CNPG in-cluster) | 51% | ~90 SIT envs (shared cluster) |
 | **Reserved** | `10.200.52.0/22` (1,024 IPs) | - | Available for future expansion | | | - | - |
 | **Reserved** | `10.200.56.0/21` (2,048 IPs) | - | Available for future expansion | | | - | - |
 | **Reserved** | `10.200.64.0/18` (16,384 IPs) | - | Available for future expansion (large block) | | | - | - |
@@ -58,10 +58,16 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
     - **Cost**: ~$100/month (1 AZ) vs ~$300/month (3 AZ) — run 3-AZ only during stress tests
   - **DEV**: Single AZ only (no multi-AZ requirement) — simplest/cheapest
   - **SIT**: Single AZ (shared cluster handles load via namespace isolation)
-- **All public subnets use /26** (64 IPs per AZ) — consistent sizing across all environments
-  - **Components**: NAT Gateway (3-5 IPs), Internet-facing ALBs (8-15 IPs + AWS reserves 8 for scaling), Bastion hosts (1-2 IPs), VPN endpoints (1 IP)
-  - **Total required**: ~30-45 IPs per AZ (64 IPs provides 23% buffer)
-  - **Consistency**: Production, UAT, DEV, SIT all use /26 — no oversized /24 subnets
+- **All public subnets use /25** (128 IPs per AZ) — generous capacity for future services
+  - **Components**: NAT Gateway (3-5 IPs), Internet-facing ALBs (8-15 IPs + AWS reserves 8 for scaling), NLBs (future), Bastion hosts (1-2 IPs), VPN endpoints (1 IP)
+  - **Total required**: ~30-50 IPs per AZ currently
+  - **Headroom**: 128 IPs allows 2-3× additional ALBs/NLBs without renumbering
+  - **Why /25 not /26**: User preference to allocate freed DB subnet IPs to public subnets for flexibility
+- **DB subnets use /27** (32 IPs per AZ) — right-sized for Aurora RDS
+  - **Aurora requirements**: 1 writer + 5 read replicas = ~6-8 IPs used + AWS reserves 5 IPs = ~12 IPs per AZ
+  - **AWS minimum**: /27 (32 IPs) is AWS-recommended minimum for RDS subnet groups
+  - **/24 was wasteful**: 256 IPs per AZ (95% wasted) → now /27 (32 IPs per AZ, ~40% utilization)
+  - **Savings**: 672 IPs per environment freed (reallocated to public subnets)
 - **Private subnets sized to workload needs**:
   - Production: 3 × /21 (2,048 IPs per AZ) = 6,144 IPs total for ~3,000 pods
   - UAT: 3 × /24 (256 IPs per AZ) = 768 IPs total for ~600 pods (stress test mode)
@@ -78,10 +84,10 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
   - **Cost**: ~$100/month vs ~$900/month for 3 separate clusters (saves $9,600/year)
   - **Capacity**: /20 (4,096 IPs) supports ~90 simultaneous SIT environment configurations
 - **VPC utilization optimized** — all VPCs sized to minimize internal waste
-  - Production: 87% utilization (7,104 IPs used / 8,192 IPs allocated)
-  - UAT: 94% utilization (1,920 IPs used / 2,048 IPs allocated) 
-  - DEV: 75% utilization (384 IPs used / 512 IPs allocated)
-  - SIT: 51% utilization (2,112 IPs used / 4,096 IPs allocated) — lower due to shared cluster growth headroom
+  - Production: 77% utilization (6,336 IPs used / 8,192 IPs allocated)
+  - UAT: 95% utilization (1,944 IPs used / 2,048 IPs allocated) 
+  - DEV: 50% utilization (256 IPs used / 512 IPs allocated)
+  - SIT: 51% utilization (2,176 IPs used / 4,096 IPs allocated) — lower due to shared cluster growth headroom
 - **Reserved space**: 77.3% of /16 (50,688 IPs) reserved for future expansion
   - Small block (/22): 1,024 IPs for incremental expansion
   - Medium block (/21): 2,048 IPs for additional environments
@@ -102,29 +108,31 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
 ```
 ┌─ Production VPC: 10.200.0.0/19 ─────────────────────────────────┐
 │                                                                  │
-│  PUBLIC SUBNETS (3 × /26 = 192 IPs)                            │
-│  ├─ AZ-a: 10.200.0.0/26     (64 IPs)  NAT-GW, ALB             │
-│  ├─ AZ-b: 10.200.0.64/26    (64 IPs)  NAT-GW, ALB             │
-│  └─ AZ-c: 10.200.0.128/26   (64 IPs)  NAT-GW, ALB             │
+│  PUBLIC SUBNETS (3 × /25 = 384 IPs)                            │
+│  ├─ AZ-a: 10.200.0.0/25     (128 IPs)  NAT-GW, ALB, NLB       │
+│  ├─ AZ-b: 10.200.0.128/25   (128 IPs)  NAT-GW, ALB, NLB       │
+│  └─ AZ-c: 10.200.1.0/25     (128 IPs)  NAT-GW, ALB, NLB       │
 │                                                                  │
-│  DATABASE SUBNETS (3 × /24 = 768 IPs)                          │
-│  ├─ AZ-a: 10.200.1.0/24     (256 IPs)  Aurora PostgreSQL      │
-│  ├─ AZ-b: 10.200.2.0/24     (256 IPs)  Aurora PostgreSQL      │
-│  └─ AZ-c: 10.200.3.0/24     (256 IPs)  Aurora PostgreSQL      │
+│  DATABASE SUBNETS (3 × /27 = 96 IPs)                           │
+│  ├─ AZ-a: 10.200.2.0/27     (32 IPs)  Aurora PostgreSQL       │
+│  ├─ AZ-b: 10.200.2.32/27    (32 IPs)  Aurora PostgreSQL       │
+│  └─ AZ-c: 10.200.2.64/27    (32 IPs)  Aurora PostgreSQL       │
 │                                                                  │
 │  PRIVATE SUBNETS (3 × /21 = 6,144 IPs)                         │
 │  ├─ AZ-a: 10.200.8.0/21     (2,048 IPs)  EKS Pods, MongoDB   │
 │  ├─ AZ-b: 10.200.16.0/21    (2,048 IPs)  EKS Pods, MongoDB   │
 │  └─ AZ-c: 10.200.24.0/21    (2,048 IPs)  EKS Pods, MongoDB   │
 │                                                                  │
-│  TOTAL USED: 7,104 IPs (87% utilization)                       │
-│  SPARE: 1,088 IPs (13% buffer)                                 │
+│  TOTAL USED: 6,624 IPs (81% utilization)                       │
+│  SPARE: 1,568 IPs (19% buffer)                                 │
 └──────────────────────────────────────────────────────────────────┘
 
 Workload capacity: ~3,000 pods (1,000 per AZ)
 MongoDB HA: 3-node replica set (1 primary + 2 secondaries across 3 AZs)
-Aurora HA: 1 writer + 2 readers across 3 AZs
-VPC Utilization: 87% (minimal waste)
+Aurora HA: 1 writer + 2-5 readers across 3 AZs
+Public subnets: 128 IPs per AZ (room for 2-3× more ALBs/NLBs)
+DB subnets: 32 IPs per AZ (AWS minimum for Aurora, ~12 IPs used)
+VPC Utilization: 81% (minimal waste)
 ```
 
 ---
@@ -139,23 +147,23 @@ VPC Utilization: 87% (minimal waste)
 ```
 ┌─ UAT VPC: 10.200.32.0/21 (DYNAMIC MULTI-AZ) ───────────────────┐
 │                                                                  │
-│  PUBLIC SUBNETS (3 × /26 = 192 IPs) [bracket = inactive by default]
-│  ├─ AZ-a: 10.200.32.0/26    (64 IPs)  NAT-GW, ALB  ✅ ACTIVE  │
-│  ├─ AZ-b: 10.200.32.64/26   (64 IPs)  [stress test only]      │
-│  └─ AZ-c: 10.200.32.128/26  (64 IPs)  [stress test only]      │
+│  PUBLIC SUBNETS (3 × /25 = 384 IPs) [bracket = inactive by default]
+│  ├─ AZ-a: 10.200.32.0/25    (128 IPs)  NAT-GW, ALB  ✅ ACTIVE │
+│  ├─ AZ-b: 10.200.32.128/25  (128 IPs)  [stress test only]     │
+│  └─ AZ-c: 10.200.33.0/25    (128 IPs)  [stress test only]     │
 │                                                                  │
-│  DATABASE SUBNETS (3 × /24 = 768 IPs)                          │
-│  ├─ AZ-a: 10.200.36.0/24    (256 IPs)  Aurora PostgreSQL      │
-│  ├─ AZ-b: 10.200.37.0/24    (256 IPs)  [stress test only]     │
-│  └─ AZ-c: 10.200.38.0/24    (256 IPs)  [stress test only]     │
+│  DATABASE SUBNETS (3 × /27 = 96 IPs)                           │
+│  ├─ AZ-a: 10.200.37.0/27    (32 IPs)  Aurora PostgreSQL       │
+│  ├─ AZ-b: 10.200.37.32/27   (32 IPs)  [stress test only]      │
+│  └─ AZ-c: 10.200.37.64/27   (32 IPs)  [stress test only]      │
 │                                                                  │
 │  PRIVATE SUBNETS (3 × /24 = 768 IPs)                           │
-│  ├─ AZ-a: 10.200.33.0/24    (256 IPs)  EKS Pods ✅ ACTIVE     │
-│  ├─ AZ-b: 10.200.34.0/24    (256 IPs)  [stress test only]     │
-│  └─ AZ-c: 10.200.35.0/24    (256 IPs)  [stress test only]     │
+│  ├─ AZ-a: 10.200.34.0/24    (256 IPs)  EKS Pods ✅ ACTIVE     │
+│  ├─ AZ-b: 10.200.35.0/24    (256 IPs)  [stress test only]     │
+│  └─ AZ-c: 10.200.36.0/24    (256 IPs)  [stress test only]     │
 │                                                                  │
-│  TOTAL USED: 1,920 IPs (94% utilization)                       │
-│  SPARE: 128 IPs (6% buffer)                                    │
+│  TOTAL USED: 1,248 IPs (61% utilization)                       │
+│  SPARE: 800 IPs (39% buffer)                                   │
 └──────────────────────────────────────────────────────────────────┘
 
 DEFAULT MODE (1 AZ):
@@ -177,7 +185,9 @@ STRESS TEST MODE (3 AZs):
 └─ Cost: ~$300/month (run only during stress tests)
 
 Transition: Scale MongoDB/EKS via kubectl (no VPC changes needed)
-VPC Utilization: 94% (minimal waste)
+Public subnets: 128 IPs per AZ (room for additional ALBs/NLBs)
+DB subnets: 32 IPs per AZ (AWS minimum for Aurora, ~12 IPs used)
+VPC Utilization: 61% (balanced for stress test capacity)
 ```
 
 ---
@@ -191,23 +201,24 @@ VPC Utilization: 94% (minimal waste)
 ```
 ┌─ DEV VPC: 10.200.40.0/23 (SINGLE ENVIRONMENT) ──────────────────┐
 │                                                                  │
-│  PUBLIC SUBNET (1 × /26 = 64 IPs)                              │
-│  └─ AZ-a: 10.200.40.0/26    (64 IPs)  NAT-GW, ALB             │
+│  PUBLIC SUBNET (1 × /25 = 128 IPs)                             │
+│  └─ AZ-a: 10.200.40.0/25    (128 IPs)  NAT-GW, ALB            │
 │                                                                  │
 │  PRIVATE SUBNET (1 × /25 = 128 IPs)                            │
 │  └─ AZ-a: 10.200.40.128/25  (128 IPs)  EKS Pods, MongoDB      │
 │                                                                  │
 │  DATABASE SUBNETS: N/A (CloudNativePG runs in-cluster)         │
 │                                                                  │
-│  TOTAL USED: 192 IPs (37.5% utilization)                       │
-│  SPARE: 320 IPs (62.5% buffer for growth)                      │
+│  TOTAL USED: 256 IPs (50% utilization)                         │
+│  SPARE: 256 IPs (50% buffer for growth)                        │
 └──────────────────────────────────────────────────────────────────┘
 
 Workload capacity: ~100 pods (single dev environment)
 PostgreSQL: CloudNativePG (in-cluster, uses private subnet IPs)
 MongoDB: Percona standalone (1 pod, in-cluster)
 Cost: ~$50/month (1 NAT Gateway, minimal compute)
-VPC Utilization: 37.5% (right-sized for single environment)
+Public subnet: 128 IPs (generous for dev, room for multiple ALBs/NLBs)
+VPC Utilization: 50% (balanced for single environment)
 
 NOTE: Only 1 development environment exists. DEV does not require multi-AZ
 or replica sets. This is the smallest, most cost-effective configuration.
@@ -224,8 +235,8 @@ or replica sets. This is the smallest, most cost-effective configuration.
 ```
 ┌─ SIT VPC: 10.200.42.0/20 (SHARED CLUSTER ARCHITECTURE) ─────────┐
 │                                                                  │
-│  PUBLIC SUBNET (1 × /26 = 64 IPs)                              │
-│  └─ AZ-a: 10.200.42.0/26    (64 IPs)  NAT-GW, ALB             │
+│  PUBLIC SUBNET (1 × /25 = 128 IPs)                             │
+│  └─ AZ-a: 10.200.42.0/25    (128 IPs)  NAT-GW, ALB            │
 │                                                                  │
 │  PRIVATE SUBNET (1 × /21 = 2,048 IPs) ← SHARED BY ALL         │
 │  └─ AZ-a: 10.200.43.0/21    (2,048 IPs)  All SIT pods         │
@@ -239,8 +250,8 @@ or replica sets. This is the smallest, most cost-effective configuration.
 │  Pod IPs: Kubernetes CNI auto-assigns from private subnet pool │
 │  Isolation: NetworkPolicies between namespaces                 │
 │                                                                  │
-│  TOTAL USED: 2,112 IPs (51.5% utilization)                     │
-│  SPARE: 1,984 IPs (48.5% buffer for growth)                    │
+│  TOTAL USED: 2,176 IPs (53% utilization)                       │
+│  SPARE: 1,920 IPs (47% buffer for growth)                      │
 │  DATABASE: CloudNativePG (in-cluster, uses private subnet IPs) │
 └──────────────────────────────────────────────────────────────────┘
 
@@ -249,7 +260,8 @@ Cost: ~$100/month vs ~$900/month for 3 separate clusters (saves $9,600/year)
 Workload: Each SIT env = MongoDB (3 pods) + PostgreSQL (3 pods) + SigNoz (10 pods) + App (5 pods) = ~21 pods
 Max capacity: 2,048 IPs ÷ 2 IPs/pod ÷ 2 (50% buffer) = ~500 pods = ~24 SIT environments (conservative)
 Realistic capacity: ~90 SIT environments with growth headroom
-VPC Utilization: 51.5% (balanced for shared cluster growth)
+Public subnet: 128 IPs (room for multiple ALBs/NLBs for SIT ingress)
+VPC Utilization: 53% (balanced for shared cluster growth)
 
 NOTE: Single AZ reduces cost by ~66% vs multi-AZ. SIT does not require HA
 since it's for integration testing only. Failed tests can be retried.
@@ -332,93 +344,114 @@ since it's for integration testing only. Failed tests can be retried.
 
 | Environment | VPC Size | Subnets Used | Utilization | Internal Waste |
 |---|---|---|---|---|
-| **Production** | 8,192 IPs | 7,104 IPs | **87%** | 1,088 IPs (13%) ✅ |
-| **UAT** | 2,048 IPs | 1,920 IPs | **94%** | 128 IPs (6%) ✅ |
-| **DEV** | 512 IPs | 192 IPs | **37.5%** | 320 IPs (62.5%) ⚠️ |
-| **SIT** | 4,096 IPs | 2,112 IPs | **51.5%** | 1,984 IPs (48.5%) ✅ |
+| **Production** | 8,192 IPs | 6,624 IPs | **81%** | 1,568 IPs (19%) ✅ |
+| **UAT** | 2,048 IPs | 1,248 IPs | **61%** | 800 IPs (39%) ✅ |
+| **DEV** | 512 IPs | 256 IPs | **50%** | 256 IPs (50%) ✅ |
+| **SIT** | 4,096 IPs | 2,176 IPs | **53%** | 1,920 IPs (47%) ✅ |
 
 **Analysis**:
-- **Production, UAT, SIT**: Excellent utilization (>50%), minimal waste
-- **DEV**: Lower utilization (37.5%) but acceptable because:
-  - Single environment only (smallest possible allocation is /23)
-  - Further reduction to /24 would leave only 16 IPs spare (too tight)
-  - 320 IP buffer allows growth if dev needs expand
+- **All environments >50% utilization** — no excessive waste
+- **DB subnets optimized**: /27 (32 IPs per AZ) instead of /24 (256 IPs per AZ)
+  - **Savings**: 672 IPs per environment (224 IPs × 3 AZs)
+  - **Aurora RDS usage**: ~12 IPs per AZ (1 writer + 5 read replicas + AWS reserves 5)
+  - **AWS minimum**: /27 is AWS-recommended minimum for RDS subnet groups
+- **Public subnets expanded to /25** (128 IPs per AZ) — freed DB subnet IPs reallocated here
+  - User preference: "prefer to give more ip to the public subnet than the db subnet"
+  - **Benefit**: Room for 2-3× additional ALBs/NLBs without renumbering
 - **OLD design waste** (for comparison):
+  - OLD DB subnets: 672 IPs wasted per environment (95% wasted) ❌
   - OLD Production: 9,280 IPs wasted (56.6%) ❌
   - OLD UAT: 14,336 IPs wasted (87.5%) ❌
-  - OLD DEV: 512 IPs wasted (25%) ⚠️
-  - OLD SIT: Overlapped reserved space ❌
 
 **Subnet breakdown validation**:
 
 **Production (10.200.0.0/19 = 8,192 IPs)**:
 ```
-Public:  10.200.0.0/26 + .64/26 + .128/26           = 192 IPs ✅
-DB:      10.200.1.0/24 + 10.200.2.0/24 + 3.0/24     = 768 IPs ✅
+Public:  10.200.0.0/25 + .128/25 + 1.0/25           = 384 IPs ✅
+DB:      10.200.2.0/27 + .32/27 + .64/27            = 96 IPs ✅
 Private: 10.200.8.0/21 + 16.0/21 + 24.0/21          = 6,144 IPs ✅
 ─────────────────────────────────────────────────────────────
-TOTAL: 7,104 IPs (no overlaps, no gaps within VPC boundary) ✅
+TOTAL: 6,624 IPs (81% utilization, no overlaps) ✅
 ```
 
 **UAT (10.200.32.0/21 = 2,048 IPs)**:
 ```
-Public:  10.200.32.0/26 + .64/26 + .128/26          = 192 IPs ✅
-Private: 10.200.33.0/24 + 34.0/24 + 35.0/24         = 768 IPs ✅
-DB:      10.200.36.0/24 + 37.0/24 + 38.0/24         = 768 IPs ✅
+Public:  10.200.32.0/25 + .128/25 + 33.0/25         = 384 IPs ✅
+Private: 10.200.34.0/24 + 35.0/24 + 36.0/24         = 768 IPs ✅
+DB:      10.200.37.0/27 + .32/27 + .64/27           = 96 IPs ✅
 ─────────────────────────────────────────────────────────────
-TOTAL: 1,728 IPs (84.4% utilization, no overlaps) ✅
+TOTAL: 1,248 IPs (61% utilization, no overlaps) ✅
 ```
 
 **DEV (10.200.40.0/23 = 512 IPs)**:
 ```
-Public:  10.200.40.0/26                             = 64 IPs ✅
+Public:  10.200.40.0/25                             = 128 IPs ✅
 Private: 10.200.40.128/25                           = 128 IPs ✅
 ─────────────────────────────────────────────────────────────
-TOTAL: 192 IPs (37.5% utilization, no overlaps) ✅
+TOTAL: 256 IPs (50% utilization, no overlaps) ✅
 ```
 
 **SIT (10.200.42.0/20 = 4,096 IPs)**:
 ```
-Public:  10.200.42.0/26                             = 64 IPs ✅
+Public:  10.200.42.0/25                             = 128 IPs ✅
 Private: 10.200.43.0/21                             = 2,048 IPs ✅
 ─────────────────────────────────────────────────────────────
-TOTAL: 2,112 IPs (51.5% utilization, no overlaps) ✅
+TOTAL: 2,176 IPs (53% utilization, no overlaps) ✅
 ```
 
 ### 4. Why did UAT/DEV/SIT have larger public subnets than Production?
 
-**✅ FIXED - All environments now use /26 for public subnets**
+**✅ FIXED - All environments now use /25 for public subnets (+ DB subnets optimized to /27)**
 
 **OLD design inconsistency**:
 - Production: 3 × /26 (64 IPs each) ✅ Correct
 - UAT: 2 × /24 (256 IPs each) ❌ 16× oversized
 - DEV: 2 × /24 (256 IPs each) ❌ 16× oversized
 - SIT: 2 × /26 (64 IPs each) ✅ Correct
+- **DB subnets**: 3 × /24 (256 IPs each) ❌ **95% wasted** (only ~12 IPs used per AZ)
 
-**NEW design (consistent)**:
-- Production: 3 × /26 (64 IPs each) ✅
-- UAT: 3 × /26 (64 IPs each) ✅
-- DEV: 1 × /26 (64 IPs) ✅
-- SIT: 1 × /26 (64 IPs) ✅
+**NEW design (optimized)**:
+- Production: 3 × /25 (128 IPs each) ✅
+- UAT: 3 × /25 (128 IPs each) ✅
+- DEV: 1 × /25 (128 IPs) ✅
+- SIT: 1 × /25 (128 IPs) ✅
+- **DB subnets**: 3 × /27 (32 IPs each) ✅ **Right-sized** (~12 IPs used, AWS minimum)
 
-**Why /26 (64 IPs) is sufficient**:
+**Why /25 (128 IPs) for public subnets**:
 ```
 Public subnet components (per AZ):
 ├─ NAT Gateway: 3-5 IPs
 ├─ ALB (Application Load Balancer): 8-15 IPs + 8 reserved by AWS = 16-23 IPs
+├─ NLB (Network Load Balancer): 8-15 IPs (future)
 ├─ Bastion host: 1-2 IPs
 ├─ VPN endpoint: 1 IP
 ├─ AWS reserved (5 IPs per subnet): 5 IPs
-└─ TOTAL: ~30-45 IPs used
+└─ CURRENT TOTAL: ~30-50 IPs used
 
-/26 = 64 IPs → ~40% utilization (healthy buffer)
-/24 = 256 IPs → ~15% utilization (wasteful)
+/25 = 128 IPs → ~40% current utilization, room for 2-3× growth
+/26 = 64 IPs → Would be tight with multiple ALBs/NLBs
+/24 = 256 IPs → Wasteful (OLD design)
 ```
 
-**Savings from /26 standardization**:
-- UAT: 384 IPs saved (2 × /24 → 3 × /26)
-- DEV: 192 IPs saved (2 × /24 → 1 × /26)
-- **Total**: 576 IPs saved across non-prod environments
+**Why /27 (32 IPs) for DB subnets**:
+```
+Aurora RDS requirements (per AZ):
+├─ 1 writer instance: 1 IP
+├─ 5 read replicas (max): 5 IPs
+├─ AWS reserved (first 4 + broadcast): 5 IPs
+└─ TOTAL: ~12 IPs used per AZ
+
+/27 = 32 IPs → ~40% utilization (AWS recommended minimum)
+/28 = 16 IPs → Too small (AWS may reject for RDS subnet groups)
+/24 = 256 IPs → 95% WASTED (OLD design)
+```
+
+**Savings from optimization**:
+- **DB subnets**: 672 IPs saved per environment (Production: 768→96, UAT: 768→96)
+- **Reallocation**: Freed DB subnet IPs moved to public subnets (/26→/25)
+- **User preference**: "prefer to give more ip to the public subnet than the db subnet"
+- **Total Production savings**: 576 IPs (DB waste eliminated, public expanded)
+- **Total UAT savings**: 576 IPs (DB waste eliminated, public expanded)
 
 ---
 
