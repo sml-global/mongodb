@@ -19,11 +19,13 @@ Boomi-facing guides deliberately contain none of it.
 
 | Topic | Document | Description |
 |---|---|---|
+| Environment overview (accounts, CIDRs, components) | [Environment Reference](references/environment-reference.md) | Single source of truth for all OMS environments: AWS account IDs, regions, CIDR allocations, component inventory, and architectural differences between DEV/UAT/Production/SIT |
 | Unfamiliar term or acronym | [Glossary & Concept Reference](references/glossary.md) | Plain-language lookup for every jargon term used in these docs, organized by category, with diagrams for the trickiest concepts |
 | Audit logging explained without jargon | [Boomi Audit Log Guide (Process Owner Edition)](guides/boomi-audit-log-owner-guide.md) | Plain-language walkthrough for non-technical process owners — what gets recorded and what to fill in |
 | Finding audit logs in SigNoz | [Boomi Audit Log Guide](guides/boomi-audit-log-guide.md) | How to search logs by process ID, execution ID, trace errors, build dashboards (for Boomi developers/admins) |
 | Provisioning SigNoz dashboards | [SigNoz Dashboard Provisioning](guides/signoz-dashboard-provisioning.md) | Step-by-step Terraform-based dashboard provisioning (K8s, MongoDB, PostgreSQL monitoring) |
 | Canonical audit record schema | [Audit Log Contract](references/audit-log-contract.md) | Fixed fields, naming rules, template-key format, module-owned params, and data-protection constraints |
+| AWS Organization requirements | [AWS Organization Requirements](references/aws-organization-requirements.md) | Consolidated requirements for AWS Organization administrator: Identity Center permission sets for UAT workforce access + cross-account S3 IAM policies for Boomi ELT |
 | Boomi Groovy library internals | [Boomi Groovy Library Architecture](references/boomi-groovy-library-architecture.md) | For people who maintain the two Groovy library files: why two libraries, precise signatures, design mechanisms, build/test/deploy (callers use the Integration Guide instead) |
 | Boomi audit-writer secret & accounts | [Operator Runbook § Boomi Audit Writer](guides/operator-runbook.md#boomi-audit-writer-credentials-secrets-and-accounts) | Secret provisioning/formats, MongoDB account mapping, diagnostic methods (operators only) |
 | Full reprovision sequence (new cluster/day-1) | [Operator Runbook](guides/operator-runbook.md#standard-operator-procedure) | Exact order: all -> signoz -> signoz-observability -> smoke verification |
