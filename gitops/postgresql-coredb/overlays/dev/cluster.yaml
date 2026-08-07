@@ -2,7 +2,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: oms-postgresql-coredb
-  namespace: coredb
+  namespace: coredb-dev
 spec:
   instances: 3
   imageName: ghcr.io/cloudnative-pg/postgresql:18.4
