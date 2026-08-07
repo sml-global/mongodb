@@ -20,6 +20,7 @@ Boomi-facing guides deliberately contain none of it.
 | Topic | Document | Description |
 |---|---|---|
 | Environment overview (accounts, CIDRs, components) | [Environment Reference](references/environment-reference.md) | Single source of truth for all OMS environments: AWS account IDs, regions, CIDR allocations, component inventory, and architectural differences between DEV/UAT/Production/SIT |
+| Common questions and troubleshooting | [FAQ](references/faq.md) | Frequently asked questions about MongoDB anti-affinity, network architecture, environment strategy, naming conventions, safety rules, and troubleshooting |
 | Unfamiliar term or acronym | [Glossary & Concept Reference](references/glossary.md) | Plain-language lookup for every jargon term used in these docs, organized by category, with diagrams for the trickiest concepts |
 | Audit logging explained without jargon | [Boomi Audit Log Guide (Process Owner Edition)](guides/boomi-audit-log-owner-guide.md) | Plain-language walkthrough for non-technical process owners — what gets recorded and what to fill in |
 | Finding audit logs in SigNoz | [Boomi Audit Log Guide](guides/boomi-audit-log-guide.md) | How to search logs by process ID, execution ID, trace errors, build dashboards (for Boomi developers/admins) |

@@ -172,6 +172,96 @@ kubectl -n kube-system get pods -l app.kubernetes.io/name=aws-ebs-csi-driver
 
 ---
 
+## EKS Node Upgrade with PodDisruptionBudgets
+
+### Symptom: Node group upgrade fails with PodEvictionFailure
+
+When upgrading EKS node instance types while reducing node count (e.g., 4× m6i.large → 2× m6i.xlarge), Terraform may fail with:
+
+```
+Error: waiting for EKS Node Group version update: unexpected state 'Failed'
+last error: PodEvictionFailure: Reached max retries while trying to evict pods
+```
+
+**Root cause**: Multiple overlapping PodDisruptionBudgets (PDBs) prevent pod eviction when there's insufficient capacity. Common with MongoDB clusters where:
+- Operator-managed PDB: `psmdb-mongod-rs0` with `maxUnavailable: 1`
+- Manual PDB: `psmdb-rs0-pdb` with `minAvailable: 2`
+
+When a pod is Pending (insufficient node resources), the PDB blocks eviction:
+- `currentHealthy: 2`, `expectedPods: 3`, `disruptionsAllowed: 0`
+- Status: `InsufficientPods` - DisruptionAllowed: False
+
+### Production-safe solution: Add capacity first
+
+**Zero-downtime pattern** — add new nodes before draining old ones:
+
+```bash
+# Step 1: Increase desired_size FIRST (adds new nodes without draining)
+# eks-platform.tfvars:
+#   node_instance_type = "m6i.large"  # keep current type
+#   desired_size = 6                  # add capacity
+bash scripts/provision.sh --env uat eks-platform --auto-approve
+
+# Step 2: Wait for new nodes and pods to reschedule
+kubectl get nodes -w
+
+# Step 3: NOW change instance type and reduce size
+# eks-platform.tfvars:
+#   node_instance_type = "m6i.xlarge"
+#   desired_size = 2
+bash scripts/provision.sh --env uat eks-platform --auto-approve
+```
+
+This allows all pods to reschedule to new nodes before old nodes drain.
+
+### Emergency solution (UAT/Dev only)
+
+**WARNING**: Direct termination forcibly kills pods without graceful drain. Only use in non-production environments.
+
+When stuck with blocked evictions, manually terminate old nodes to bypass PDB:
+
+```bash
+# 1. Identify old nodes by instance type
+kubectl get nodes -o custom-columns=NAME:.metadata.name,TYPE:.metadata.labels.node\\.kubernetes\\.io/instance-type
+
+# 2. For each old node, terminate directly (bypasses PDB)
+aws ec2 describe-instances \
+  --filters "Name=private-dns-name,Values=<node-dns>" \
+  --query 'Reservations[0].Instances[0].InstanceId' --output text | \
+  xargs -I {} aws ec2 terminate-instances --instance-ids {}
+
+# 3. Retry Terraform after all old nodes are terminated
+bash scripts/provision.sh --env uat eks-platform --auto-approve
+```
+
+### Checking for PDB issues
+
+```bash
+# List all PDBs in a namespace
+kubectl get pdb -n <namespace>
+
+# Check PDB status for blocking issues
+kubectl get pdb <pdb-name> -n <namespace> -o jsonpath='{.status}' | jq .
+
+# Check for multiple PDBs on same pods
+kubectl get pdb -n <namespace> -o yaml | grep -A 10 "selector:"
+```
+
+Key indicators of problems:
+- `disruptionsAllowed: 0`
+- `reason: InsufficientPods`
+- Multiple PDBs selecting the same pods
+
+**Prevention best practices:**
+1. Always add capacity before draining in production
+2. Avoid multiple overlapping PDBs on the same pods
+3. Size nodes for workload requirements before provisioning
+4. Test node upgrades in UAT first using the zero-downtime pattern
+
+**Related**: Issue #69 — discovered during UAT EKS node upgrade from 4× m6i.large to 2× m6i.xlarge on 2026-08-05.
+
+---
+
 ## Orphaned EBS Volume Recovery
 
 Both `gp3-mongodb` and `gp3-postgresql` StorageClasses use
