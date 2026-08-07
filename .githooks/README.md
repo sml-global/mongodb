@@ -64,13 +64,27 @@ git config user.email "sml_admin@sml.local"
 
 For GitHub CLI (`gh`) commands (creating issues, PRs), ensure you're authenticated with the correct account.
 
-**`gh` has no per-repo account scoping** (unlike git's `user.name`/`user.email`, which are per-repo config) — it's a single global keyring state (`gh auth switch`) shared across every repo on the machine. This repo enforces the correct account (`sml-admin`) two ways:
+**`gh` has no per-repo account scoping** (unlike git's `user.name`/`user.email`, which are per-repo config) — it's a single global keyring state (`gh auth switch`) shared across every repo on the machine. This repo enforces the correct account (`sml-admin`) three ways:
 
-### 1. `pre-push` hook (enforced automatically)
+### 1. `.envrc` + direnv (recommended — covers every `gh` invocation automatically)
 
-`.githooks/pre-push` blocks `git push` if the active `gh` account isn't `sml-admin`. This only covers `git push` — it does NOT cover `gh issue create`, `gh pr create`, `gh pr comment`, etc., since those are plain `gh` invocations, not git operations.
+The repo root has an `.envrc` that exports `GH_TOKEN`/`GITHUB_TOKEN` for the `sml-admin` account (looked up dynamically via `gh auth token --user sml-admin`, never hardcoded — no secret is stored in the file). `GH_TOKEN` overrides `gh`'s global active-account state for every `gh` command, issue/PR creation included, with zero extra typing.
 
-### 2. `scripts/gh` wrapper (use this for issue/PR commands)
+**One-time setup per machine:**
+```bash
+brew install direnv
+# Add to ~/.zshrc (or ~/.bashrc):
+eval "$(direnv hook zsh)"
+# Open a new shell, cd into this repo, then:
+direnv allow
+```
+After that, any shell in this directory automatically has `gh` pinned to `sml-admin` — verify with `gh api user --jq .login`.
+
+### 2. `pre-push` hook (enforced automatically, no setup needed)
+
+`.githooks/pre-push` blocks `git push` if the active `gh` account isn't `sml-admin`. This only covers `git push` — it does NOT cover `gh issue create`, `gh pr create`, `gh pr comment`, etc., since those are plain `gh` invocations, not git operations. (If direnv from option 1 is set up, `GH_TOKEN` makes this check pass automatically since the token is always correct.)
+
+### 3. `scripts/gh` wrapper (fallback if direnv isn't set up)
 
 Use `scripts/gh` instead of calling `gh` directly for anything that creates or modifies GitHub state:
 ```bash
