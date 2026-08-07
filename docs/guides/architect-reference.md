@@ -462,6 +462,15 @@ flowchart TD
   POLICIES --> PSMDB
 ```
 
+## Multi-Cluster GitOps (ArgoCD) — Planned
+
+**Status:** Design complete, deployment blocked on Production EKS cluster existing (Issue #82). Full architecture, cross-account IAM model, and RBAC design live in [ARGOCD-MULTI-ENV-ARCHITECTURE.md](../../ARGOCD-MULTI-ENV-ARCHITECTURE.md) and [docs/design/argocd-user-access-design.md](../design/argocd-user-access-design.md) — this section only summarizes how it fits the existing dependency graph above.
+
+- A single ArgoCD instance runs in the **Production** EKS cluster and registers UAT/Dev/SIT as remote clusters via cross-account IAM `AssumeRole` — access flows Production → Non-Production only, never the reverse (see CLAUDE.md § Safety Rules).
+- Coexists with Flux during the evaluation phase (Option C, phased rollout) — ArgoCD does not replace the `FLUX --> PERCONA_OP` / `FLUX --> SIGNOZ_HR` edges shown above; it adds a UI/RBAC layer on top for multi-cluster visibility and Production sync approval gates.
+- IAM roles (`argocd-target-{env}`, `argocd-cluster-manager-prod`) are provisioned via `platform-prerequisites/terraform/argocd-iam/`, following the same per-scope Terraform root pattern described in [State Partitioning Strategy](#state-partitioning-strategy) below.
+- See [Operator Runbook § ArgoCD](operator-runbook.md#argocd-status-design-complete-deployment-pending--issue-82) for deployment steps once the Production cluster exists.
+
 ## State Partitioning Strategy
 
 Terraform root and state key are selected by script scope:

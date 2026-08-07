@@ -90,6 +90,7 @@ Single source of truth for all deployed versions. Update this table when any com
 | Flux | Helm chart `flux2` | Bootstrap script | `helm search repo fluxcd-community/flux2 --versions` |
 | Kyverno | Helm chart | Bootstrap script | `helm search repo kyverno/kyverno --versions` |
 | cert-manager | Helm chart | Bootstrap script | `helm search repo jetstack/cert-manager --versions` |
+| ArgoCD | latest stable manifest (not yet deployed — pending) | `kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml` | [ArgoCD releases](https://github.com/argoproj/argo-cd/releases) |
 
 ### Client-Side Tools
 
@@ -299,6 +300,21 @@ Single source of truth for all deployed versions. Update this table when any com
 | **Depended on by** | EBS CSI Driver (when using Pod Identity auth), MongoDB workload ServiceAccount |
 | **Installed as** | EKS managed addon (`eks-pod-identity-agent`) |
 | **Verification** | [Verification Commands § Pod Identity](verification-commands.md#eks-pod-identity-agent) |
+
+### ArgoCD
+
+| Aspect | Detail |
+|---|---|
+| **What** | A declarative GitOps continuous-delivery tool for Kubernetes with a web UI, providing multi-cluster application sync, rollback, and RBAC-controlled deployment approvals. |
+| **Why** | Flux (current GitOps tool) has no web UI, no multi-cluster view, and no UI-driven rollback. Operating Production + UAT + Dev + SIT simultaneously requires switching kubectl contexts and reverting git commits for rollback. ArgoCD adds a single UI across all clusters with manual sync approval gates for Production. |
+| **How it helps** | A centralized ArgoCD instance in Production registers UAT/Dev/SIT as remote clusters (via cross-account IAM AssumeRole, never the reverse) and manages Applications for MongoDB, PostgreSQL config, and SigNoz. Operators get SSO login (AWS Identity Center) with role-scoped sync permissions instead of raw kubectl access. |
+| **Namespace** | `argocd` |
+| **Owner** | Platform team |
+| **Depends on** | Production EKS cluster (host), cross-account IAM roles (`argocd-target-{env}`, `argocd-cluster-manager-prod`), AWS Identity Center (SSO/OIDC) |
+| **Depended on by** | Multi-environment deployment workflow for MongoDB, PostgreSQL, SigNoz (planned — coexists with Flux during evaluation, see [ArgoCD Architecture](../../ARGOCD-MULTI-ENV-ARCHITECTURE.md)) |
+| **Status** | 🟡 Design complete, not yet deployed — blocked on Production EKS cluster provisioning. See Issue #82. |
+| **CRDs provided** | `applications.argoproj.io`, `appprojects.argoproj.io` |
+| **Verification** | [Verification Commands § ArgoCD](verification-commands.md#argocd) |
 
 ## Infrastructure Components
 

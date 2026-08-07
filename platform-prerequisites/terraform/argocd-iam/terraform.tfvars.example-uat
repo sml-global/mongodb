@@ -1,0 +1,17 @@
+# Example terraform.tfvars for UAT environment
+environment         = "uat"
+aws_region          = "ap-east-1"
+cluster_name        = "oms-uat-eks-cluster"
+oidc_provider_arn   = "arn:aws:iam::672172129937:oidc-provider/oidc.eks.ap-east-1.amazonaws.com/id/EXAMPLE1234567890ABCDEF"
+
+# Account IDs (defaults are already set in variables.tf, no need to override)
+# prod_account_id = "632674123947"
+# uat_account_id  = "672172129937"
+# dev_account_id  = "815402439714"
+# sit_account_id  = ""
+
+tags = {
+  Owner       = "Platform-Team"
+  CostCenter  = "OMS"
+  Compliance  = "SOC2"
+}

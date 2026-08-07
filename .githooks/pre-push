@@ -1,0 +1,36 @@
+#!/bin/bash
+# Pre-push hook to enforce sml-admin GitHub CLI (gh) account
+# gh has no per-repo account scoping (unlike git user.name/user.email), so
+# this hook checks the CLI's global active-account state at push time.
+
+REQUIRED_GH_LOGIN="sml-admin"
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "⚠️  WARNING: gh CLI not found — skipping gh account check"
+    exit 0
+fi
+
+CURRENT_LOGIN=$(gh api user --jq .login 2>/dev/null)
+
+if [ -z "$CURRENT_LOGIN" ]; then
+    echo "⚠️  WARNING: could not determine active gh account (not logged in or API call failed) — skipping check"
+    exit 0
+fi
+
+if [ "$CURRENT_LOGIN" != "$REQUIRED_GH_LOGIN" ]; then
+    echo "❌ ERROR: gh CLI is not using the corporate account for this repository"
+    echo ""
+    echo "  Active gh account : $CURRENT_LOGIN"
+    echo "  Required account  : $REQUIRED_GH_LOGIN"
+    echo ""
+    echo "To fix this, run:"
+    echo "  gh auth switch --hostname github.com --user $REQUIRED_GH_LOGIN"
+    echo ""
+    echo "This only blocks 'git push'. Issue/PR commands run via 'gh' directly"
+    echo "are not covered by git hooks — use 'gh auth switch' first, or the"
+    echo "scripts/gh wrapper (see .githooks/README.md)."
+    echo ""
+    exit 1
+fi
+
+exit 0
