@@ -348,6 +348,49 @@ correlated via a shared request/trace identifier.
 
 ---
 
+## Naming Convention
+
+**All infrastructure resources follow a consistent naming pattern** (approved in `docs/UAT-ARCHITECTURE-ISSUES-NAMESPACE-LOGGING.md` § Issue 1):
+
+### Kubernetes Namespaces
+
+| Type | Pattern | Examples |
+|---|---|---|
+| **Application workloads** | `{component}-{env}` | `mongodb-dev`, `signoz-uat`, `boomi-prod` |
+| **Platform services** | `{component}` (no suffix) | `cert-manager`, `kyverno`, `flux-system` |
+
+**Rationale for environment suffix:**
+- **Multi-tenancy ready**: If we ever co-locate dev+uat in same cluster for cost optimization
+- **Visual clarity**: `kubectl get pods -A` immediately shows environment
+- **RBAC/NetworkPolicies**: Easier to write rules like "all `-uat` namespaces can access X"
+- **Accident prevention**: Harder to run dev script against UAT by mistake
+- **GitOps best practices**: ArgoCD and Flux both recommend environment in namespace
+
+### Terraform Resource Names
+
+| Resource Type | Pattern | Examples |
+|---|---|---|
+| EKS Clusters | `oms-{env}-eks-cluster` | `oms-dev-eks-cluster`, `oms-uat-eks-cluster` |
+| VPCs | `oms-{env}-vpc` | `oms-dev-vpc`, `oms-uat-vpc` |
+| IAM Roles | `oms-{env}-{component}` | `oms-uat-mongodb-backup`, `oms-prod-signoz-metrics` |
+| S3 Buckets | `sml-oms-{component}-{env}` | `sml-oms-terraform-state`, `sml-oms-pbm-backup-uat` |
+| Aurora Clusters | `oms-{env}-{database}` | `oms-uat-aurora-coredb`, `oms-prod-aurora-branddb` |
+
+### Legacy Exceptions
+
+Documented but DO NOT repeat:
+- `EKS-boomi-runtime-cluster` (DEV) — predates convention, too risky to rename
+- `sml-elt-*` S3 buckets — cross-account Boomi ELT, separate project naming
+
+**Enforcement:**
+- Pre-commit hooks validate Kubernetes namespace names
+- GitHub Actions block PRs with naming violations
+- New resources MUST follow convention
+
+**Reference:** Full details in `docs/references/component-catalog.md` § "Naming Convention"
+
+---
+
 ## Architecture Summary
 
 The OMS data layer separates shared Terraform logic from runnable roots and Kubernetes manifests.

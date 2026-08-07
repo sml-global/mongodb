@@ -148,3 +148,30 @@ Single-context layout — `CONTEXT.md` + `docs/adr/` at the repo root. See `docs
 - Before declaring a provisioning or destroy task successful, run the relevant verification command (`verify-platform-health.sh` or a scope-specific verifier) and report the concrete result, not just "command exited 0".
 - When editing docs, preserve cross-links and keep `docs/index.md` navigation accurate.
 - Bash library files under `scripts/lib/` target Bash 3.2 compatibility: no associative arrays, no `declare -g`, no namerefs.
+
+### Naming Convention
+
+**All infrastructure resources MUST follow this naming convention** (approved in `docs/UAT-ARCHITECTURE-ISSUES-NAMESPACE-LOGGING.md` § Issue 1):
+
+**Kubernetes namespaces:**
+- Application workloads: `{component}-{env}` (e.g., `mongodb-dev`, `signoz-uat`, `boomi-prod`)
+- Platform services: `{component}` with NO suffix (e.g., `cert-manager`, `kyverno`, `flux-system`)
+
+**Terraform resources:**
+- EKS clusters: `oms-{env}-eks-cluster`
+- VPCs: `oms-{env}-vpc`
+- IAM roles: `oms-{env}-{component}`
+- S3 buckets: `sml-oms-{component}-{env}`
+- Aurora clusters: `oms-{env}-{database}`
+
+**Why environment suffix for applications:**
+- Multi-tenancy ready (if we ever co-locate dev+uat in same cluster)
+- Visual clarity in `kubectl get pods -A`
+- Easier RBAC/network policies (rules like "all `-uat` namespaces")
+- Prevents accidents (harder to run dev script against UAT)
+
+**Legacy exceptions:**
+- `EKS-boomi-runtime-cluster` (DEV) — predates convention, documented exception
+- `sml-elt-*` buckets — separate project, different naming scheme
+
+See `docs/references/component-catalog.md` § "Naming Convention" for full details.
