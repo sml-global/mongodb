@@ -31,21 +31,24 @@ This document provides a single source of truth for all OMS environments: AWS ac
 
 The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,536 addresses total), carved into **non-overlapping** per-environment allocations. This design enables future **Transit Gateway or VPC peering** without renumbering (overlapping CIDRs would block both).
 
-| Environment | VPC CIDR | Public Subnets | Private Subnets | DB Subnets (Aurora only) |
-|---|---|---|---|---|
-| **DEV** | `10.200.0.0/18` (16,384 IPs) | `10.200.0.0/24` (AZ-a), `10.200.1.0/24` (AZ-b) | `10.200.10.0/23` (AZ-a), `10.200.12.0/23` (AZ-b) | N/A (CNPG in-cluster) |
-| **UAT** | `10.200.64.0/18` (16,384 IPs) | `10.200.64.0/24` (AZ-a), `10.200.65.0/24` (AZ-b) | `10.200.74.0/23` (AZ-a), `10.200.76.0/23` (AZ-b) | `10.200.80.0/24` (AZ-a), `10.200.81.0/24` (AZ-b) |
-| **Production** | `10.200.128.0/18` (16,384 IPs) | `10.200.128.0/26` (AZ-a), `10.200.128.64/26` (AZ-b), `10.200.128.128/26` (AZ-c) | `10.200.136.0/21` (AZ-a), `10.200.144.0/21` (AZ-b), `10.200.152.0/21` (AZ-c) | `10.200.160.0/24` (AZ-a), `10.200.161.0/24` (AZ-b), `10.200.162.0/24` (AZ-c) |
-| **SIT1** | `10.200.192.0/20` (4,096 IPs) | `10.200.192.0/26` (AZ-a), `10.200.192.64/26` (AZ-b) | `10.200.194.0/21` (AZ-a), `10.200.202.0/21` (AZ-b) | N/A (CNPG in-cluster) |
-| **SIT2** | `10.200.208.0/20` (4,096 IPs) | `10.200.208.0/26` (AZ-a), `10.200.208.64/26` (AZ-b) | `10.200.210.0/21` (AZ-a), `10.200.218.0/21` (AZ-b) | N/A (CNPG in-cluster) |
-| **SIT3** | `10.200.224.0/20` (4,096 IPs) | `10.200.224.0/26` (AZ-a), `10.200.224.64/26` (AZ-b) | `10.200.226.0/21` (AZ-a), `10.200.234.0/21` (AZ-b) | N/A (CNPG in-cluster) |
-| **Reserved** | `10.200.240.0/20` (4,096 IPs) | Available for SIT4 or future expansion | | |
+| Environment | VPC CIDR | AZs | Public Subnets | Private Subnets | DB Subnets (Aurora only) | Capacity |
+|---|---|---|---|---|---|---|
+| **Production** | `10.200.0.0/18` (16,384 IPs) | 3 | `10.200.0.0/26` (AZ-a), `10.200.0.64/26` (AZ-b), `10.200.0.128/26` (AZ-c) | `10.200.8.0/21` (AZ-a), `10.200.16.0/21` (AZ-b), `10.200.24.0/21` (AZ-c) | `10.200.32.0/24` (AZ-a), `10.200.33.0/24` (AZ-b), `10.200.34.0/24` (AZ-c) | ~3,000 pods |
+| **UAT** | `10.200.64.0/18` (16,384 IPs) | 2 | `10.200.64.0/24` (AZ-a), `10.200.65.0/24` (AZ-b) | `10.200.74.0/23` (AZ-a), `10.200.76.0/23` (AZ-b) | `10.200.80.0/24` (AZ-a), `10.200.81.0/24` (AZ-b) | ~500 pods |
+| **DEV** | `10.200.128.0/21` (2,048 IPs) | 2 | `10.200.128.0/24` (AZ-a), `10.200.129.0/24` (AZ-b) | `10.200.130.0/23` (AZ-a), `10.200.132.0/23` (AZ-b) | N/A (CNPG in-cluster) | ~40 envs |
+| **SIT (shared)** | `10.200.136.0/20` (4,096 IPs) | 2 | `10.200.136.0/26` (AZ-a), `10.200.136.64/26` (AZ-b) | `10.200.138.0/21` (AZ-a), `10.200.146.0/21` (AZ-b) | N/A (CNPG in-cluster) | ~90 envs |
+| **Reserved** | `10.200.152.0/21` (2,048 IPs) | - | Available for future expansion | | | - |
+| **Reserved** | `10.200.160.0/19` (8,192 IPs) | - | Available for future expansion | | | - |
+| **Reserved** | `10.200.192.0/18` (16,384 IPs) | - | Available for future expansion (large block) | | | - |
+
+**Total allocated**: 48,640 IPs used, 16,896 IPs reserved (26% spare capacity for future growth)
 
 **Design decisions**:
 - **Production uses 3 AZs** (`ap-east-1a`, `ap-east-1b`, `ap-east-1c`) for true high availability
   - MongoDB 3-node replica set (1 per AZ): losing 1 AZ still maintains quorum (2/3)
   - EKS worker nodes (1 per AZ minimum): distributes pods across AZs
   - Aurora (3 AZs): better read replica distribution
+  - **Moved to front of CIDR space** (10.200.0.0/18) — highest priority environment
 - **Public subnets right-sized to `/26`** (64 IPs per AZ) — sufficient for NAT Gateways, ALBs, bastion hosts
   - **Components**: NAT Gateway (3-5 IPs), Internet-facing ALBs (8-15 IPs + AWS reserves 8 for scaling), Bastion hosts (1-2 IPs), VPN endpoints (1 IP)
   - **Total required**: ~30-45 IPs per AZ (64 IPs provides 23% buffer)
@@ -53,13 +56,177 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
   - Production `/26` saves 192 IPs per AZ vs. `/24` (576 IPs per environment)
 - **Private subnets sized to `/21`** (2,048 IPs per AZ) for production scale
   - Allows scaling to **2,048 pods per AZ** (or ~1,024 pods with standard IP allocation)
-  - DEV/UAT use `/23` (512 IPs per AZ) — adequate for test environments
-- **SIT environments right-sized to `/20`** (4,096 IPs total) — test-only, not production scale
-  - 3 SIT instances planned (SIT1, SIT2, SIT3) for parallel testing
-  - Each SIT supports multiple namespaces (sit1, sit2, sit3) within the same cluster
-  - 1 reserved `/20` block for SIT4 or future use
+  - Production total: ~3,000 pods across 3 AZs
+  - DEV/UAT use `/23` (512 IPs per AZ) — adequate for non-production environments
+- **DEV right-sized to `/21`** (2,048 IPs total) — reduced from wasteful /18
+  - Old allocation: 16,384 IPs (9.4% utilization - wasteful)
+  - New allocation: 2,048 IPs (75% utilization - right-sized)
+  - **Savings**: 14,336 IPs freed for future use
+  - Supports ~40 DEV-like environment configurations
+- **SIT uses shared cluster architecture** — single EKS cluster with namespace isolation
+  - **Architecture**: ONE SIT cluster (`oms-sit-eks-cluster`) with multiple namespaces
+  - **Namespaces**: `mongodb-sit1`, `mongodb-sit2`, `mongodb-sit3`, etc. (up to ~90 environments)
+  - **Pod IP allocation**: Kubernetes assigns IPs automatically from shared private subnet pool (cannot assign specific CIDRs to namespaces)
+  - **Isolation**: NetworkPolicies enforce traffic separation between namespaces
+  - **Cost**: ~$200/month vs. ~$900/month for 3 separate clusters (saves $8,400/year)
+  - **Capacity**: /20 (4,096 IPs) supports ~90 simultaneous SIT environment configurations
+  - **Why not /18?** Would support 386 SIT environments (massive overkill) and waste 12,288 IPs
+- **Reserved space**: 26% of /16 (16,896 IPs) reserved for future expansion
+  - Small block (/21): 2,048 IPs for incremental expansion
+  - Medium block (/19): 8,192 IPs for additional environments
+  - Large block (/18): 16,384 IPs for major expansion or new account
 
 **Cross-account connectivity**: Managed by a separate infrastructure team via company-wide AWS Landing Zone. This repository's Terraform never creates Transit Gateway or VPC peering resources.
+
+---
+
+### Detailed Subnet Design by Environment
+
+#### Production (Account: 632674123947, Region: ap-east-1)
+
+**VPC**: `10.200.0.0/18` (16,384 IPs total)  
+**EKS Cluster**: `oms-prod-eks-cluster`  
+**Availability Zones**: 3 (AZ-a, AZ-b, AZ-c)
+
+```
+┌─ Production VPC: 10.200.0.0/18 ─────────────────────────────────┐
+│                                                                  │
+│  PUBLIC SUBNETS (3 × /26 = 192 IPs)                            │
+│  ├─ AZ-a: 10.200.0.0/26     (64 IPs)  NAT-GW, ALB             │
+│  ├─ AZ-b: 10.200.0.64/26    (64 IPs)  NAT-GW, ALB             │
+│  └─ AZ-c: 10.200.0.128/26   (64 IPs)  NAT-GW, ALB             │
+│                                                                  │
+│  PRIVATE SUBNETS (3 × /21 = 6,144 IPs)                         │
+│  ├─ AZ-a: 10.200.8.0/21     (2,048 IPs)  EKS Pods, MongoDB   │
+│  ├─ AZ-b: 10.200.16.0/21    (2,048 IPs)  EKS Pods, MongoDB   │
+│  └─ AZ-c: 10.200.24.0/21    (2,048 IPs)  EKS Pods, MongoDB   │
+│                                                                  │
+│  DATABASE SUBNETS (3 × /24 = 768 IPs)                          │
+│  ├─ AZ-a: 10.200.32.0/24    (256 IPs)  Aurora PostgreSQL      │
+│  ├─ AZ-b: 10.200.33.0/24    (256 IPs)  Aurora PostgreSQL      │
+│  └─ AZ-c: 10.200.34.0/24    (256 IPs)  Aurora PostgreSQL      │
+│                                                                  │
+│  TOTAL USED: 7,104 IPs (43.4%)                                 │
+│  SPARE: 9,280 IPs (56.6% buffer)                               │
+└──────────────────────────────────────────────────────────────────┘
+
+Workload capacity: ~3,000 pods (1,000 per AZ)
+MongoDB HA: 3-node replica set (1 primary + 2 secondaries across 3 AZs)
+Aurora HA: 1 writer + 2 readers across 3 AZs
+```
+
+---
+
+#### UAT (Account: 672172129937, Region: ap-east-1)
+
+**VPC**: `10.200.64.0/18` (16,384 IPs total)  
+**EKS Cluster**: `oms-uat-eks-cluster`  
+**Availability Zones**: 2 (AZ-a, AZ-b)
+
+```
+┌─ UAT VPC: 10.200.64.0/18 ───────────────────────────────────────┐
+│                                                                  │
+│  PUBLIC SUBNETS (2 × /24 = 512 IPs)                            │
+│  ├─ AZ-a: 10.200.64.0/24    (256 IPs)  NAT-GW, ALB            │
+│  └─ AZ-b: 10.200.65.0/24    (256 IPs)  NAT-GW, ALB            │
+│                                                                  │
+│  PRIVATE SUBNETS (2 × /23 = 1,024 IPs)                         │
+│  ├─ AZ-a: 10.200.74.0/23    (512 IPs)  EKS Pods, MongoDB      │
+│  └─ AZ-b: 10.200.76.0/23    (512 IPs)  EKS Pods, MongoDB      │
+│                                                                  │
+│  DATABASE SUBNETS (2 × /24 = 512 IPs)                          │
+│  ├─ AZ-a: 10.200.80.0/24    (256 IPs)  Aurora PostgreSQL      │
+│  └─ AZ-b: 10.200.81.0/24    (256 IPs)  Aurora PostgreSQL      │
+│                                                                  │
+│  TOTAL USED: 2,048 IPs (12.5%)                                 │
+│  SPARE: 14,336 IPs (87.5% buffer)                              │
+└──────────────────────────────────────────────────────────────────┘
+
+Workload capacity: ~500 pods
+MongoDB: 3-node replica set (quorum maintained with 2 AZs)
+Aurora: 1 writer + 1 reader across 2 AZs
+```
+
+---
+
+#### DEV (Account: 815402439714, Region: ap-east-1)
+
+**VPC**: `10.200.128.0/21` (2,048 IPs total)  
+**EKS Cluster**: `oms-dev-eks-cluster`  
+**Availability Zones**: 2 (AZ-a, AZ-b)
+
+```
+┌─ DEV VPC: 10.200.128.0/21 ──────────────────────────────────────┐
+│                                                                  │
+│  PUBLIC SUBNETS (2 × /24 = 512 IPs)                            │
+│  ├─ AZ-a: 10.200.128.0/24   (256 IPs)  NAT-GW, ALB            │
+│  └─ AZ-b: 10.200.129.0/24   (256 IPs)  NAT-GW, ALB            │
+│                                                                  │
+│  PRIVATE SUBNETS (2 × /23 = 1,024 IPs)                         │
+│  ├─ AZ-a: 10.200.130.0/23   (512 IPs)  EKS Pods, MongoDB      │
+│  └─ AZ-b: 10.200.132.0/23   (512 IPs)  EKS Pods, MongoDB      │
+│                                                                  │
+│  DATABASE SUBNETS: N/A (CloudNativePG runs in-cluster)         │
+│                                                                  │
+│  TOTAL USED: 1,536 IPs (75%)                                   │
+│  SPARE: 512 IPs (25% buffer)                                   │
+└──────────────────────────────────────────────────────────────────┘
+
+Workload capacity: ~40 DEV-like environment configurations
+PostgreSQL: CloudNativePG (in-cluster, uses private subnet IPs)
+MongoDB: Percona (in-cluster, uses private subnet IPs)
+```
+
+---
+
+#### SIT (Account: TBD, Region: ap-east-1)
+
+**VPC**: `10.200.136.0/20` (4,096 IPs total)  
+**EKS Cluster**: `oms-sit-eks-cluster` (SINGLE SHARED CLUSTER)  
+**Availability Zones**: 2 (AZ-a, AZ-b)
+
+```
+┌─ SIT VPC: 10.200.136.0/20 (SHARED CLUSTER ARCHITECTURE) ────────┐
+│                                                                  │
+│  PUBLIC SUBNETS (2 × /26 = 128 IPs)                            │
+│  ├─ AZ-a: 10.200.136.0/26   (64 IPs)  NAT-GW, ALB             │
+│  └─ AZ-b: 10.200.136.64/26  (64 IPs)  NAT-GW, ALB             │
+│                                                                  │
+│  PRIVATE SUBNETS (2 × /21 = 4,096 IPs) ← SHARED BY ALL        │
+│  ├─ AZ-a: 10.200.138.0/21   (2,048 IPs)  All SIT pods         │
+│  └─ AZ-b: 10.200.146.0/21   (2,048 IPs)  All SIT pods         │
+│                                                                  │
+│  NAMESPACES (all share same IP pool):                          │
+│  ├─ mongodb-sit1 + signoz-sit1  (~40 pods)                    │
+│  ├─ mongodb-sit2 + signoz-sit2  (~40 pods)                    │
+│  ├─ mongodb-sit3 + signoz-sit3  (~40 pods)                    │
+│  └─ ... up to ~90 SIT environments total                      │
+│                                                                  │
+│  Pod IPs: Kubernetes CNI auto-assigns from private subnet pool │
+│  Isolation: NetworkPolicies between namespaces                 │
+│                                                                  │
+│  TOTAL CAPACITY: ~90 simultaneous SIT environments             │
+│  DATABASE: CloudNativePG (in-cluster, uses private subnet IPs) │
+└──────────────────────────────────────────────────────────────────┘
+
+Architecture: Single EKS cluster with namespace-based isolation
+Cost: ~$200/month vs ~$900/month for 3 separate clusters
+Workload: Each SIT env = MongoDB (3 pods) + PostgreSQL (3 pods) + SigNoz (10 pods) = ~21 pods
+Max capacity: 4,096 IPs ÷ 2 IPs/pod ÷ 2 (50% buffer) = ~1,000 pods = ~48 SIT environments (conservative)
+Realistic capacity: ~90 SIT environments (with growth headroom)
+```
+
+---
+
+### Reserved Space for Future Expansion
+
+| Block | CIDR | IPs | Purpose |
+|---|---|---|---|
+| **Reserved-Small** | `10.200.152.0/21` | 2,048 | Incremental expansion (e.g., SIT4 cluster, additional dev environment) |
+| **Reserved-Medium** | `10.200.160.0/19` | 8,192 | New environment or substantial expansion |
+| **Reserved-Large** | `10.200.192.0/18` | 16,384 | Major expansion (new account, disaster recovery region) |
+
+**Total reserved**: 26,624 IPs (40.6% of /16)
 
 ---
 
