@@ -301,15 +301,59 @@ destroy_signoz() {
 
 destroy_mongodb_k8s() {
   echo "Removing MongoDB workload resources..."
-  kubectl -n mongodb delete perconaservermongodb psmdb --ignore-not-found=true || true
+
+  # Step 1: Delete CRD resources FIRST (while operator is still running to process finalizers)
+  # This prevents namespace from getting stuck in Terminating state
+  echo "  - Deleting PerconaServerMongoDBBackup CRs (backup finalizers need operator running)..."
+  kubectl -n mongodb delete perconaservermongodbbackup --all --ignore-not-found=true --wait=true || true
+
+  echo "  - Deleting PerconaServerMongoDB CR (PSMDB finalizers need operator running)..."
+  kubectl -n mongodb delete perconaservermongodb psmdb --ignore-not-found=true --wait=true || true
+
   echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
+
+  # Step 2: Delete operator AFTER CRD resources (now safe - no finalizers to process)
+  echo "  - Deleting Percona operator HelmRelease..."
   kubectl -n mongodb delete helmrelease percona-server-mongodb-operator --ignore-not-found=true || true
 
-  # Remove cert-manager resources commonly created for MongoDB in this repo.
+  # Step 3: Remove cert-manager resources
   kubectl -n mongodb delete certificate mongodb-ca mongodb-app-client psmdb-ca-cert psmdb-ssl psmdb-ssl-internal --ignore-not-found=true || true
   kubectl -n mongodb delete issuer mongodb-selfsigned mongodb-ca-issuer psmdb-issuer psmdb-ca-issuer --ignore-not-found=true || true
 
-  echo "Removing MongoDB secrets and local escrow files..."
+  # Step 4: Delete Pod Identity associations (AWS resource, not managed by kubectl)
+  echo "  - Cleaning up EKS Pod Identity associations for mongodb namespace..."
+  local cluster_name="${EKS_CLUSTER_NAME:-oms-${ENVIRONMENT:-dev}-eks-cluster}"
+  local aws_region="${AWS_REGION:-ap-east-1}"
+
+  if command -v aws >/dev/null 2>&1; then
+    local associations
+    associations="$(aws eks list-pod-identity-associations \
+      --cluster-name "$cluster_name" \
+      --region "$aws_region" \
+      --query "associations[?namespace=='mongodb'].associationId" \
+      --output text 2>/dev/null || echo "")"
+
+    if [[ -n "$associations" ]]; then
+      echo "  - Found Pod Identity associations to delete: $associations"
+      for assoc_id in $associations; do
+        echo "    - Deleting Pod Identity association: $assoc_id"
+        aws eks delete-pod-identity-association \
+          --cluster-name "$cluster_name" \
+          --association-id "$assoc_id" \
+          --region "$aws_region" 2>/dev/null || {
+          echo "    - Warning: failed to delete Pod Identity association $assoc_id (may already be deleted)" >&2
+        }
+      done
+    else
+      echo "  - No Pod Identity associations found for mongodb namespace"
+    fi
+  else
+    echo "  - Warning: aws CLI not found, skipping Pod Identity association cleanup" >&2
+    echo "    Manual cleanup may be required: aws eks list-pod-identity-associations --cluster-name $cluster_name" >&2
+  fi
+
+  # Step 5: Remove secrets and local escrow files
+  echo "  - Removing MongoDB secrets and local escrow files..."
   kubectl -n mongodb delete secret psmdb-encryption-key psmdb-secrets internal-psmdb-users oms-audit-writer --ignore-not-found=true || true
   rm -f "$ROOT_DIR/.local-dev-encryption-key.txt" "$ROOT_DIR/.local-dev-user-passwords.txt"
 }
