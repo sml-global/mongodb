@@ -766,6 +766,56 @@ aws eks update-addon \
 
 **Rollback:** Same command with previous version.
 
+#### EKS Node Instance Type Upgrade
+
+**Current**: Varies by environment (DEV: m6i.large, UAT: m6i.xlarge, Production: TBD)
+
+**Where to check available types:**
+```bash
+aws ec2 describe-instance-type-offerings --region ap-east-1 \
+  --location-type availability-zone \
+  --query 'InstanceTypeOfferings[?InstanceType==`m6i.xlarge`]' --output table
+```
+
+**Zero-downtime production upgrade pattern** (two-pass approach):
+
+When upgrading node instance types, especially when reducing node count, use this pattern to avoid PodDisruptionBudget eviction failures:
+
+```bash
+# Pass 1: Add capacity BEFORE changing instance type
+# In platform-prerequisites/terraform/eks-platform/eks-platform.tfvars:
+#   node_instance_type = "m6i.large"      # KEEP current type
+#   desired_size = 6                      # INCREASE node count
+#   min_size = 6
+#   max_size = 8
+bash scripts/provision.sh --env uat eks-platform --auto-approve
+
+# Wait for new nodes to join and pods to reschedule
+kubectl get nodes -w
+# Press Ctrl+C when all nodes are Ready
+
+# Pass 2: NOW change instance type and reduce to target size
+# In eks-platform.tfvars:
+#   node_instance_type = "m6i.xlarge"     # NEW instance type
+#   desired_size = 2                      # TARGET node count
+#   min_size = 2
+#   max_size = 4
+bash scripts/provision.sh --env uat eks-platform --auto-approve
+```
+
+**Why this pattern works:**
+- Pass 1 adds new nodes WITHOUT draining existing nodes (no pod eviction needed)
+- Pods can reschedule to new nodes naturally as they scale
+- Pass 2 only drains old nodes when sufficient capacity exists on new nodes
+- PodDisruptionBudgets are satisfied throughout (no eviction blocking)
+
+**If upgrade fails with PodEvictionFailure:**
+See [Recovery Procedures § EKS Node Upgrade with PodDisruptionBudgets](../references/recovery-procedures.md#eks-node-upgrade-with-poddisruptionbudgets) for troubleshooting.
+
+**Rollback:** Reverse the two-pass process — add old instance type nodes first, then drain new ones.
+
+**Related:** Issue #69 — pattern discovered during UAT 4× m6i.large → 2× m6i.xlarge upgrade on 2026-08-05.
+
 #### MongoDB Server Image
 
 **Where to find compatible images:** Check Percona release notes for the operator version you're running.

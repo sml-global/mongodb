@@ -297,6 +297,34 @@ kubectl -n mongodb get secret psmdb-encryption-key psmdb-secrets
 
 **Pass criteria:** 3 pods Running, PVCs Bound, correct ServiceAccount, replica set healthy with 1 primary + 2 secondaries, encryption active.
 
+## PodDisruptionBudgets (PDB)
+
+PodDisruptionBudgets protect workloads during voluntary disruptions (node drains, upgrades). Check PDB status when troubleshooting pod eviction failures during node upgrades:
+
+```bash
+# List all PDBs in a namespace
+kubectl get pdb -n mongodb
+
+# Check PDB status (current vs expected pods)
+kubectl get pdb psmdb-mongod-rs0 -n mongodb -o jsonpath='{.status}' | jq .
+# Look for: currentHealthy, expectedPods, disruptionsAllowed
+# Problem indicators: disruptionsAllowed=0, reason: InsufficientPods
+
+# Check for multiple overlapping PDBs (can block evictions)
+kubectl get pdb -n mongodb -o yaml | grep -A 10 "selector:"
+
+# See which pods match a specific PDB
+kubectl get pdb psmdb-mongod-rs0 -n mongodb -o jsonpath='{.spec.selector}' | jq .
+kubectl get pods -n mongodb -l app.kubernetes.io/component=mongod
+```
+
+**Pass criteria:** 
+- `disruptionsAllowed > 0` for healthy clusters
+- No multiple overlapping PDBs on the same pods
+- `currentHealthy == expectedPods` (no Pending pods blocking quorum)
+
+**Related**: See [Recovery Procedures § EKS Node Upgrade with PodDisruptionBudgets](recovery-procedures.md#eks-node-upgrade-with-poddisruptionbudgets) for troubleshooting node upgrade failures.
+
 ## MongoDB Metrics Collector
 
 ```bash
