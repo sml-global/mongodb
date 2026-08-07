@@ -1,0 +1,36 @@
+#!/bin/bash
+# Pre-commit hook to enforce sml_admin GitHub account
+# This hook ensures all commits use the correct corporate identity
+
+REQUIRED_NAME="sml_admin"
+REQUIRED_EMAIL="sml_admin@sml.local"
+
+# Get configured user
+CONFIGURED_NAME=$(git config user.name)
+CONFIGURED_EMAIL=$(git config user.email)
+
+# Check if correct account is configured
+if [ "$CONFIGURED_NAME" != "$REQUIRED_NAME" ] || [ "$CONFIGURED_EMAIL" != "$REQUIRED_EMAIL" ]; then
+    echo "❌ ERROR: Git user is not configured correctly for this repository"
+    echo ""
+    echo "Current configuration:"
+    echo "  user.name  = $CONFIGURED_NAME"
+    echo "  user.email = $CONFIGURED_EMAIL"
+    echo ""
+    echo "Required configuration:"
+    echo "  user.name  = $REQUIRED_NAME"
+    echo "  user.email = $REQUIRED_EMAIL"
+    echo ""
+    echo "To fix this, run:"
+    echo "  git config user.name \"$REQUIRED_NAME\""
+    echo "  git config user.email \"$REQUIRED_EMAIL\""
+    echo ""
+    echo "Or to set globally for all SML repos:"
+    echo "  git config --global user.name \"$REQUIRED_NAME\""
+    echo "  git config --global user.email \"$REQUIRED_EMAIL\""
+    echo ""
+    exit 1
+fi
+
+# All checks passed
+exit 0

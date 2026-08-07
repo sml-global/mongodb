@@ -533,6 +533,83 @@ Or check specific components — see [Verification Commands](../references/verif
 
 ---
 
+## ArgoCD (Status: Design Complete, Deployment Pending — Issue #82)
+
+**Blocker:** Requires Production EKS cluster to exist. See [ArgoCD Multi-Env Architecture](../../ARGOCD-MULTI-ENV-ARCHITECTURE.md) and [Implementation Status](../status/argocd-implementation-status.md) for full context.
+
+### Prerequisites
+
+- Production EKS cluster provisioned and healthy
+- Terraform IAM modules at `platform-prerequisites/terraform/argocd-iam/` (already created, validated, not yet applied)
+- AWS Identity Center access to create SSO groups/permission sets
+- User role assignments confirmed — see `docs/design/argocd-user-assignments.md`
+
+### Step 1: Deploy IAM Roles (Terraform)
+
+```bash
+export AWS_PROFILE=AdministratorAccess-<account-for-target-env>
+cd platform-prerequisites/terraform/argocd-iam
+
+terraform init \
+  -backend-config="bucket=sml-oms-<env>-tfstate" \
+  -backend-config="key=argocd-iam/<env>.tfstate" \
+  -backend-config="region=ap-east-1"
+
+terraform plan \
+  -var="environment=<env>" \
+  -var="cluster_name=oms-<env>-eks-cluster" \
+  -var="oidc_provider_arn=<OIDC_ARN>" \
+  -var="aws_region=ap-east-1"
+
+terraform apply
+```
+
+Repeat per environment: `argocd-target-uat`, `argocd-target-dev`, `argocd-target-sit` (when it exists), and `argocd-cluster-manager-prod` in the Production account.
+
+### Step 2: Deploy ArgoCD in Production
+
+```bash
+kubectl --context oms-prod-eks-cluster apply -n argocd -f \
+  https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+kubectl -n argocd rollout status deployment/argocd-server
+```
+
+Annotate the ArgoCD ServiceAccount for IRSA/Pod Identity so it can assume `argocd-target-{env}` roles cross-account.
+
+### Step 3: Configure SSO/OIDC
+
+1. Create AWS Identity Center groups: `ArgoCD-Admin`, `ArgoCD-Operator`, `ArgoCD-Viewer`
+2. Assign users per `docs/design/argocd-user-assignments.md`
+3. Create permission sets and assign to the Production account
+4. Edit `argocd-cm` ConfigMap with OIDC connector settings, `argocd-rbac-cm` with role policies
+5. Restart `argocd-server` and test SSO login for all three roles
+
+### Step 4: Register Remote Clusters
+
+```bash
+argocd cluster add uat-cluster
+argocd cluster add dev-cluster
+# argocd cluster add sit-cluster   # once SIT exists
+argocd cluster list
+```
+
+Each registration uses the cross-account `argocd-target-{env}` role — never a Non-Production → Production credential.
+
+### Step 5: Verify
+
+```bash
+scripts/verify-platform-health.sh --env prod   # once argocd scope is integrated (Phase 5)
+```
+
+Or run the manual checks in [Verification Commands § ArgoCD](../references/verification-commands.md#argocd).
+
+### Troubleshooting
+
+See [ArgoCD Troubleshooting Guide](../troubleshooting/argocd-troubleshooting.md).
+
+---
+
 ## Day-2 Operations (Ongoing Maintenance)
 
 Use this section after initial provisioning to run recurring checks and controlled changes.

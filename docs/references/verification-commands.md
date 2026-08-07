@@ -226,6 +226,40 @@ kubectl get policyreports -A --no-headers | grep -c "fail" || echo "0 failures"
 
 **Pass criteria:** CRD exists, controller Running, policies active, no unexpected violations.
 
+## ArgoCD
+
+**Status:** Design complete, not yet deployed. Commands below apply once Issue #82 Phase 1-3 are implemented in Production.
+
+```bash
+# CRDs exist
+kubectl get crd applications.argoproj.io
+kubectl get crd appprojects.argoproj.io
+# Expect: both exist
+
+# Controller/server pods
+kubectl -n argocd get pods
+# Expect: argocd-server, argocd-repo-server, argocd-application-controller, argocd-dex-server Running
+
+# Rollout status
+kubectl -n argocd rollout status deployment/argocd-server
+# Expect: successfully rolled out
+
+# Registered clusters (requires argocd CLI login)
+argocd cluster list
+# Expect: prod (in-cluster) + uat + dev + sit (once registered)
+
+# Application sync status
+argocd app list
+# Expect: all apps Synced/Healthy
+
+# Cross-account IAM AssumeRole test (from ArgoCD pod)
+kubectl -n argocd exec deploy/argocd-application-controller -- \
+  aws sts assume-role --role-arn <argocd-target-uat-role-arn> --role-session-name verify-test
+# Expect: valid temporary credentials returned
+```
+
+**Pass criteria:** CRDs exist, all ArgoCD pods Running, server rollout complete, all registered clusters reachable, all Applications Synced/Healthy, cross-account AssumeRole succeeds.
+
 ## cert-manager
 
 ```bash

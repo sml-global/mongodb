@@ -42,6 +42,7 @@ Boomi-facing guides deliberately contain none of it.
 | Audit log library and telemetry | [Boomi Integration Guide](guides/boomi-integration-guide.md) | Library API, canonical-contract usage, SigNoz access, endpoint contracts |
 | Design rationale and security | [Enterprise Architecture](guides/enterprise-architecture.md) | Design decisions, security posture, compliance, production roadmap |
 | Per-component health checks | [Verification Commands](references/verification-commands.md) | Health check commands for every component + end-to-end smoke test |
+| ArgoCD (multi-cluster GitOps, design complete, deployment pending) | [ArgoCD User Guide](guides/argocd-user-guide.md) / [Admin Guide](guides/argocd-admin-guide.md) | Login, viewing apps, sync/rollback for end users; deployment, IAM, SSO, RBAC for admins — see [Troubleshooting](troubleshooting/argocd-troubleshooting.md) if something breaks |
 | SigNoz dashboards & alerts (as code) | [SigNoz Dashboard Import Pack](references/signoz-dashboard-import-pack.md) | Fully-automated Terraform IaC path (recommended) + manual JSON-import fallback for K8s, MongoDB, PostgreSQL, and OTel collector dashboards/alerts |
 | Rollback, recovery, credential rotation | [Recovery Procedures](references/recovery-procedures.md) | What to do when things go wrong |
 | Embedded defaults and constants | [Configuration Catalog](operations/dev-configuration-catalog.md) | Source of truth for hardcoded values |
