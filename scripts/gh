@@ -1,0 +1,27 @@
+#!/bin/bash
+# Wrapper for `gh` that forces the sml-admin account for this repo before
+# every invocation — covers `gh issue create`, `gh pr create`, etc., which
+# are not touched by git hooks (pre-commit/pre-push only fire on git
+# operations, not on `gh` subcommands run directly).
+#
+# Usage: scripts/gh <normal gh arguments>
+#   e.g. scripts/gh issue create --title "..." --body "..."
+#        scripts/gh pr create --title "..." --body "..."
+
+set -euo pipefail
+
+REQUIRED_GH_LOGIN="sml-admin"
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "❌ ERROR: gh CLI not found on PATH" >&2
+    exit 1
+fi
+
+CURRENT_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
+
+if [ "$CURRENT_LOGIN" != "$REQUIRED_GH_LOGIN" ]; then
+    echo "⚠️  gh active account is '${CURRENT_LOGIN:-<none>}', switching to '$REQUIRED_GH_LOGIN' for this repo..." >&2
+    gh auth switch --hostname github.com --user "$REQUIRED_GH_LOGIN" >&2
+fi
+
+exec gh "$@"

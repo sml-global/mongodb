@@ -22,6 +22,7 @@ EXPECTED_SCOPES = (
     "workload-identity",
     "signoz",
     "signoz-observability",
+    "argocd",
     "all",
 )
 
@@ -41,6 +42,7 @@ EXPECTED_DEPENDENCIES = {
     "database-access-brand": ("postgresql-brand",),
     "signoz": ("eks-platform", "platform-controllers"),
     "signoz-observability": ("signoz",),
+    "argocd": ("eks-platform", "platform-controllers"),
 }
 
 EXPECTED_ALL_ORDER = (
@@ -63,6 +65,7 @@ EXPECTED_WORK_PACKAGE_FOR_SCOPE = {
     "database-access-core": 4,
     "database-access-brand": 4,
     "boomi-runtime": 5,
+    "argocd": 6,
 }
 
 EXPECTED_EXISTING_PLATFORM_SCOPES = ()
@@ -107,6 +110,7 @@ EXPECTED_PROVISION_HANDLER = {
     "database-access-brand": "scope_registry_deferred_database_access_brand_provision",
     "signoz": "scope_registry_deferred_signoz_provision",
     "signoz-observability": "scope_registry_deferred_signoz_observability_provision",
+    "argocd": "scope_registry_deferred_argocd_provision",
 }
 
 EXPECTED_DESTROY_HANDLER = {
@@ -125,6 +129,7 @@ EXPECTED_DESTROY_HANDLER = {
     "database-access-brand": "scope_registry_deferred_database_access_brand_destroy",
     "signoz": "scope_registry_deferred_signoz_destroy",
     "signoz-observability": "scope_registry_deferred_signoz_observability_destroy",
+    "argocd": "scope_registry_deferred_argocd_destroy",
 }
 
 # Exactly the EXPECTED_DESTROY_ALL_ORDER scopes have a pre-destroy guard.
@@ -160,6 +165,7 @@ EXPECTED_STATE_KEY_VARIABLE = {
     "database-access-brand": "DATABASE_ACCESS_BRAND_STATE_KEY",
     "signoz": "SIGNOZ_STATE_KEY",
     "signoz-observability": "SIGNOZ_OBSERVABILITY_STATE_KEY",
+    "argocd": "ARGOCD_STATE_KEY",
 }
 
 PREFLIGHT_SLOTS = (
@@ -678,6 +684,34 @@ class DecisiveDispatchTests(ScopeRegistryFixture):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("signoz-observability requires work package 4", result.stderr)
+        self.assertFalse(self.command_log.exists())
+
+    def test_argocd_is_not_swept_up_by_all_provision_or_destroy(self):
+        # ArgoCD is a single centralized Production instance, not a
+        # per-environment scope like the rest of the catalog -- it must
+        # never be silently included in the generic `all` pseudo-scope.
+        provision_result = self.run_registry("resolve_provision_order all")
+        self.assertEqual(provision_result.returncode, 0, provision_result.stderr)
+        self.assertNotIn("argocd", self.lines(provision_result.stdout))
+
+        destroy_result = self.run_registry("resolve_destroy_order all")
+        self.assertEqual(destroy_result.returncode, 0, destroy_result.stderr)
+        self.assertNotIn("argocd", self.lines(destroy_result.stdout))
+
+    def test_narrow_argocd_provision_fails_closed_on_work_package_6(self):
+        result = self.run_registry("dispatch_scope_handler provision argocd")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("argocd requires work package 6", result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(self.command_log.exists())
+
+    def test_narrow_argocd_destroy_fails_closed_on_work_package_6(self):
+        result = self.run_registry("dispatch_scope_handler destroy argocd")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("argocd requires work package 6", result.stderr)
+        self.assertEqual(result.stdout, "")
         self.assertFalse(self.command_log.exists())
 
     def test_dispatch_rejects_unknown_operation(self):

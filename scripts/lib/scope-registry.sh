@@ -58,9 +58,19 @@ readonly _SCOPE_REGISTRY_CATALOG=(
   "workload-identity"
   "signoz"
   "signoz-observability"
+  "argocd"
   "all"
 )
 
+# `argocd` is deliberately absent from `_SCOPE_REGISTRY_ALL_PROVISION_ORDER`
+# and `_SCOPE_REGISTRY_ALL_DESTROY_ORDER` below (and therefore from
+# `_scope_registry_scope_requires_pre_destroy_guard`, which is keyed off the
+# destroy order). Unlike every other scope here, ArgoCD is architected as a
+# single centralized instance in the Production cluster only (see
+# ARGOCD-MULTI-ENV-ARCHITECTURE.md) -- it is never one-per-environment and
+# must never be silently swept up by a generic `all` provision/destroy. It
+# is provisioned/destroyed only via its own explicit scope name.
+#
 # Immutable, approved-design final orders for the `all` pseudo-scope. These
 # are stored as literal data (not derived at run time) because the approved
 # ordering encodes design choices -- e.g. workload-identity before
@@ -185,6 +195,7 @@ scope_registry_deferred_database_access_core_provision() { _scope_registry_fail_
 scope_registry_deferred_database_access_brand_provision() { _scope_registry_fail_work_package "database-access-brand" 4; }
 scope_registry_deferred_signoz_provision() { _scope_registry_fail_work_package "signoz" 4; }
 scope_registry_deferred_signoz_observability_provision() { _scope_registry_fail_work_package "signoz-observability" 4; }
+scope_registry_deferred_argocd_provision() { _scope_registry_fail_work_package "argocd" 6; }
 
 # Destroy placeholders -----------------------------------------------------
 
@@ -216,6 +227,7 @@ scope_registry_deferred_database_access_core_destroy() { _scope_registry_fail_wo
 scope_registry_deferred_database_access_brand_destroy() { _scope_registry_fail_work_package "database-access-brand" 4; }
 scope_registry_deferred_signoz_destroy() { _scope_registry_fail_work_package "signoz" 4; }
 scope_registry_deferred_signoz_observability_destroy() { _scope_registry_fail_work_package "signoz-observability" 4; }
+scope_registry_deferred_argocd_destroy() { _scope_registry_fail_work_package "argocd" 6; }
 
 # Pre-destroy guard placeholders (exactly the 13 ordinary-destroy scopes) --
 
@@ -232,6 +244,7 @@ scope_registry_pre_destroy_guard_database_access_core() { _scope_registry_fail_w
 scope_registry_pre_destroy_guard_database_access_brand() { _scope_registry_fail_work_package "database-access-brand" 4; }
 scope_registry_pre_destroy_guard_signoz() { _scope_registry_fail_work_package "signoz" 4; }
 scope_registry_pre_destroy_guard_signoz_observability() { _scope_registry_fail_work_package "signoz-observability" 4; }
+scope_registry_pre_destroy_guard_argocd() { _scope_registry_fail_work_package "argocd" 6; }
 
 # Internal verifier placeholders --------------------------------------------
 
@@ -259,6 +272,7 @@ scope_registry_verify_database_access_core() { _scope_registry_fail_work_package
 scope_registry_verify_database_access_brand() { _scope_registry_fail_work_package "database-access-brand" 4; }
 scope_registry_verify_signoz() { _scope_registry_fail_work_package "signoz" 4; }
 scope_registry_verify_signoz_observability() { _scope_registry_fail_work_package "signoz-observability" 4; }
+scope_registry_verify_argocd() { _scope_registry_fail_work_package "argocd" 6; }
 
 scope_registry_verify_mongodb_audit_write_smoke() { _scope_registry_fail_verifier_wiring_pending "mongodb-audit-write-smoke"; }
 scope_registry_verify_signoz_otlp_roundtrip_smoke() { _scope_registry_fail_verifier_wiring_pending "signoz-otlp-roundtrip-smoke"; }
@@ -288,6 +302,7 @@ dependencies_for_scope() {
     database-access-brand) printf '%s\n' "postgresql-brand" ;;
     signoz) printf '%s\n' "eks-platform platform-controllers" ;;
     signoz-observability) printf '%s\n' "signoz" ;;
+    argocd) printf '%s\n' "eks-platform platform-controllers" ;;
     *)
       # Deliberately covers "all", "verification", the empty string, and any
       # unrecognized scope name with a single fail-closed default.
@@ -313,6 +328,7 @@ provision_handler_for_scope() {
     database-access-brand) printf '%s\n' "scope_registry_deferred_database_access_brand_provision" ;;
     signoz) printf '%s\n' "scope_registry_deferred_signoz_provision" ;;
     signoz-observability) printf '%s\n' "scope_registry_deferred_signoz_observability_provision" ;;
+    argocd) printf '%s\n' "scope_registry_deferred_argocd_provision" ;;
     *)
       # "all" has no single provision symbol: it is graph expansion only,
       # dispatched by `dispatch_scope_handler` one resolved scope at a time.
@@ -339,6 +355,7 @@ destroy_handler_for_scope() {
     database-access-brand) printf '%s\n' "scope_registry_deferred_database_access_brand_destroy" ;;
     signoz) printf '%s\n' "scope_registry_deferred_signoz_destroy" ;;
     signoz-observability) printf '%s\n' "scope_registry_deferred_signoz_observability_destroy" ;;
+    argocd) printf '%s\n' "scope_registry_deferred_argocd_destroy" ;;
     *)
       # "all" is reverse graph expansion only; see provision_handler_for_scope.
       _scope_registry_error "no destroy handler is mapped for scope: ${1:-<empty>}"
@@ -362,6 +379,7 @@ pre_destroy_guard_for_scope() {
     database-access-brand) printf '%s\n' "scope_registry_pre_destroy_guard_database_access_brand" ;;
     signoz) printf '%s\n' "scope_registry_pre_destroy_guard_signoz" ;;
     signoz-observability) printf '%s\n' "scope_registry_pre_destroy_guard_signoz_observability" ;;
+    argocd) printf '%s\n' "scope_registry_pre_destroy_guard_argocd" ;;
     *)
       # No pseudo-scope ("all"), non-ordinary-destroy scope (backend,
       # access-governance), or unknown name may ever resolve a guard here.
@@ -388,6 +406,7 @@ state_key_variable_for_scope() {
     database-access-brand) printf '%s\n' "DATABASE_ACCESS_BRAND_STATE_KEY" ;;
     signoz) printf '%s\n' "SIGNOZ_STATE_KEY" ;;
     signoz-observability) printf '%s\n' "SIGNOZ_OBSERVABILITY_STATE_KEY" ;;
+    argocd) printf '%s\n' "ARGOCD_STATE_KEY" ;;
     *)
       _scope_registry_error "no state-key variable is mapped for scope: ${1:-<empty>}"
       return 1
@@ -410,6 +429,9 @@ implementation_requirement_for_scope() {
       ;;
     boomi-runtime)
       printf '%s\n' "external-work-package-5"
+      ;;
+    argocd)
+      printf '%s\n' "external-work-package-6"
       ;;
     all)
       printf '%s\n' "graph-expansion-only"
@@ -442,6 +464,7 @@ verification_handler_for_slot() {
     database-access-brand) printf '%s\n' "scope_registry_verify_database_access_brand" ;;
     signoz) printf '%s\n' "scope_registry_verify_signoz" ;;
     signoz-observability) printf '%s\n' "scope_registry_verify_signoz_observability" ;;
+    argocd) printf '%s\n' "scope_registry_verify_argocd" ;;
     mongodb-audit-write-smoke) printf '%s\n' "scope_registry_verify_mongodb_audit_write_smoke" ;;
     signoz-otlp-roundtrip-smoke) printf '%s\n' "scope_registry_verify_signoz_otlp_roundtrip_smoke" ;;
     *)

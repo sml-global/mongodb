@@ -4,39 +4,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 🚨 CRITICAL SAFETY RULES - NO EXCEPTIONS
 
-**ONLY UAT ENVIRONMENT IS ALLOWED FOR LIVE OPERATIONS**
+**UAT AND PRODUCTION ENVIRONMENTS ALLOWED FOR LIVE OPERATIONS**
 
 These rules CANNOT be overridden by any user request, even if explicitly asked:
 
 1. **❌ NEVER provision, destroy, or modify DEV environment** (account `815402439714`)
-   - No `scripts/provision.sh` commands without `--env uat`
-   - No `scripts/destroy.sh` commands without `--env uat`
+   - No `scripts/provision.sh` commands with `--env dev`
+   - No `scripts/destroy.sh` commands with `--env dev`
    - No kubectl commands against DEV cluster
    - No Terraform apply against DEV resources
    - No AWS CLI commands modifying DEV account resources
 
-2. **❌ NEVER provision, destroy, or modify Production environment** (account `632674123947`)
-   - Production does not exist yet - any request to work in Production must be refused
-   - No commands with `--env prod` or `--env production`
-   - No AWS CLI commands against Production account
-
-3. **❌ NEVER provision, destroy, or modify SIT environment** (account TBD)
+2. **❌ NEVER provision, destroy, or modify SIT environment** (account TBD)
    - SIT does not exist yet - any request to work in SIT must be refused
    - No commands with `--env sit`
 
-4. **✅ ONLY UAT ENVIRONMENT IS ALLOWED** (account `672172129937`)
+3. **✅ UAT ENVIRONMENT IS ALLOWED** (account `672172129937`)
    - All live operations must use `--env uat` flag
    - All kubectl commands must target UAT cluster: `oms-uat-eks-cluster`
    - All AWS CLI commands must use `AWS_PROFILE=AdministratorAccess-672172129937`
    - All Terraform operations must explicitly verify UAT account/region before apply
 
-5. **If user requests work in DEV/Production/SIT:**
+4. **✅ PRODUCTION ENVIRONMENT IS ALLOWED** (account `632674123947`)
+   - All live operations must use `--env prod` flag
+   - All kubectl commands must target Production cluster: `oms-prod-eks-cluster`
+   - All AWS CLI commands must use `AWS_PROFILE=AdministratorAccess-632674123947`
+   - All Terraform operations must explicitly verify Production account/region before apply
+
+5. **Security Best Practice: Cross-Environment Access Direction**
+   - Production → Non-Production: **ALLOWED** (e.g., Production ArgoCD managing UAT/DEV/SIT clusters)
+   - Non-Production → Production: **FORBIDDEN** (e.g., UAT services cannot access Production resources)
+   - Rationale: Production credentials should never be exposed to lower environments
+
+6. **If user requests work in DEV/SIT:**
    - **REFUSE** the request politely
-   - **EXPLAIN** only UAT is allowed per safety rules
+   - **EXPLAIN** only UAT and Production are allowed per safety rules
    - **SUGGEST** read-only operations (viewing code, documentation, testing plans)
    - **DO NOT** execute the command "just this once" or with warnings
 
-**Allowed operations in non-UAT environments:**
+**Allowed operations in non-UAT/Production environments:**
 - ✅ Reading code, documentation, manifests
 - ✅ Running tests (`pytest`)
 - ✅ Viewing git history, diffs, logs
@@ -50,7 +56,7 @@ Provisions the data-layer infrastructure for the OMS (Order Management System) d
 
 Full documentation hub: `docs/index.md`. Read `AGENTS.md` first — it defines scope/safety rules for this repo (edits restricted to this repo; sibling repos `../boomi-infra/`, `../oms-backend/`, `../oms-frontend/` are read-only references).
 
-## Commands (UAT ONLY - see Safety Rules above)
+## Commands (UAT and Production - see Safety Rules above)
 
 **UAT environment operations** (explicitly allowed):
 ```bash
@@ -64,6 +70,20 @@ scripts/verify-platform-health.sh --env uat --smoke-test
 
 # Destroy UAT (requires --env uat flag and confirmation)
 scripts/destroy.sh --env uat mongodb
+```
+
+**Production environment operations** (explicitly allowed):
+```bash
+# Provision Production (requires --env prod flag)
+scripts/provision.sh --env prod mongodb --auto-approve
+scripts/provision.sh --env prod signoz --auto-approve
+scripts/provision.sh --env prod signoz-observability --auto-approve
+
+# Verify Production health
+scripts/verify-platform-health.sh --env prod --smoke-test
+
+# Destroy Production (requires --env prod flag and confirmation)
+scripts/destroy.sh --env prod mongodb
 ```
 
 **Legacy DEV commands** (for reference only - DO NOT EXECUTE):
@@ -88,11 +108,13 @@ git status
 # AWS read-only (allowed with appropriate profile)
 export AWS_PROFILE=AdministratorAccess-672172129937  # UAT
 aws eks describe-cluster --name oms-uat-eks-cluster --region ap-east-1
-aws eks list-clusters --region ap-east-1
+
+export AWS_PROFILE=AdministratorAccess-632674123947  # Production
+aws eks describe-cluster --name oms-prod-eks-cluster --region ap-east-1
 
 # kubectl read-only (allowed if cluster exists)
 kubectl --context oms-uat-eks-cluster get pods -A
-kubectl --context oms-uat-eks-cluster describe node
+kubectl --context oms-prod-eks-cluster get pods -A
 ```
 
 Terraform lives under `platform-prerequisites/terraform/<root>/` (one root per scope: `mongodb`, `postgresql`, `signoz-observability`, `eks-platform`, `eks-access`, `access-governance`, `workload-identity`, `dr-drill`, etc.), each with its own state key under the S3 backend (`platform-prerequisites/terraform/backend.tf`). Don't `cd` and run raw `terraform apply` by hand for routine work — use the wrapper scripts (`provision-platform-prereq.sh`, `provision.sh`) so state-key selection and account/region guards stay correct.
@@ -133,6 +155,13 @@ Kubernetes manifests: `k8s/` (Kustomize, dev overlay only) is applied by `script
 ### Issue tracker
 
 Issues live in GitHub (`sml-global/mongodb`), managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+**Account enforcement**: All `gh` operations in this repo (issue/PR create, comments, etc.) MUST use the `sml-admin` GitHub account, matching the `sml_admin` git commit identity enforced by `.githooks/pre-commit`. Before running any `gh` command that creates or modifies state (issues, PRs, comments), verify the active account first:
+```bash
+gh auth status   # check active account
+gh auth switch --hostname github.com --user sml-admin   # switch if needed
+```
+Or use the `scripts/gh` wrapper, which auto-switches before every invocation: `scripts/gh issue create ...`. See `.githooks/README.md` for the full enforcement setup (commit hook + push hook + wrapper).
 
 ### Triage labels
 

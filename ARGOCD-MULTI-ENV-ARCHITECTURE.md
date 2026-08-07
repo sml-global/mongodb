@@ -1,6 +1,8 @@
 # ArgoCD Multi-Environment Architecture Options
 
-**Question**: Can one single ArgoCD in Production manage all Kubernetes clusters in different environments (DEV, UAT, Production)? Or must we have one ArgoCD per environment?
+**Question**: Can one single ArgoCD in Production manage all Kubernetes clusters in different environments (DEV, UAT, Production, SIT)? Or must we have one ArgoCD per environment?
+
+**Context**: As of August 2026, OMS operational policy allows **Production and UAT** environments for live operations. DEV and SIT remain restricted for safety.
 
 ---
 
@@ -12,7 +14,9 @@
 - ✅ **Distributed ArgoCD** (1 instance per environment) is also valid
 - 🔧 **Hybrid approach** (central + local) often works best
 
-**Recommendation for OMS**: **Centralized ArgoCD in Production managing all environments** (DEV, UAT, Production, SIT)
+**Recommendation for OMS**: **Centralized ArgoCD in Production managing all environments** (Production, UAT, DEV, SIT)
+
+**Security Principle**: Access flows **FROM Production TO non-production** (never reverse) — Production credentials never exposed to lower environments.
 
 ---
 
@@ -116,6 +120,8 @@ Production Account (632674123947)
 - **Cost-effective** - one ArgoCD instance (smaller footprint)
 - **Centralized audit trail** - all deployments logged in one place
 - **Easier to maintain** - update ArgoCD once, applies to all clusters
+- **Follows security best practice** - Production → Non-Production access direction (never reverse)
+- **Same user group** - Team logs in once, all environments visible, RBAC controls per-env permissions
 
 ### Cons ❌
 
@@ -241,14 +247,23 @@ DEV Account (815402439714)
 
 ### Why?
 
-1. **You already have cross-account patterns** - PR #76 implements cross-account S3 with AssumeRole
-2. **Small footprint** - 4 small clusters don't justify 4 ArgoCD instances
-3. **Central visibility** - aligns with UAT-only operational policy (central monitoring)
-4. **Flux is already present** - transitioning from Flux → ArgoCD is easier with centralized approach
+1. **Follows security best practice** - Production → Non-Production access direction (never reverse)
+2. **You already have cross-account patterns** - `platform-prerequisites/terraform/boomi-elt-s3/` implements cross-account S3 with AssumeRole (PR #76)
+3. **Small footprint** - 4 small clusters don't justify 4 ArgoCD instances
+4. **Central visibility** - One UI for all environments aligns with operational policy
+5. **Single user group** - Team logs in once, sees all 4 environments, RBAC controls per-env permissions
+6. **Flux is already present** - Transitioning from Flux → ArgoCD is easier with centralized approach
+7. **Production + UAT allowed** - Revised operational policy permits live operations in both environments (DEV/SIT remain restricted)
 
 ### Implementation Plan
 
 #### Phase 1: Deploy ArgoCD in Production Cluster
+
+**Prerequisites**:
+- Production EKS cluster must exist: `oms-prod-eks-cluster`
+- OIDC provider configured for IRSA
+- kubectl access to Production cluster
+
 ```bash
 # In Production account
 export AWS_PROFILE=AdministratorAccess-632674123947
@@ -258,100 +273,30 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/st
 
 #### Phase 2: Create Cross-Account IAM Roles
 
-**Production account** (632674123947):
-```hcl
-# Terraform: platform-prerequisites/terraform/argocd-iam/prod.tf
-resource "aws_iam_role" "argocd_cluster_manager" {
-  name = "argocd-cluster-manager-prod"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Federated = "arn:aws:iam::632674123947:oidc-provider/${OIDC_PROVIDER}"
-      }
-      Action = "sts:AssumeRoleWithWebIdentity"
-      Condition = {
-        StringEquals = {
-          "${OIDC_PROVIDER}:sub" = "system:serviceaccount:argocd:argocd-application-controller"
-        }
-      }
-    }]
-  })
-}
+**IMPORTANT**: Terraform modules have been created at `platform-prerequisites/terraform/argocd-iam/`
 
-resource "aws_iam_role_policy" "argocd_assume_target_roles" {
-  role = aws_iam_role.argocd_cluster_manager.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = "sts:AssumeRole"
-      Resource = [
-        "arn:aws:iam::672172129937:role/argocd-target-uat",
-        "arn:aws:iam::815402439714:role/argocd-target-dev",
-        # SIT account when created
-      ]
-    }]
-  })
-}
+**Deployment order** (to avoid circular dependencies):
+1. Deploy target roles in UAT/DEV/SIT first (so they exist before Production role references them)
+2. Deploy Production cluster manager role last
+
+See `platform-prerequisites/terraform/argocd-iam/README.md` for detailed deployment instructions.
+
+#### Phase 3: Annotate ArgoCD ServiceAccount (IRSA)
+
+After deploying the Production IAM role, annotate the ArgoCD ServiceAccount to use it:
+
+```bash
+export AWS_PROFILE=AdministratorAccess-632674123947
+kubectl --context oms-prod-eks-cluster annotate serviceaccount argocd-application-controller \
+  -n argocd \
+  eks.amazonaws.com/role-arn=arn:aws:iam::632674123947:role/argocd-cluster-manager-prod
 ```
 
-**UAT account** (672172129937):
-```hcl
-# Terraform: platform-prerequisites/terraform/argocd-iam/uat.tf
-resource "aws_iam_role" "argocd_target" {
-  name = "argocd-target-uat"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        AWS = "arn:aws:iam::632674123947:role/argocd-cluster-manager-prod"
-      }
-      Action = "sts:AssumeRole"
-      Condition = {
-        StringEquals = {
-          "sts:ExternalId" = "argocd-prod-to-uat"
-        }
-      }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "argocd_target_eks" {
-  role = aws_iam_role.argocd_target.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "eks:DescribeCluster",
-        "eks:ListClusters"
-      ]
-      Resource = "*"
-    }]
-  })
-}
-```
-
-**Repeat for DEV/SIT accounts**
-
-#### Phase 3: Register Remote Clusters in ArgoCD
+#### Phase 4: Register Remote Clusters in ArgoCD
 
 ```bash
 # From Production cluster
 export AWS_PROFILE=AdministratorAccess-632674123947
-
-# Assume UAT role
-aws sts assume-role \
-  --role-arn arn:aws:iam::672172129937:role/argocd-target-uat \
-  --role-session-name argocd-register-uat \
-  --external-id argocd-prod-to-uat
 
 # Update kubeconfig for UAT cluster
 aws eks update-kubeconfig \
@@ -369,7 +314,7 @@ argocd cluster add uat-cluster \
 # Repeat for DEV/SIT
 ```
 
-#### Phase 4: Configure RBAC via Identity Center
+#### Phase 5: Configure RBAC via Identity Center
 
 **Create permission sets**:
 
@@ -439,21 +384,27 @@ data:
 
 ### Centralized ArgoCD (Recommended)
 
+**Implementation**: Terraform modules created at `platform-prerequisites/terraform/argocd-iam/`
+
 **Production account** (632674123947):
-- IAM role: `argocd-cluster-manager-prod` (attached to ArgoCD ServiceAccount)
-- Permissions: `sts:AssumeRole` to target account roles
+- IAM role: `argocd-cluster-manager-prod` (attached to ArgoCD ServiceAccount via IRSA)
+- Permissions: `sts:AssumeRole` to target account roles + `eks:DescribeCluster` for local cluster
 
 **Target accounts** (UAT/DEV/SIT):
 - IAM role: `argocd-target-{env}` (trusted by Production ArgoCD)
 - Trust policy: Allows Production `argocd-cluster-manager-prod` with external ID
 - Permissions: `eks:DescribeCluster`, `eks:ListClusters`
 
-**External IDs** (security):
+**External IDs** (security against confused deputy attacks):
 - `argocd-prod-to-uat`
 - `argocd-prod-to-dev`
 - `argocd-prod-to-sit`
 
-### Distributed ArgoCD (Alternative)
+**Security Principle Enforced**:
+- ✅ Production → Non-Production: Allowed (Production ArgoCD assumes roles in lower environments)
+- ❌ Non-Production → Production: Blocked (no trust relationship in reverse direction)
+
+### Distributed ArgoCD (Alternative - Not Recommended)
 
 **Each account** (DEV/UAT/Production/SIT):
 - IAM role: `argocd-local-{env}` (attached to local ArgoCD ServiceAccount)
@@ -467,14 +418,18 @@ data:
 
 ## Next Steps
 
-1. **Decide architecture**: Centralized (recommended) vs. Distributed vs. Hybrid
-2. **If centralized**:
-   - Create Terraform modules for cross-account IAM roles
-   - Deploy ArgoCD in Production cluster (after Production is provisioned)
-   - Register UAT cluster first (test with UAT-only policy)
-3. **If distributed**:
-   - Deploy ArgoCD in UAT cluster (UAT-only policy allows this)
-   - Create Identity Center permission sets per environment
-   - Test UAT ArgoCD before expanding to other environments
+1. **Architecture decided**: ✅ Centralized ArgoCD in Production (recommended)
+2. **Terraform modules created**: ✅ `platform-prerequisites/terraform/argocd-iam/`
+3. **Next actions**:
+   - Deploy target IAM roles in UAT/DEV/SIT accounts (see Terraform module README)
+   - Deploy Production cluster manager IAM role (requires Production cluster + OIDC provider)
+   - Deploy ArgoCD in Production cluster
+   - Register UAT cluster first as test case
+   - Expand to DEV/SIT once validated
 
-**Recommendation**: Start with **centralized ArgoCD in Production**, test with UAT cluster registration first.
+**Updated Policy**: Both **Production and UAT** environments are now approved for live operations (DEV/SIT remain restricted per safety rules).
+
+**See Also**:
+- `platform-prerequisites/terraform/argocd-iam/README.md` - Full deployment instructions
+- `platform-prerequisites/terraform/boomi-elt-s3/` - Similar cross-account pattern (PR #76)
+- Issue #82 - ArgoCD integration tracking issue

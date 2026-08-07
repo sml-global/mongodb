@@ -188,6 +188,14 @@ flowchart TD
   IAM --> WORKLOADS
 ```
 
+### Multi-Cluster GitOps Access (ArgoCD — Planned)
+
+**Status:** Design complete, deployment blocked on Production EKS cluster existing (Issue #82). See [ARGOCD-MULTI-ENV-ARCHITECTURE.md](../../ARGOCD-MULTI-ENV-ARCHITECTURE.md) and [docs/design/argocd-user-access-design.md](../design/argocd-user-access-design.md) for the full design.
+
+- Single ArgoCD instance in Production, SSO via AWS Identity Center, three roles: `ArgoCD-Admin` (full access, all 4 envs), `ArgoCD-Operator` (deploy UAT/Dev/SIT, view-only Prod), `ArgoCD-Viewer` (view-only all envs).
+- Cross-account trust direction follows the same rule as the rest of this platform: **Production → Non-Production is allowed; the reverse is forbidden.** ArgoCD in Production assumes `argocd-target-{env}` roles in UAT/Dev/SIT — no Non-Production identity is ever granted access back into Production.
+- Real user assignments tracked in `docs/design/argocd-user-assignments.md` (kept current, not duplicated here).
+
 ---
 
 ## Cross-System Integration
