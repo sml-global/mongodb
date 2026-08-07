@@ -35,7 +35,7 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
 |---|---|---|---|---|
 | **DEV** | `10.200.0.0/18` (16,384 IPs) | `10.200.0.0/24` (AZ-a), `10.200.1.0/24` (AZ-b) | `10.200.10.0/23` (AZ-a), `10.200.12.0/23` (AZ-b) | N/A (CNPG in-cluster) |
 | **UAT** | `10.200.64.0/18` (16,384 IPs) | `10.200.64.0/24` (AZ-a), `10.200.65.0/24` (AZ-b) | `10.200.74.0/23` (AZ-a), `10.200.76.0/23` (AZ-b) | `10.200.80.0/24` (AZ-a), `10.200.81.0/24` (AZ-b) |
-| **Production** | `10.200.128.0/18` (16,384 IPs) | `10.200.128.0/26` (AZ-a), `10.200.128.64/26` (AZ-b), `10.200.128.128/26` (AZ-c) | `10.200.132.0/22` (AZ-a), `10.200.136.0/22` (AZ-b), `10.200.140.0/22` (AZ-c) | `10.200.144.0/24` (AZ-a), `10.200.145.0/24` (AZ-b), `10.200.146.0/24` (AZ-c) |
+| **Production** | `10.200.128.0/18` (16,384 IPs) | `10.200.128.0/26` (AZ-a), `10.200.128.64/26` (AZ-b), `10.200.128.128/26` (AZ-c) | `10.200.136.0/21` (AZ-a), `10.200.144.0/21` (AZ-b), `10.200.152.0/21` (AZ-c) | `10.200.160.0/24` (AZ-a), `10.200.161.0/24` (AZ-b), `10.200.162.0/24` (AZ-c) |
 | **SIT1** | `10.200.192.0/20` (4,096 IPs) | `10.200.192.0/26` (AZ-a), `10.200.192.64/26` (AZ-b) | `10.200.194.0/21` (AZ-a), `10.200.202.0/21` (AZ-b) | N/A (CNPG in-cluster) |
 | **SIT2** | `10.200.208.0/20` (4,096 IPs) | `10.200.208.0/26` (AZ-a), `10.200.208.64/26` (AZ-b) | `10.200.210.0/21` (AZ-a), `10.200.218.0/21` (AZ-b) | N/A (CNPG in-cluster) |
 | **SIT3** | `10.200.224.0/20` (4,096 IPs) | `10.200.224.0/26` (AZ-a), `10.200.224.64/26` (AZ-b) | `10.200.226.0/21` (AZ-a), `10.200.234.0/21` (AZ-b) | N/A (CNPG in-cluster) |
@@ -47,13 +47,16 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
   - EKS worker nodes (1 per AZ minimum): distributes pods across AZs
   - Aurora (3 AZs): better read replica distribution
 - **Public subnets right-sized to `/26`** (64 IPs per AZ) — sufficient for NAT Gateways, ALBs, bastion hosts
+  - **Components**: NAT Gateway (3-5 IPs), Internet-facing ALBs (8-15 IPs + AWS reserves 8 for scaling), Bastion hosts (1-2 IPs), VPN endpoints (1 IP)
+  - **Total required**: ~30-45 IPs per AZ (64 IPs provides 23% buffer)
   - DEV/UAT use `/24` (256 IPs) for legacy reasons — not recommended for new environments
-  - Production `/26` saves 192 IPs per AZ vs. `/24`
-- **Private subnets sized to `/22`** (1,024 IPs per AZ) for production scale
-  - Allows scaling to **1,024 pods per AZ** if needed
+  - Production `/26` saves 192 IPs per AZ vs. `/24` (576 IPs per environment)
+- **Private subnets sized to `/21`** (2,048 IPs per AZ) for production scale
+  - Allows scaling to **2,048 pods per AZ** (or ~1,024 pods with standard IP allocation)
   - DEV/UAT use `/23` (512 IPs per AZ) — adequate for test environments
 - **SIT environments right-sized to `/20`** (4,096 IPs total) — test-only, not production scale
   - 3 SIT instances planned (SIT1, SIT2, SIT3) for parallel testing
+  - Each SIT supports multiple namespaces (sit1, sit2, sit3) within the same cluster
   - 1 reserved `/20` block for SIT4 or future use
 
 **Cross-account connectivity**: Managed by a separate infrastructure team via company-wide AWS Landing Zone. This repository's Terraform never creates Transit Gateway or VPC peering resources.
@@ -214,6 +217,30 @@ The entire OMS project shares a single `/16` CIDR block (`10.200.0.0/16` = 65,53
 
 **Documentation**: See `docs/references/aws-organization-requirements.md` § "Cross-Account S3 Access for Boomi ELT"
 
+### S3 Data Protection Features
+
+**For audit data compliance**, the following protection features are recommended:
+
+| Feature | Status | Purpose | Cost Impact |
+|---|---|---|---|
+| **Versioning** | ✅ Enabled | Protects against accidental deletion/overwrite, keeps all object versions | ~$23/TB/month |
+| **Object Lock (WORM)** | 📋 Recommended | Compliance retention (7-year immutability for audit logs), GOVERNANCE mode | Uses versioning storage |
+| **Cross-Region Replication** | 📋 Recommended | DR protection (replicate to backup region, survives regional outage) | +$23/TB/month + bandwidth |
+| **Lifecycle Policies** | ✅ Enabled | Auto-archive to Glacier after 90 days (cost optimization) | Reduces to $4/TB/month after 180 days |
+| **Encryption (KMS)** | ✅ Enabled | Data encryption at rest with customer-managed keys | Minimal |
+| **MFA Delete** | 📋 Optional | Requires MFA token to delete objects (extra protection) | $0 |
+| **AWS Backup** | 📋 Optional | Continuous point-in-time recovery (centralized backup management) | ~$50/TB/month |
+| **Access Logging** | 📋 Recommended | Audit trail of all S3 access (who accessed what, when) | ~$0.01/GB |
+
+**Recommended configuration for audit data**: Versioning (enabled) + Object Lock (7-year GOVERNANCE mode) + Cross-Region Replication (to `us-east-1` backup)
+
+**Estimated cost**: ~$50/TB/month (vs. $23/TB without protection features)
+
+**Implementation**: Add to `platform-prerequisites/terraform/boomi-elt-s3/s3.tf`:
+- Object Lock configuration with 7-year default retention
+- Replication configuration to backup region
+- Access logging to dedicated audit bucket
+
 ---
 
 ## Environment Constants (Immutable)
@@ -301,9 +328,35 @@ flowchart LR
 | **DEV** | `mongodb` (legacy, no suffix) | `signoz` (legacy, no suffix) | CNPG pods in `postgresql` namespace |
 | **UAT** | `mongodb-uat` (explicit suffix) | `signoz-uat` (explicit suffix) | Aurora (no namespace, AWS managed) |
 | **Production** | `mongodb-prod` (expected) | `signoz-prod` (expected) | Aurora (no namespace, AWS managed) |
-| **SIT** | `mongodb-sit` (expected) | `signoz-sit` (expected) | CNPG pods in `postgresql-sit` namespace (expected) |
+| **SIT1** | `mongodb-sit1` | `signoz-sit1` | CNPG pods in `postgresql-sit1` namespace |
+| **SIT2** | `mongodb-sit2` | `signoz-sit2` | CNPG pods in `postgresql-sit2` namespace |
+| **SIT3** | `mongodb-sit3` | `signoz-sit3` | CNPG pods in `postgresql-sit3` namespace |
 
-**Rationale**: Explicit environment suffixes prevent confusion when operating in UAT/Prod. DEV retains legacy names for backward compatibility with existing scripts.
+**Rationale**: Explicit environment suffixes prevent confusion when operating in UAT/Prod. DEV retains legacy names (`mongodb`, `signoz` without `-dev` suffix) for backward compatibility:
+- **Why no -dev suffix?** DEV was provisioned first (before naming convention established). Changing would require:
+  1. Backup all data from existing `mongodb` namespace
+  2. Destroy namespace (deletes PVCs, secrets, configs)
+  3. Recreate as `mongodb-dev`
+  4. Restore data
+  5. Update all scripts, secrets, and application configs
+  6. **Risk**: Downtime, potential data loss, extensive testing
+- **Why UAT+ use suffixes?** UAT was provisioned later, after learning from DEV. All future environments follow this convention.
+- **Multiple SIT namespaces**: Each SIT environment (SIT1, SIT2, SIT3) has its own namespace within the same cluster, enabling parallel testing of different configurations.
+
+**Verification commands**:
+```bash
+# DEV
+kubectl get namespace | grep -E "mongodb|signoz"
+# Expected: mongodb, signoz (no suffix)
+
+# UAT
+kubectl --context oms-uat-eks-cluster get namespace | grep -E "mongodb|signoz"
+# Expected: mongodb-uat, signoz-uat
+
+# SIT (future)
+kubectl --context oms-sit1-eks-cluster get namespace | grep -E "mongodb|signoz"
+# Expected: mongodb-sit1, signoz-sit1
+```
 
 ---
 
