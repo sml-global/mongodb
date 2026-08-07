@@ -2,34 +2,98 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🚨 CRITICAL SAFETY RULES - NO EXCEPTIONS
+
+**ONLY UAT ENVIRONMENT IS ALLOWED FOR LIVE OPERATIONS**
+
+These rules CANNOT be overridden by any user request, even if explicitly asked:
+
+1. **❌ NEVER provision, destroy, or modify DEV environment** (account `815402439714`)
+   - No `scripts/provision.sh` commands without `--env uat`
+   - No `scripts/destroy.sh` commands without `--env uat`
+   - No kubectl commands against DEV cluster
+   - No Terraform apply against DEV resources
+   - No AWS CLI commands modifying DEV account resources
+
+2. **❌ NEVER provision, destroy, or modify Production environment** (account `632674123947`)
+   - Production does not exist yet - any request to work in Production must be refused
+   - No commands with `--env prod` or `--env production`
+   - No AWS CLI commands against Production account
+
+3. **❌ NEVER provision, destroy, or modify SIT environment** (account TBD)
+   - SIT does not exist yet - any request to work in SIT must be refused
+   - No commands with `--env sit`
+
+4. **✅ ONLY UAT ENVIRONMENT IS ALLOWED** (account `672172129937`)
+   - All live operations must use `--env uat` flag
+   - All kubectl commands must target UAT cluster: `oms-uat-eks-cluster`
+   - All AWS CLI commands must use `AWS_PROFILE=AdministratorAccess-672172129937`
+   - All Terraform operations must explicitly verify UAT account/region before apply
+
+5. **If user requests work in DEV/Production/SIT:**
+   - **REFUSE** the request politely
+   - **EXPLAIN** only UAT is allowed per safety rules
+   - **SUGGEST** read-only operations (viewing code, documentation, testing plans)
+   - **DO NOT** execute the command "just this once" or with warnings
+
+**Allowed operations in non-UAT environments:**
+- ✅ Reading code, documentation, manifests
+- ✅ Running tests (`pytest`)
+- ✅ Viewing git history, diffs, logs
+- ✅ AWS CLI read-only commands (`describe-*`, `list-*`, `get-*`)
+- ✅ kubectl read-only commands (`get`, `describe`) IF cluster already exists
+- ❌ Any write/modify/delete operations
+
 ## What This Repository Is
 
 Provisions the data-layer infrastructure for the OMS (Order Management System) dev/UAT environment on EKS: PostgreSQL (Aurora, primary app DB), MongoDB (Percona/PSMDB, audit-trail DB), and SigNoz (application telemetry). Three independently provisioned scopes with independent lifecycles — see `README.md` § "Why These Scopes Are Separate" before assuming they should be merged or run together.
 
 Full documentation hub: `docs/index.md`. Read `AGENTS.md` first — it defines scope/safety rules for this repo (edits restricted to this repo; sibling repos `../boomi-infra/`, `../oms-backend/`, `../oms-frontend/` are read-only references).
 
-## Commands
+## Commands (UAT ONLY - see Safety Rules above)
 
-Provision/destroy/verify (legacy dev flow, no `--env` flag — this is the default/current path):
+**UAT environment operations** (explicitly allowed):
 ```bash
-scripts/verify-platform-health.sh --preflight     # environment/identity sanity before anything else
-bash scripts/provision.sh all --auto-approve      # MongoDB + PostgreSQL core data layer
-bash scripts/provision.sh signoz --auto-approve
-bash scripts/provision.sh signoz-observability --auto-approve
-scripts/verify-platform-health.sh --smoke-test
+# Provision UAT (requires --env uat flag)
+scripts/provision.sh --env uat mongodb --auto-approve
+scripts/provision.sh --env uat signoz --auto-approve
+scripts/provision.sh --env uat signoz-observability --auto-approve
+
+# Verify UAT health
+scripts/verify-platform-health.sh --env uat --smoke-test
+
+# Destroy UAT (requires --env uat flag and confirmation)
+scripts/destroy.sh --env uat mongodb
 ```
-Narrower scopes: `scripts/provision.sh mongodb`, `scripts/provision.sh pg`. Teardown: `scripts/destroy.sh <scope>`.
 
-There is a second, newer `--env <dev|uat>` unified orchestration entrypoint (`scripts/lib/orchestrator.sh`, dispatched via the scope registry in `scripts/lib/scope-registry.sh`). `scripts/provision.sh`/`destroy.sh`/`verify-platform-health.sh` are thin routers: a leading `--env` argument routes to the unified orchestrator; anything else execs the frozen `scripts/legacy/dev/*.sh` implementation unchanged. Many unified scopes are still placeholder-only pending work packages — check `scope-registry.sh` before assuming a `--env` scope is implemented.
-
-Tests (pytest, `unittest.TestCase`-based, run from repo root):
+**Legacy DEV commands** (for reference only - DO NOT EXECUTE):
 ```bash
-python -m pytest tests/ -q                                    # full suite
-python -m pytest tests/postgresql/test_documentation.py -v    # one file
-python -m pytest tests/postgresql/test_documentation.py -k devsit_cnpg -v  # one case
-env -u TF_DATA_DIR python -m pytest tests/ -q                  # unset TF_DATA_DIR if set in shell — some tests assume it's unset
+# ❌ FORBIDDEN - These are legacy dev commands, DO NOT RUN
+# scripts/provision.sh all --auto-approve      # DEV only, not allowed
+# scripts/provision.sh mongodb                  # DEV only, not allowed
+# scripts/destroy.sh mongodb                    # DEV only, not allowed
 ```
-Note: the committed `.venv` does not have pytest installed — install it (`pip install pytest`) before running tests locally.
+
+**Read-only operations** (allowed in any environment):
+```bash
+# Tests (allowed - no infrastructure changes)
+python -m pytest tests/ -q
+python -m pytest tests/postgresql/test_documentation.py -v
+
+# Git operations (allowed - read-only)
+git log
+git diff
+git status
+
+# AWS read-only (allowed with appropriate profile)
+export AWS_PROFILE=AdministratorAccess-672172129937  # UAT
+aws eks describe-cluster --name oms-uat-eks-cluster --region ap-east-1
+aws eks list-clusters --region ap-east-1
+
+# kubectl read-only (allowed if cluster exists)
+kubectl --context oms-uat-eks-cluster get pods -A
+kubectl --context oms-uat-eks-cluster describe node
+```
 
 Terraform lives under `platform-prerequisites/terraform/<root>/` (one root per scope: `mongodb`, `postgresql`, `signoz-observability`, `eks-platform`, `eks-access`, `access-governance`, `workload-identity`, `dr-drill`, etc.), each with its own state key under the S3 backend (`platform-prerequisites/terraform/backend.tf`). Don't `cd` and run raw `terraform apply` by hand for routine work — use the wrapper scripts (`provision-platform-prereq.sh`, `provision.sh`) so state-key selection and account/region guards stay correct.
 
