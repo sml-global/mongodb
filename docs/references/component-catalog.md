@@ -48,8 +48,13 @@ Not sure what a term in this doc means (CRD, HelmRelease, Pod Identity, ...)? Se
 | **Aurora Clusters** | `oms-{env}-{database}` | `oms-uat-aurora-coredb`, `oms-prod-aurora-branddb` |
 
 **Legacy exceptions:**
-- `EKS-boomi-runtime-cluster` (DEV) — predates convention, too risky to rename
+- `EKS-boomi-runtime-cluster` (DEV) — predates convention, documented exception (too risky to rename - would destroy all workloads)
+- `sml-aw-gb0-d-oms-gen-s3-01` (DEV MongoDB PBM backup) — predates convention, documented exception
 - `sml-elt-*` (cross-account S3 for Boomi) — separate project, different naming scheme
+- `oms-postgresql-*-backup` (S3 buckets missing env suffix) — low-priority fix, deferred to future maintenance
+- `oms-postgresql-*-workload` (ServiceAccounts missing env suffix) — high-risk to rename, accepted as-is
+
+**Policy:** New resources MUST follow convention. Legacy exceptions are documented and should not be repeated.
 
 **Enforcement:**
 - New resources MUST follow convention
