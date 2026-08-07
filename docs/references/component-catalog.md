@@ -12,6 +12,55 @@ Not sure what a term in this doc means (CRD, HelmRelease, Pod Identity, ...)? Se
 
 **Maintenance cadence:** Review the Version Inventory quarterly (or when notified of security patches) and update versions after validated upgrades.
 
+---
+
+## Naming Convention
+
+**All infrastructure resources MUST follow this naming convention:**
+
+### Kubernetes Namespaces
+
+| Type | Pattern | Examples | Rationale |
+|---|---|---|---|
+| **Application workloads** | `{component}-{env}` | `mongodb-dev`, `mongodb-uat`, `signoz-prod`, `boomi-sit` | Multi-tenancy ready, visual clarity in `kubectl get pods -A`, RBAC/network policies easier to write |
+| **Platform services** | `{component}` (no suffix) | `cert-manager`, `kyverno`, `flux-system`, `kube-system` | Shared infrastructure across all application workloads, not environment-specific |
+
+**Why environment suffix for applications:**
+- ✅ Multi-tenancy ready — if we ever co-locate dev+uat in same cluster for cost optimization
+- ✅ Visual clarity — `kubectl get pods -A` immediately shows which environment a pod belongs to
+- ✅ RBAC/network policies — easier to write rules like "all `-uat` namespaces can access X"
+- ✅ Prevents accidents — harder to accidentally run a dev script against UAT
+- ✅ Consistent with GitOps best practices — ArgoCD and Flux both recommend environment in namespace
+
+**Why NO suffix for platform services:**
+- These are shared cluster infrastructure (cert-manager, kyverno) that serve ALL application workloads
+- They are not deployed per-environment (one cert-manager serves mongodb-dev AND mongodb-uat)
+- Kubernetes built-in namespaces follow this pattern (`kube-system`, `kube-public`)
+
+### Terraform Resources
+
+| Resource Type | Pattern | Examples |
+|---|---|---|
+| **EKS Clusters** | `oms-{env}-eks-cluster` | `oms-dev-eks-cluster`, `oms-uat-eks-cluster` |
+| **VPCs** | `oms-{env}-vpc` | `oms-dev-vpc`, `oms-uat-vpc` |
+| **IAM Roles** | `oms-{env}-{component}` | `oms-uat-mongodb-backup`, `oms-prod-signoz-metrics` |
+| **S3 Buckets** | `sml-oms-{component}-{env}` | `sml-oms-terraform-state`, `sml-oms-pbm-backup-uat` |
+| **Aurora Clusters** | `oms-{env}-{database}` | `oms-uat-aurora-coredb`, `oms-prod-aurora-branddb` |
+
+**Legacy exceptions:**
+- `EKS-boomi-runtime-cluster` (DEV) — predates convention, too risky to rename
+- `sml-elt-*` (cross-account S3 for Boomi) — separate project, different naming scheme
+
+**Enforcement:**
+- New resources MUST follow convention
+- Legacy resources are documented exceptions (do not repeat the pattern)
+- Pre-commit hooks validate Kubernetes namespace names
+- GitHub Actions block PRs with naming violations
+
+**Source:** Convention approved in `docs/UAT-ARCHITECTURE-ISSUES-NAMESPACE-LOGGING.md` § Issue 1
+
+---
+
 ## Version Inventory
 
 Single source of truth for all deployed versions. Update this table when any component is upgraded.
