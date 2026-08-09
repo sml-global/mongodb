@@ -9,11 +9,7 @@ name_prefix         = "oms-REPLACE_ME-coredb"
 vpc_id               = "REPLACE_ME_VPC_ID"
 database_subnet_ids  = ["REPLACE_ME_SUBNET_ID_1", "REPLACE_ME_SUBNET_ID_2"]
 allowed_source_security_group_id = "REPLACE_ME_WORKLOAD_SG_ID"
-
-# From workload-identity's applied state.
-cnpg_backup_bucket_name          = "REPLACE_ME"
-postgresql_operator_iam_role_arn = "REPLACE_ME"
-cluster_kms_key_arn              = "REPLACE_ME"
+cluster_kms_key_arn  = "REPLACE_ME"
 
 aurora_engine_version  = "REPLACE_ME"
 aurora_instance_class  = "db.r6g.large"
