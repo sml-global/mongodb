@@ -45,6 +45,7 @@ Boomi-facing guides deliberately contain none of it.
 | ArgoCD (multi-cluster GitOps, design complete, deployment pending) | [ArgoCD User Guide](guides/argocd-user-guide.md) / [Admin Guide](guides/argocd-admin-guide.md) | Login, viewing apps, sync/rollback for end users; deployment, IAM, SSO, RBAC for admins — see [Troubleshooting](troubleshooting/argocd-troubleshooting.md) if something breaks |
 | SigNoz dashboards & alerts (as code) | [SigNoz Dashboard Import Pack](references/signoz-dashboard-import-pack.md) | Fully-automated Terraform IaC path (recommended) + manual JSON-import fallback for K8s, MongoDB, PostgreSQL, and OTel collector dashboards/alerts |
 | Rollback, recovery, credential rotation | [Recovery Procedures](references/recovery-procedures.md) | What to do when things go wrong |
+| Unrecognized namespace/workload found in a cluster | [Investigating Unexpected Cluster Resources](troubleshooting/unexpected-cluster-resources.md) | Read-only triage steps to identify what created it (Helm/Flux/manual) before deciding whether it's expected, known debt, or a new finding |
 | Embedded defaults and constants | [Configuration Catalog](operations/dev-configuration-catalog.md) | Source of truth for hardcoded values |
 | Infrastructure/MongoDB/PostgreSQL monitoring | [Architect Reference § Infrastructure And Database Monitoring](guides/architect-reference.md#infrastructure-and-database-monitoring) | What SigNoz monitors today across K8s, MongoDB, and PostgreSQL/Aurora (CloudWatch import), with coverage and verification notes |
 
