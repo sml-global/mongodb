@@ -509,7 +509,7 @@ bundled implicitly into `all` or any core-infra scope:
 |---|---|---|
 | Namespace name | `BOOMI_NAMESPACE` in `config/environments/*.env` (`boomi` / `boomi-uat`) | A name string other resources reference. The namespace *object* itself has no manifest in this repo today. |
 | EKS access entry | `platform-prerequisites/terraform/eks-access/` (`boomi_admin_role_arn` variable + `aws_eks_access_entry`/`aws_eks_access_policy_association`) | Grants a Boomi Admin IAM principal cluster access scoped to the Boomi namespace, so Boomi's own tooling can reach the cluster. Independently provisionable via `scripts/provision.sh --env uat eks-access` — never coupled to MongoDB/PostgreSQL/SigNoz provisioning. |
-| Connection secret | `scripts/create-audit-writer-secret.sh` → `oms-audit-writer` K8s Secret | A MongoDB connection URI for an *external* Boomi process to consume. Not a pod spec — nothing runs from this Secret inside the cluster. |
+| Connection secret | `scripts/create-audit-writer-user.sh` → `oms-audit-writer` K8s Secret | A MongoDB connection URI (for a restricted-scope `audit_writer` user, readWrite on the audit DB only — not the database-admin account) for an *external* Boomi process to consume. Not a pod spec — nothing runs from this Secret inside the cluster. |
 | Groovy libraries | `scripts/groovy/boomi/BoomiAuditLogLibrary.groovy`, `BoomiOtelLibrary.groovy` | Code meant to execute *inside Boomi's own* scripting runtime (both files declare `package boomi`), not a Kubernetes workload this repo deploys. |
 
 The `boomi-runtime` scope in `scripts/lib/scope-registry.sh` exists in the

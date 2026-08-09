@@ -16,6 +16,7 @@ docs/operations/command-log.md
 
 # Operator-local environment inputs and generated orchestration state
 config/environments/*.local/
+config/environments/*-secrets.env
 .local/
 __pycache__/
 
