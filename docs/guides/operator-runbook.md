@@ -362,6 +362,19 @@ If it already exists, the script skips safely.
 
 Expected: Secret `oms-audit-writer` exists in namespace `mongodb`.
 
+For UAT (or any environment whose MongoDB namespace carries an environment
+suffix per the naming convention), pass `--namespace` explicitly — the
+script derives the correct MongoDB service DNS name from it automatically:
+
+```bash
+scripts/create-audit-writer-secret.sh --namespace mongodb-uat
+```
+
+Expected: Secret `oms-audit-writer` exists in namespace `mongodb-uat`, with a
+`mongoUri` pointing at `psmdb-rs0.mongodb-uat.svc.cluster.local` (not the
+legacy dev-only `psmdb-rs0.mongodb.svc.cluster.local`). Use `--service-host`
+only to override this derived default for a non-standard service name.
+
 ### Step 6: Validate MongoDB Overlay (MongoDB scope only)
 
 Skip this step if you only ran the `pg` scope.
