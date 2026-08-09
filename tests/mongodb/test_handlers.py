@@ -72,10 +72,11 @@ class HandlerFragmentStaticContractTests(unittest.TestCase):
         self.assertEqual(
             source_lines,
             [
+                'source_package_internal_library "30-mongodb/internal/live-observations.sh" || return 1',
                 'source_package_internal_library "30-mongodb/internal/lifecycle-handlers.sh" || return 1',
                 'source_package_internal_library "30-mongodb/internal/pre-destroy-guards.sh" || return 1',
             ],
-            "fragment must source lifecycle-handlers.sh then pre-destroy-guards.sh via validated helper",
+            "fragment must source live-observations.sh, lifecycle-handlers.sh, then pre-destroy-guards.sh via validated helper",
         )
 
     def test_pre_destroy_guard_wrappers_delegate_exactly_to_mapped_internal_guards(self):
