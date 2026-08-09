@@ -2,7 +2,7 @@
 #
 # MongoDB scope handler fragment — canonical wrappers only.
 #
-# Sources live-observations.sh, lifecycle-handlers.sh, and
+# Sources live-observations.sh, destroy-k8s.sh, lifecycle-handlers.sh, and
 # pre-destroy-guards.sh via the foundation-validated package-source helper.
 # No verifier file is sourced here.
 #
@@ -16,6 +16,7 @@
 #   scope_registry_pre_destroy_guard_mongodb_access
 
 source_package_internal_library "30-mongodb/internal/live-observations.sh" || return 1
+source_package_internal_library "30-mongodb/internal/destroy-k8s.sh" || return 1
 source_package_internal_library "30-mongodb/internal/lifecycle-handlers.sh" || return 1
 source_package_internal_library "30-mongodb/internal/pre-destroy-guards.sh" || return 1
 

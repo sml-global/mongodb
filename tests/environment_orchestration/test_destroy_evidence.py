@@ -1017,6 +1017,7 @@ class _OrchestratorGuardCallbackFixture(unittest.TestCase):
         self.root.mkdir(parents=True)
         for relative in (
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/environment-contracts.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",
@@ -1299,6 +1300,7 @@ class _OrchestratorDestroyDispatchFixture(unittest.TestCase):
 
         for relative in (
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/environment-contracts.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",
