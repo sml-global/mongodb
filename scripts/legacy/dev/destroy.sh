@@ -305,10 +305,12 @@ destroy_mongodb_k8s() {
   # Step 1: Delete CRD resources FIRST (while operator is still running to process finalizers)
   # This prevents namespace from getting stuck in Terminating state
   echo "  - Deleting PerconaServerMongoDBBackup CRs (backup finalizers need operator running)..."
-  kubectl -n mongodb delete perconaservermongodbbackup --all --ignore-not-found=true --wait=true || true
+  kubectl -n mongodb delete perconaservermongodbbackup --all --ignore-not-found=true --wait=true --timeout=60s || \
+    echo "  - Warning: PerconaServerMongoDBBackup deletion did not complete within timeout (finalizer may be stuck)" >&2
 
   echo "  - Deleting PerconaServerMongoDB CR (PSMDB finalizers need operator running)..."
-  kubectl -n mongodb delete perconaservermongodb psmdb --ignore-not-found=true --wait=true || true
+  kubectl -n mongodb delete perconaservermongodb psmdb --ignore-not-found=true --wait=true --timeout=60s || \
+    echo "  - Warning: PerconaServerMongoDB deletion did not complete within timeout (finalizer may be stuck)" >&2
 
   echo "Note: PVCs used reclaimPolicy: Retain — underlying EBS volumes are preserved as Released PVs. See docs/references/recovery-procedures.md § Orphaned EBS Volume Recovery to reclaim them."
 
