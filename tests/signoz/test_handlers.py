@@ -119,5 +119,52 @@ class TestSignozHandlers(unittest.TestCase):
             f"scope-handlers.d/50-signoz.sh has invalid bash syntax: {result.stderr}")
 
 
+class DestroyEnvironmentGuardTests(unittest.TestCase):
+    """Issue #95: signoz_internal_destroy_{signoz,signoz_observability} shell
+    out to the DEV-hardcoded scripts/legacy/dev/destroy.sh and are not yet
+    environment-aware. Until rewritten, they must refuse to run for any
+    $ENVIRONMENT other than dev, rather than silently destroying DEV
+    resources while believing they target UAT/Prod.
+    """
+
+    LIFECYCLE_PATH = (
+        Path(__file__).parent.parent.parent / "scripts" / "lib" / "packages"
+        / "50-signoz" / "internal" / "lifecycle-handlers.sh"
+    )
+
+    def _run(self, function_name, environment):
+        script = (
+            f'source "{self.LIFECYCLE_PATH}"; '
+            f'ENVIRONMENT={environment} {function_name}'
+        )
+        return subprocess.run(
+            ["bash", "-c", script],
+            env={"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-guard-test-root", "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+
+    def test_signoz_refuses_to_run_for_uat(self):
+        result = self._run("signoz_internal_destroy_signoz", "uat")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+        self.assertIn("issue #95", result.stderr)
+
+    def test_signoz_observability_refuses_to_run_for_uat(self):
+        result = self._run("signoz_internal_destroy_signoz_observability", "uat")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+
+    def test_signoz_does_not_block_dev(self):
+        result = self._run("signoz_internal_destroy_signoz", "dev")
+        self.assertNotIn("not yet environment-aware", result.stderr)
+        self.assertIn("No such file or directory", result.stderr)
+
+    def test_signoz_observability_does_not_block_dev(self):
+        result = self._run("signoz_internal_destroy_signoz_observability", "dev")
+        self.assertNotIn("not yet environment-aware", result.stderr)
+        self.assertIn("No such file or directory", result.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

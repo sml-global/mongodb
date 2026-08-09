@@ -16,6 +16,13 @@
 # SIGNOZ_NAMESPACE/AWS_REGION/etc. already exported by load_platform_env
 # before this handler runs — no new orchestration logic is reimplemented
 # here.
+#
+# CAUTION (see issue #95): the destroy handlers below are NOT actually
+# environment-aware yet — they shell out to the frozen, DEV-hardcoded
+# scripts/legacy/dev/destroy.sh regardless of $ENVIRONMENT. They fail closed
+# for any non-dev $ENVIRONMENT until rewritten to target the requested
+# environment's own cluster/account/state. Do not remove this guard without
+# that rewrite.
 
 signoz_internal_error() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -31,6 +38,11 @@ signoz_internal_provision_signoz() {
 signoz_internal_destroy_signoz() {
   local root_dir="${_ORCHESTRATOR_ROOT_DIR:?_ORCHESTRATOR_ROOT_DIR must be set}"
 
+  if [[ "${ENVIRONMENT:-}" != "dev" ]]; then
+    signoz_internal_error "signoz destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of \$ENVIRONMENT=${ENVIRONMENT:-<unset>}. Refusing to run against a non-dev environment."
+    return 1
+  fi
+
   bash "${root_dir}/scripts/legacy/dev/destroy.sh" signoz --auto-approve \
     || { signoz_internal_error "signoz destroy failed"; return 1; }
 }
@@ -45,6 +57,11 @@ signoz_internal_provision_signoz_observability() {
 
 signoz_internal_destroy_signoz_observability() {
   local root_dir="${_ORCHESTRATOR_ROOT_DIR:?_ORCHESTRATOR_ROOT_DIR must be set}"
+
+  if [[ "${ENVIRONMENT:-}" != "dev" ]]; then
+    signoz_internal_error "signoz-observability destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of \$ENVIRONMENT=${ENVIRONMENT:-<unset>}. Refusing to run against a non-dev environment."
+    return 1
+  fi
 
   bash "${root_dir}/scripts/legacy/dev/destroy.sh" signoz-observability --auto-approve \
     || { signoz_internal_error "signoz-observability destroy failed"; return 1; }
