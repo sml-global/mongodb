@@ -9,6 +9,7 @@ output "platform_contract" {
     private_subnet_ids     = module.network.private_subnet_ids
     public_subnet_ids      = module.network.public_subnet_ids
     database_subnet_ids    = module.network.database_subnet_ids
+    cluster_kms_key_arn    = module.kms.cluster_kms_key_arn
     cluster_name           = module.eks.cluster_name
     cluster_arn            = module.eks.cluster_arn
     cluster_endpoint       = module.eks.cluster_endpoint

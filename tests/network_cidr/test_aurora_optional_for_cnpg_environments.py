@@ -3,8 +3,8 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PG_VARS = REPO_ROOT / "platform-prerequisites/terraform/postgresql/variables.tf"
-PG_MAIN = REPO_ROOT / "platform-prerequisites/terraform/postgresql/main.tf"
+PG_VARS = REPO_ROOT / "platform-prerequisites/terraform/postgresql-core/variables.tf"
+PG_MODULE_MAIN = REPO_ROOT / "platform-prerequisites/terraform/modules/postgresql/main.tf"
 
 
 class AuroraOptionalForCnpgEnvironmentsTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class AuroraOptionalForCnpgEnvironmentsTests(unittest.TestCase):
         )
 
     def test_aurora_resources_gated_on_database_subnet_ids(self):
-        text = PG_MAIN.read_text(encoding="utf-8")
+        text = PG_MODULE_MAIN.read_text(encoding="utf-8")
         gate = re.compile(r"count\s*=\s*length\(var\.database_subnet_ids\) > 0 \? 1 : 0")
         self.assertGreaterEqual(
             len(gate.findall(text)),
@@ -45,7 +45,7 @@ class AuroraOptionalForCnpgEnvironmentsTests(unittest.TestCase):
         )
 
     def test_aurora_cluster_instance_gated_on_database_subnet_ids(self):
-        text = PG_MAIN.read_text(encoding="utf-8")
+        text = PG_MODULE_MAIN.read_text(encoding="utf-8")
         gate = re.compile(
             r"count\s*=\s*length\(var\.database_subnet_ids\) > 0 \? var\.aurora_instance_count : 0"
         )
