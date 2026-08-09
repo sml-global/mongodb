@@ -26,8 +26,11 @@
 #
 # CAUTION (see issue #95): the destroy handlers below are NOT actually
 # environment-aware yet — they shell out to the frozen, DEV-hardcoded
-# scripts/legacy/dev/destroy.sh regardless of $ENVIRONMENT. They fail closed
-# for any non-dev $ENVIRONMENT until rewritten to target the requested
+# legacy destroy script regardless of $ENVIRONMENT. They refuse to run
+# whenever the resolved EXPECTED_AWS_ACCOUNT_ID is on the forbidden-account
+# list in scripts/lib/environment-contracts.sh's
+# destroy_account_id_forbidden_for_legacy_shellout (the single source of
+# truth for this restriction) until rewritten to target the requested
 # environment's own cluster/account/state. Do not remove this guard without
 # that rewrite.
 
@@ -62,8 +65,8 @@ postgresql_internal_provision_postgresql_brand() {
 postgresql_internal_destroy_postgresql_core() {
   local root_dir="${_ORCHESTRATOR_ROOT_DIR:?_ORCHESTRATOR_ROOT_DIR must be set}"
 
-  if [[ "${ENVIRONMENT:-}" != "dev" ]]; then
-    postgresql_internal_error "postgresql-core destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of \$ENVIRONMENT=${ENVIRONMENT:-<unset>}. Refusing to run against a non-dev environment."
+  if destroy_account_id_forbidden_for_legacy_shellout "${EXPECTED_AWS_ACCOUNT_ID:-}"; then
+    postgresql_internal_error "postgresql-core destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of the requested account. Refusing to run against forbidden AWS account ${EXPECTED_AWS_ACCOUNT_ID:-<unset>}."
     return 1
   fi
 
@@ -74,8 +77,8 @@ postgresql_internal_destroy_postgresql_core() {
 postgresql_internal_destroy_postgresql_brand() {
   local root_dir="${_ORCHESTRATOR_ROOT_DIR:?_ORCHESTRATOR_ROOT_DIR must be set}"
 
-  if [[ "${ENVIRONMENT:-}" != "dev" ]]; then
-    postgresql_internal_error "postgresql-brand destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of \$ENVIRONMENT=${ENVIRONMENT:-<unset>}. Refusing to run against a non-dev environment."
+  if destroy_account_id_forbidden_for_legacy_shellout "${EXPECTED_AWS_ACCOUNT_ID:-}"; then
+    postgresql_internal_error "postgresql-brand destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of the requested account. Refusing to run against forbidden AWS account ${EXPECTED_AWS_ACCOUNT_ID:-<unset>}."
     return 1
   fi
 

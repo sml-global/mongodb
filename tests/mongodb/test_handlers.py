@@ -173,15 +173,17 @@ class InternalLifecycleStaticContractTests(unittest.TestCase):
 class DestroyEnvironmentGuardTests(unittest.TestCase):
     """Issue #95: mongodb_internal_destroy_mongodb shells out to the
     DEV-hardcoded scripts/legacy/dev/destroy.sh and is not yet
-    environment-aware. Until it is rewritten, it must refuse to run for
-    any $ENVIRONMENT other than dev, rather than silently destroying DEV
-    resources while believing it targets UAT/Prod.
+    environment-aware. Until it is rewritten, it must refuse to run
+    whenever EXPECTED_AWS_ACCOUNT_ID resolves to UAT or Production, rather
+    than silently destroying DEV resources while believing it targets them.
     """
 
-    def _run(self, environment):
+    def _run(self, account_id):
+        contracts_path = REPO_ROOT / "scripts" / "lib" / "environment-contracts.sh"
         script = (
+            f'source "{contracts_path}"; '
             f'source "{REPO_ROOT / INTERNAL_LIFECYCLE}"; '
-            f'ENVIRONMENT={environment} mongodb_internal_destroy_mongodb'
+            f'EXPECTED_AWS_ACCOUNT_ID={account_id} mongodb_internal_destroy_mongodb'
         )
         return subprocess.run(
             ["bash", "-c", script],
@@ -190,21 +192,21 @@ class DestroyEnvironmentGuardTests(unittest.TestCase):
             text=True,
         )
 
-    def test_refuses_to_run_for_uat(self):
-        result = self._run("uat")
+    def test_refuses_to_run_for_uat_account(self):
+        result = self._run("672172129937")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not yet environment-aware", result.stderr)
         self.assertIn("issue #95", result.stderr)
 
-    def test_refuses_to_run_for_prod(self):
-        result = self._run("prod")
+    def test_refuses_to_run_for_prod_account(self):
+        result = self._run("632674123947")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not yet environment-aware", result.stderr)
 
-    def test_does_not_block_dev(self):
-        result = self._run("dev")
+    def test_does_not_block_dev_account(self):
+        result = self._run("815402439714")
         # Fails for an unrelated reason (fake root dir has no legacy script),
-        # not because the environment guard rejected it.
+        # not because the forbidden-account guard rejected it.
         self.assertNotIn("not yet environment-aware", result.stderr)
         self.assertIn("No such file or directory", result.stderr)
 

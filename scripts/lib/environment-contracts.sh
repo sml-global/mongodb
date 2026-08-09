@@ -32,3 +32,51 @@ immutable_environment_value() {
     *) return 1 ;;
   esac
 }
+
+# ---------------------------------------------------------------------------
+# Destroy-handler forbidden-account guard (issue #95)
+# ---------------------------------------------------------------------------
+#
+# mongodb/postgresql-core/postgresql-brand/signoz/signoz-observability's
+# real destroy handlers (scripts/lib/packages/*/internal/lifecycle-handlers.sh)
+# shell out to the frozen legacy dev-only destroy script, which always
+# targets the DEV account/cluster/state -- it has no per-environment
+# awareness of its own. Until each handler is rewritten to target its
+# requested environment directly (mirroring eks-platform/workload-identity's
+# per-environment tfvars + $ENVIRONMENT-aware handler pattern), those five
+# handlers must refuse to run for any AWS account other than DEV's, or they
+# would silently destroy DEV resources while the caller believes UAT/Prod is
+# being targeted.
+#
+# This is expressed as a forbidden-account-ID list, not an environment-name
+# comparison: the actual hazard is which AWS account gets mutated, and
+# EXPECTED_AWS_ACCOUNT_ID (already resolved and validated by
+# load_platform_env before any handler runs) is the direct, load-bearing
+# signal for that -- not a derived $ENVIRONMENT string one step removed from
+# it. Compiled in here (not config/environments/<env>.env) on purpose: this
+# file is the one tier of configuration no dotenv edit can override, exactly
+# like EXPECTED_AWS_ACCOUNT_ID itself above.
+#
+# `destroy_account_id_forbidden_for_legacy_shellout <account_id>` is the
+# single source of truth callers use to decide this. Once a scope's
+# legacy-shellout destroy handler is replaced by a real environment-aware
+# rewrite, remove that scope's callsite entirely rather than adding an
+# account to any allow-list here -- this list only ever names accounts the
+# legacy shellout must never touch.
+
+readonly _LEGACY_DESTROY_FORBIDDEN_ACCOUNT_IDS=(
+  "672172129937"  # UAT
+  "632674123947"  # Production
+)
+
+destroy_account_id_forbidden_for_legacy_shellout() {
+  local account_id="${1:-}"
+  local forbidden_id
+
+  for forbidden_id in "${_LEGACY_DESTROY_FORBIDDEN_ACCOUNT_IDS[@]}"; do
+    if [[ "${account_id}" == "${forbidden_id}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}

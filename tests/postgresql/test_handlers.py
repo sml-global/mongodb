@@ -156,15 +156,17 @@ class InternalLifecycleStaticContractTests(unittest.TestCase):
 class DestroyEnvironmentGuardTests(unittest.TestCase):
     """Issue #95: postgresql_internal_destroy_postgresql_{core,brand} shell
     out to the DEV-hardcoded scripts/legacy/dev/destroy.sh and are not yet
-    environment-aware. Until rewritten, they must refuse to run for any
-    $ENVIRONMENT other than dev, rather than silently destroying DEV
-    resources while believing they target UAT/Prod.
+    environment-aware. Until rewritten, they must refuse to run whenever
+    EXPECTED_AWS_ACCOUNT_ID resolves to UAT or Production, rather than
+    silently destroying DEV resources while believing they target them.
     """
 
-    def _run(self, function_name, environment):
+    def _run(self, function_name, account_id):
+        contracts_path = REPO_ROOT / "scripts" / "lib" / "environment-contracts.sh"
         script = (
+            f'source "{contracts_path}"; '
             f'source "{REPO_ROOT / INTERNAL_LIFECYCLE}"; '
-            f'ENVIRONMENT={environment} {function_name}'
+            f'EXPECTED_AWS_ACCOUNT_ID={account_id} {function_name}'
         )
         return subprocess.run(
             ["bash", "-c", script],
@@ -173,24 +175,34 @@ class DestroyEnvironmentGuardTests(unittest.TestCase):
             text=True,
         )
 
-    def test_core_refuses_to_run_for_uat(self):
-        result = self._run("postgresql_internal_destroy_postgresql_core", "uat")
+    def test_core_refuses_to_run_for_uat_account(self):
+        result = self._run("postgresql_internal_destroy_postgresql_core", "672172129937")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not yet environment-aware", result.stderr)
         self.assertIn("issue #95", result.stderr)
 
-    def test_brand_refuses_to_run_for_uat(self):
-        result = self._run("postgresql_internal_destroy_postgresql_brand", "uat")
+    def test_brand_refuses_to_run_for_uat_account(self):
+        result = self._run("postgresql_internal_destroy_postgresql_brand", "672172129937")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not yet environment-aware", result.stderr)
 
-    def test_core_does_not_block_dev(self):
-        result = self._run("postgresql_internal_destroy_postgresql_core", "dev")
+    def test_core_refuses_to_run_for_prod_account(self):
+        result = self._run("postgresql_internal_destroy_postgresql_core", "632674123947")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+
+    def test_brand_refuses_to_run_for_prod_account(self):
+        result = self._run("postgresql_internal_destroy_postgresql_brand", "632674123947")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+
+    def test_core_does_not_block_dev_account(self):
+        result = self._run("postgresql_internal_destroy_postgresql_core", "815402439714")
         self.assertNotIn("not yet environment-aware", result.stderr)
         self.assertIn("No such file or directory", result.stderr)
 
-    def test_brand_does_not_block_dev(self):
-        result = self._run("postgresql_internal_destroy_postgresql_brand", "dev")
+    def test_brand_does_not_block_dev_account(self):
+        result = self._run("postgresql_internal_destroy_postgresql_brand", "815402439714")
         self.assertNotIn("not yet environment-aware", result.stderr)
         self.assertIn("No such file or directory", result.stderr)
 
