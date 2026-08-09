@@ -219,6 +219,18 @@ scope_registry_deferred_eks_platform_destroy() { _scope_registry_fail_work_packa
 scope_registry_deferred_platform_controllers_destroy() { _scope_registry_fail_work_package "platform-controllers" 3; }
 scope_registry_deferred_workload_identity_destroy() { _scope_registry_fail_work_package "workload-identity" 3; }
 scope_registry_deferred_boomi_runtime_destroy() { _scope_registry_fail_work_package "boomi-runtime" 5; }
+# NOTE: the five stubs below (mongodb, postgresql-core, postgresql-brand,
+# mongodb-access, signoz, signoz-observability) are dead code at runtime for
+# ordinary destroy dispatch. scripts/lib/scope-handlers.d/{30-mongodb,
+# 40-postgresql,50-signoz}.sh define real scope_registry_deferred_*_destroy
+# implementations under these exact same function names; because those
+# fragments are sourced later than this file (see
+# _orchestrator_load_package_fragments in orchestrator.sh), the real
+# implementations silently override these placeholders before dispatch. Do
+# not assume these five scopes are unimplemented from reading this file
+# alone. See issue #95: the real implementations they're overridden by are
+# themselves not yet environment-aware (they shell out to the DEV-hardcoded
+# legacy destroy script and now fail closed for non-dev $ENVIRONMENT).
 scope_registry_deferred_mongodb_destroy() { _scope_registry_fail_work_package "mongodb" 4; }
 scope_registry_deferred_postgresql_core_destroy() { _scope_registry_fail_work_package "postgresql-core" 4; }
 scope_registry_deferred_postgresql_brand_destroy() { _scope_registry_fail_work_package "postgresql-brand" 4; }
