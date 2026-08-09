@@ -8,6 +8,7 @@ UNIFIED_ENTRYPOINTS = (
     "scripts/destroy.sh",
     "scripts/verify-platform-health.sh",
     "scripts/lib/orchestrator.sh",
+    "scripts/lib/terraform-destroy-scope.sh",
 )
 
 UNIFIED_FOUNDATION_LIBS = (

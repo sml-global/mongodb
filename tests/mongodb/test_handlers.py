@@ -73,10 +73,11 @@ class HandlerFragmentStaticContractTests(unittest.TestCase):
             source_lines,
             [
                 'source_package_internal_library "30-mongodb/internal/live-observations.sh" || return 1',
+                'source_package_internal_library "30-mongodb/internal/destroy-k8s.sh" || return 1',
                 'source_package_internal_library "30-mongodb/internal/lifecycle-handlers.sh" || return 1',
                 'source_package_internal_library "30-mongodb/internal/pre-destroy-guards.sh" || return 1',
             ],
-            "fragment must source live-observations.sh, lifecycle-handlers.sh, then pre-destroy-guards.sh via validated helper",
+            "fragment must source live-observations.sh, destroy-k8s.sh, lifecycle-handlers.sh, then pre-destroy-guards.sh via validated helper",
         )
 
     def test_pre_destroy_guard_wrappers_delegate_exactly_to_mapped_internal_guards(self):
@@ -171,45 +172,43 @@ class InternalLifecycleStaticContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 
-class DestroyEnvironmentGuardTests(unittest.TestCase):
-    """Issue #95: mongodb_internal_destroy_mongodb shells out to the
-    DEV-hardcoded scripts/legacy/dev/destroy.sh and is not yet
-    environment-aware. Until it is rewritten, it must refuse to run
-    whenever EXPECTED_AWS_ACCOUNT_ID resolves to UAT or Production, rather
-    than silently destroying DEV resources while believing it targets them.
+class DestroyEnvironmentAwareTests(unittest.TestCase):
+    """Issue #111: mongodb_internal_destroy_mongodb is now environment-aware
+    -- it calls destroy-k8s.sh/terraform-destroy-scope.sh directly with the
+    caller's own environment values, instead of shelling out to the
+    DEV-hardcoded scripts/legacy/dev/destroy.sh. The forbidden-account guard
+    from #95/#96/#97 no longer applies to this scope; this replaces the
+    removed DestroyEnvironmentGuardTests for mongodb specifically
+    (postgresql/signoz keep their own guard tests until they get the same
+    rewrite).
     """
 
-    def _run(self, account_id):
+    def test_uses_environment_values_not_forbidden_account_guard(self):
         contracts_path = REPO_ROOT / "scripts" / "lib" / "environment-contracts.sh"
+        destroy_k8s_path = REPO_ROOT / "scripts" / "lib" / "packages" / "30-mongodb" / "internal" / "destroy-k8s.sh"
+        tf_destroy_path = REPO_ROOT / "scripts" / "lib" / "terraform-destroy-scope.sh"
         script = (
             f'source "{contracts_path}"; '
+            f'source "{tf_destroy_path}"; '
+            f'source "{destroy_k8s_path}"; '
             f'source "{REPO_ROOT / INTERNAL_LIFECYCLE}"; '
-            f'EXPECTED_AWS_ACCOUNT_ID={account_id} mongodb_internal_destroy_mongodb'
+            'export MONGODB_NAMESPACE=mongodb-uat EKS_CLUSTER_NAME=oms-uat-eks-cluster '
+            'AWS_REGION=ap-east-1 ENVIRONMENT=uat MONGODB_STATE_KEY=oms/uat/mongo.tfstate '
+            'TF_STATE_BUCKET=sml-oms-uat-tfstate-672172129937 TF_STATE_REGION=ap-east-1 '
+            'EXPECTED_AWS_ACCOUNT_ID=672172129937; '
+            'mongodb_internal_destroy_mongodb'
         )
-        return subprocess.run(
+        result = subprocess.run(
             ["bash", "-c", script],
-            env={"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-guard-test-root", "PATH": "/usr/bin:/bin"},
+            env={"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-destroy-test-root", "PATH": "/usr/bin:/bin"},
             capture_output=True,
             text=True,
         )
-
-    def test_refuses_to_run_for_uat_account(self):
-        result = self._run("672172129937")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-        self.assertIn("issue #95", result.stderr)
-
-    def test_refuses_to_run_for_prod_account(self):
-        result = self._run("632674123947")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-
-    def test_does_not_block_dev_account(self):
-        result = self._run("815402439714")
-        # Fails for an unrelated reason (fake root dir has no legacy script),
-        # not because the forbidden-account guard rejected it.
+        # Fails for an unrelated reason (fake root dir has no kubectl/terraform
+        # binaries reachable, or no mongodb Terraform root there) -- not
+        # because a forbidden-account guard rejected the UAT account.
         self.assertNotIn("not yet environment-aware", result.stderr)
-        self.assertIn("No such file or directory", result.stderr)
+        self.assertNotIn("Refusing to run against forbidden AWS account", result.stderr)
 
 
 if __name__ == "__main__":
