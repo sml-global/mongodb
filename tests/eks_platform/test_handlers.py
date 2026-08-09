@@ -110,6 +110,7 @@ class EksHandlerRuntimeFixture(RepositoryFixture):
         super().setUp()
         self.copy(
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/environment-contracts.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",
@@ -130,6 +131,7 @@ class EksHandlerRuntimeFixture(RepositoryFixture):
         # Make copied shell files executable for stricter parity with runtime.
         for rel in (
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",
         ):

@@ -198,6 +198,7 @@ class AccessDispatchFixture(unittest.TestCase):
 
         self._copy(
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/environment-contracts.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",

@@ -268,6 +268,7 @@ class OrchestratorFixture(_BaseFixture):
         super().setUp()
         self._copy(
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/environment-contracts.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",
@@ -973,6 +974,7 @@ class UatEksAccessEntrypointFixture(_BaseFixture):
         self._copy(
             "scripts/provision.sh",
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/environment-contracts.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",

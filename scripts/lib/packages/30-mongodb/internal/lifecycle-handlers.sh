@@ -17,16 +17,14 @@
 # (scripts/lib/platform-env.sh) already exports before this handler runs —
 # no new orchestration logic is reimplemented here.
 #
-# CAUTION (see issue #95): the destroy handler below is NOT actually
-# environment-aware yet — it shells out to the frozen, DEV-hardcoded
-# legacy destroy script regardless of $ENVIRONMENT. It refuses to run
-# whenever the resolved EXPECTED_AWS_ACCOUNT_ID is on the forbidden-account
-# list in scripts/lib/environment-contracts.sh's
-# destroy_account_id_forbidden_for_legacy_shellout (the single source of
-# truth for this restriction) until it is rewritten to target the requested
-# environment's own cluster/account/state, mirroring the provision-side
-# environment-aware pattern already used by eks-platform/workload-identity.
-# Do not remove this guard without that rewrite.
+# mongodb_internal_destroy_mongodb() is environment-aware (issue #111): it
+# calls destroy-k8s.sh's mongodb_internal_destroy_k8s (parameterized
+# Kubernetes teardown) and scripts/lib/terraform-destroy-scope.sh's
+# terraform_destroy_scope (parameterized Terraform destroy) directly,
+# rather than shelling out to the frozen, DEV-hardcoded
+# scripts/legacy/dev/destroy.sh. That legacy script is never modified and
+# keeps working unchanged for DEV's own `bash scripts/destroy.sh mongodb`
+# (no --env) path.
 
 mongodb_internal_error() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -48,14 +46,26 @@ mongodb_internal_provision_mongodb_access() {
 
 mongodb_internal_destroy_mongodb() {
   local root_dir="${_ORCHESTRATOR_ROOT_DIR:?_ORCHESTRATOR_ROOT_DIR must be set}"
+  local namespace="${MONGODB_NAMESPACE:?MONGODB_NAMESPACE must be set}"
+  local cluster_name="${EKS_CLUSTER_NAME:?EKS_CLUSTER_NAME must be set}"
+  local aws_region="${AWS_REGION:?AWS_REGION must be set}"
+  local environment="${ENVIRONMENT:?ENVIRONMENT must be set}"
+  local tf_state_key="${MONGODB_STATE_KEY:?MONGODB_STATE_KEY must be set}"
+  local tf_state_bucket="${TF_STATE_BUCKET:?TF_STATE_BUCKET must be set}"
+  local tf_state_region="${TF_STATE_REGION:?TF_STATE_REGION must be set}"
 
-  if destroy_account_id_forbidden_for_legacy_shellout "${EXPECTED_AWS_ACCOUNT_ID:-}"; then
-    mongodb_internal_error "mongodb destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of the requested account. Refusing to run against forbidden AWS account ${EXPECTED_AWS_ACCOUNT_ID:-<unset>}."
-    return 1
-  fi
+  mongodb_internal_destroy_k8s "$namespace" "$cluster_name" "$aws_region" "$root_dir" "$environment" \
+    || { mongodb_internal_error "mongodb Kubernetes teardown failed"; return 1; }
 
-  bash "${root_dir}/scripts/legacy/dev/destroy.sh" mongodb --auto-approve \
-    || { mongodb_internal_error "mongodb destroy failed"; return 1; }
+  terraform_destroy_scope \
+    "${root_dir}/platform-prerequisites/terraform/mongodb" \
+    "$tf_state_key" \
+    "$tf_state_bucket" \
+    "$tf_state_region" \
+    "$environment" \
+    "true" \
+    "${root_dir}/scripts/bootstrap-terraform-s3-backend.sh" \
+    || { mongodb_internal_error "mongodb Terraform destroy failed"; return 1; }
 }
 
 mongodb_internal_destroy_mongodb_access() {

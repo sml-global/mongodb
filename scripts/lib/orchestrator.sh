@@ -57,7 +57,8 @@ for _orchestrator_dep in \
   platform-env.sh \
   platform-guards.sh \
   orchestration-paths.sh \
-  scope-registry.sh
+  scope-registry.sh \
+  terraform-destroy-scope.sh
 do
   if [[ ! -r "${_ORCHESTRATOR_LIB_DIR}/${_orchestrator_dep}" ]]; then
     printf 'ERROR: %s\n' "orchestrator foundation dependency is not readable: ${_ORCHESTRATOR_LIB_DIR}/${_orchestrator_dep}" >&2
