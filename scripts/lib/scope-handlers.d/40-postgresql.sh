@@ -2,9 +2,9 @@
 #
 # PostgreSQL scope handler fragment — canonical wrappers only.
 #
-# Sources lifecycle-handlers.sh and pre-destroy-guards.sh via the
-# foundation-validated package-source helper. No verifier file is sourced
-# here.
+# Sources live-observations.sh, lifecycle-handlers.sh, and
+# pre-destroy-guards.sh via the foundation-validated package-source helper.
+# No verifier file is sourced here.
 #
 # Defines exactly the six canonical handler/guard wrapper symbols assigned
 # by the fixed registry (scripts/lib/scope-registry.sh):
@@ -20,6 +20,7 @@
 # pre-destroy-guards.sh but are not registered here, since no
 # database-access-core/brand provision/destroy handler exists yet.
 
+source_package_internal_library "40-postgresql/internal/live-observations.sh" || return 1
 source_package_internal_library "40-postgresql/internal/lifecycle-handlers.sh" || return 1
 source_package_internal_library "40-postgresql/internal/pre-destroy-guards.sh" || return 1
 
