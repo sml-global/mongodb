@@ -63,11 +63,20 @@ immutable_environment_value() {
 # rewrite, remove that scope's callsite entirely rather than adding an
 # account to any allow-list here -- this list only ever names accounts the
 # legacy shellout must never touch.
+#
+# The declare -p guard below (not a plain re-declaration) is required
+# because this file is sourced more than once per process -- orchestrator.sh
+# sources it directly, and platform-env.sh/platform-guards.sh each source it
+# again -- and a bare `readonly` on a second source would abort the shell
+# with "readonly variable" rather than silently redefining, unlike an
+# ordinary function definition.
 
-readonly _LEGACY_DESTROY_FORBIDDEN_ACCOUNT_IDS=(
-  "672172129937"  # UAT
-  "632674123947"  # Production
-)
+if ! declare -p _LEGACY_DESTROY_FORBIDDEN_ACCOUNT_IDS >/dev/null 2>&1; then
+  readonly _LEGACY_DESTROY_FORBIDDEN_ACCOUNT_IDS=(
+    "672172129937"  # UAT
+    "632674123947"  # Production
+  )
+fi
 
 destroy_account_id_forbidden_for_legacy_shellout() {
   local account_id="${1:-}"
