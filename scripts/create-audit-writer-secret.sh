@@ -9,17 +9,17 @@ set -euo pipefail
 # internal MongoDB service endpoint.
 #
 # Usage:
-#   scripts/create-audit-writer-secret.sh [--namespace <ns>] [--db <name>]
+#   scripts/create-audit-writer-secret.sh [--namespace <ns>] [--db <name>] [--service-host <host>]
 
 NAMESPACE="mongodb"
 DB_NAME="oms_audit"
 SECRET_NAME="oms-audit-writer"
-SERVICE_HOST="psmdb-rs0.mongodb.svc.cluster.local"
+SERVICE_HOST=""
 
 usage() {
   cat <<'EOF'
 Usage:
-  create-audit-writer-secret.sh [--namespace <ns>] [--db <name>] [--secret-name <name>]
+  create-audit-writer-secret.sh [--namespace <ns>] [--db <name>] [--secret-name <name>] [--service-host <host>]
 
 Creates the Kubernetes Secret 'oms-audit-writer' with a mongoUri key containing
 the full MongoDB connection string for audit log writes.
@@ -28,6 +28,8 @@ Options:
   --namespace     Kubernetes namespace (default: mongodb)
   --db            Target database (default: oms_audit)
   --secret-name   Secret name to create (default: oms-audit-writer)
+  --service-host  MongoDB service DNS name (default: psmdb-rs0.<namespace>.svc.cluster.local,
+                   derived from --namespace; override only for a non-standard service name)
   -h, --help      Show this help
 EOF
 }
@@ -37,10 +39,18 @@ while [[ $# -gt 0 ]]; do
     --namespace) NAMESPACE="${2:-}"; shift 2 ;;
     --db) DB_NAME="${2:-}"; shift 2 ;;
     --secret-name) SECRET_NAME="${2:-}"; shift 2 ;;
+    --service-host) SERVICE_HOST="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Error: unknown arg '$1'" >&2; usage; exit 1 ;;
   esac
 done
+
+# Default derived from the resolved namespace (issue #101): a hardcoded
+# literal here previously always pointed at the legacy dev namespace's
+# service DNS, producing a broken connection URI for any other namespace
+# (e.g. UAT's mongodb-uat) even though --namespace itself was honored for
+# reading psmdb-secrets and creating the resulting Secret.
+SERVICE_HOST="${SERVICE_HOST:-psmdb-rs0.${NAMESPACE}.svc.cluster.local}"
 
 # Check if secret already exists
 if kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" >/dev/null 2>&1; then
