@@ -327,11 +327,14 @@ destroy_mongodb_k8s() {
 
   if command -v aws >/dev/null 2>&1; then
     local associations
-    associations="$(aws eks list-pod-identity-associations \
+    if ! associations="$(aws eks list-pod-identity-associations \
       --cluster-name "$cluster_name" \
       --region "$aws_region" \
       --query "associations[?namespace=='mongodb'].associationId" \
-      --output text 2>/dev/null || echo "")"
+      --output text 2>&1)"; then
+      echo "  - Warning: failed to list Pod Identity associations (may require manual cleanup): $associations" >&2
+      associations=""
+    fi
 
     if [[ -n "$associations" ]]; then
       echo "  - Found Pod Identity associations to delete: $associations"
