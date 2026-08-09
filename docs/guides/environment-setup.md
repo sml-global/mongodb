@@ -182,12 +182,12 @@ Before starting, get these values from the platform or AWS account owner:
 | `kustomize` | Manifest rendering and overlays | v5.x |
 | `rg` (ripgrep) | Fast text search for validation scripts | any |
 | `openssl` | Secret generation (random bytes, base64) | any |
-| `python3` | URL-encodes passwords in `scripts/create-audit-writer-secret.sh` (required for Day-1 MongoDB setup) | v3.8+ |
+| `python3` | URL-encodes passwords in `scripts/create-audit-writer-user.sh` (required for Day-1 MongoDB setup) | v3.8+ |
 | `helm` | Only for platform admin bootstrap mode | v3.x |
 | `groovy` | Only for Boomi audit log library testing | v4.x |
 | `playwright` (Python package) | Only for the SigNoz Service Account/API key bootstrap (`scripts/bootstrap-signoz-service-account.sh`) -- drives a headless browser so no manual UI step is needed | v1.x |
 
-> **Note:** `python3` is required, not optional — `scripts/create-audit-writer-secret.sh` fails without it. It is not covered by `scripts/verify-platform-health.sh --preflight`, so verify it manually with `python3 --version` on every platform.
+> **Note:** `python3` is required, not optional — `scripts/create-audit-writer-user.sh` fails without it. It is not covered by `scripts/verify-platform-health.sh --preflight`, so verify it manually with `python3 --version` on every platform.
 
 > **Note:** `playwright` is only needed by whoever runs `scripts/provision.sh signoz-observability` for the first time in an environment (typically the Infra Operator/Architect) -- install it once with:
 > ```bash
