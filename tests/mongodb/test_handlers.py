@@ -170,5 +170,44 @@ class InternalLifecycleStaticContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 
+class DestroyEnvironmentGuardTests(unittest.TestCase):
+    """Issue #95: mongodb_internal_destroy_mongodb shells out to the
+    DEV-hardcoded scripts/legacy/dev/destroy.sh and is not yet
+    environment-aware. Until it is rewritten, it must refuse to run for
+    any $ENVIRONMENT other than dev, rather than silently destroying DEV
+    resources while believing it targets UAT/Prod.
+    """
+
+    def _run(self, environment):
+        script = (
+            f'source "{REPO_ROOT / INTERNAL_LIFECYCLE}"; '
+            f'ENVIRONMENT={environment} mongodb_internal_destroy_mongodb'
+        )
+        return subprocess.run(
+            ["bash", "-c", script],
+            env={"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-guard-test-root", "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+
+    def test_refuses_to_run_for_uat(self):
+        result = self._run("uat")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+        self.assertIn("issue #95", result.stderr)
+
+    def test_refuses_to_run_for_prod(self):
+        result = self._run("prod")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+
+    def test_does_not_block_dev(self):
+        result = self._run("dev")
+        # Fails for an unrelated reason (fake root dir has no legacy script),
+        # not because the environment guard rejected it.
+        self.assertNotIn("not yet environment-aware", result.stderr)
+        self.assertIn("No such file or directory", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -153,5 +153,47 @@ class InternalLifecycleStaticContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 
+class DestroyEnvironmentGuardTests(unittest.TestCase):
+    """Issue #95: postgresql_internal_destroy_postgresql_{core,brand} shell
+    out to the DEV-hardcoded scripts/legacy/dev/destroy.sh and are not yet
+    environment-aware. Until rewritten, they must refuse to run for any
+    $ENVIRONMENT other than dev, rather than silently destroying DEV
+    resources while believing they target UAT/Prod.
+    """
+
+    def _run(self, function_name, environment):
+        script = (
+            f'source "{REPO_ROOT / INTERNAL_LIFECYCLE}"; '
+            f'ENVIRONMENT={environment} {function_name}'
+        )
+        return subprocess.run(
+            ["bash", "-c", script],
+            env={"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-guard-test-root", "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+
+    def test_core_refuses_to_run_for_uat(self):
+        result = self._run("postgresql_internal_destroy_postgresql_core", "uat")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+        self.assertIn("issue #95", result.stderr)
+
+    def test_brand_refuses_to_run_for_uat(self):
+        result = self._run("postgresql_internal_destroy_postgresql_brand", "uat")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+
+    def test_core_does_not_block_dev(self):
+        result = self._run("postgresql_internal_destroy_postgresql_core", "dev")
+        self.assertNotIn("not yet environment-aware", result.stderr)
+        self.assertIn("No such file or directory", result.stderr)
+
+    def test_brand_does_not_block_dev(self):
+        result = self._run("postgresql_internal_destroy_postgresql_brand", "dev")
+        self.assertNotIn("not yet environment-aware", result.stderr)
+        self.assertIn("No such file or directory", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,14 @@
 # MONGODB_STATE_KEY/MONGODB_NAMESPACE variables that load_platform_env
 # (scripts/lib/platform-env.sh) already exports before this handler runs —
 # no new orchestration logic is reimplemented here.
+#
+# CAUTION (see issue #95): the destroy handler below is NOT actually
+# environment-aware yet — it shells out to the frozen, DEV-hardcoded
+# scripts/legacy/dev/destroy.sh regardless of $ENVIRONMENT. It fails closed
+# for any non-dev $ENVIRONMENT until it is rewritten to target the
+# requested environment's own cluster/account/state, mirroring the
+# provision-side environment-aware pattern already used by eks-platform/
+# workload-identity. Do not remove this guard without that rewrite.
 
 mongodb_internal_error() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -37,6 +45,11 @@ mongodb_internal_provision_mongodb_access() {
 
 mongodb_internal_destroy_mongodb() {
   local root_dir="${_ORCHESTRATOR_ROOT_DIR:?_ORCHESTRATOR_ROOT_DIR must be set}"
+
+  if [[ "${ENVIRONMENT:-}" != "dev" ]]; then
+    mongodb_internal_error "mongodb destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of \$ENVIRONMENT=${ENVIRONMENT:-<unset>}. Refusing to run against a non-dev environment."
+    return 1
+  fi
 
   bash "${root_dir}/scripts/legacy/dev/destroy.sh" mongodb --auto-approve \
     || { mongodb_internal_error "mongodb destroy failed"; return 1; }
