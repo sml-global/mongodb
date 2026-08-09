@@ -44,7 +44,7 @@ Why this path is the default:
   - Write/integration testing: Boomi Admin (Editor)
   - Read-only reporting: Viewer
 2. Ensure prerequisites:
-  - `scripts/create-audit-writer-secret.sh` already run by operator
+  - `scripts/create-audit-writer-user.sh` already run by operator
   - SigNoz is reachable (`scripts/open-signoz-ui.sh` in dev)
 3. Run the end-to-end test:
 

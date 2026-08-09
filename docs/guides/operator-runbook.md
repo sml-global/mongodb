@@ -354,26 +354,34 @@ Expected: `psmdb-encryption-key` and `psmdb-secrets` exist in namespace `mongodb
 Skip this step if you only ran the `pg` scope.
 
 ```bash
-scripts/create-audit-writer-secret.sh
+scripts/create-audit-writer-user.sh
 ```
 
-This creates the `oms-audit-writer` Kubernetes Secret that the Boomi audit log library reads.
-If it already exists, the script skips safely.
+This creates a dedicated `audit_writer` MongoDB user (insert-only on
+`oms_audit.auditlogs` — not the database-admin account) and the
+`oms-audit-writer` Kubernetes Secret that the Boomi audit log library reads.
+Re-running it is safe: the user's password is persisted in that
+environment's secrets file (`config/environments/<env>-secrets.env`,
+auto-generated on first run) and reused on subsequent runs, so the live
+user isn't rotated out from under any consumer each time this is re-run.
 
 Expected: Secret `oms-audit-writer` exists in namespace `mongodb`.
 
 For UAT (or any environment whose MongoDB namespace carries an environment
 suffix per the naming convention), pass `--namespace` explicitly — the
-script derives the correct MongoDB service DNS name from it automatically:
+script derives both the correct MongoDB service DNS name and the correct
+secrets file from it automatically:
 
 ```bash
-scripts/create-audit-writer-secret.sh --namespace mongodb-uat
+scripts/create-audit-writer-user.sh --namespace mongodb-uat
 ```
 
 Expected: Secret `oms-audit-writer` exists in namespace `mongodb-uat`, with a
 `mongoUri` pointing at `psmdb-rs0.mongodb-uat.svc.cluster.local` (not the
-legacy dev-only `psmdb-rs0.mongodb.svc.cluster.local`). Use `--service-host`
-only to override this derived default for a non-standard service name.
+legacy dev-only `psmdb-rs0.mongodb.svc.cluster.local`), authenticating as
+`audit_writer` (not the database-admin account). Password persisted to
+`config/environments/uat-secrets.env` (gitignored) on first run. Use
+`--service-host`/`--secrets-file` only to override these derived defaults.
 
 ### Step 6: Validate MongoDB Overlay (MongoDB scope only)
 
@@ -647,7 +655,7 @@ Run these only when a trigger occurs:
 
 | Trigger | Action |
 |---|---|
-| MongoDB URI or credentials changed | Re-run `scripts/create-audit-writer-secret.sh` |
+| MongoDB URI or credentials changed | Re-run `scripts/create-audit-writer-user.sh` |
 | New telemetry users need access | Update SigNoz users/roles in Settings |
 | Secret rotation or controlled rebuild | Re-run `scripts/bootstrap-dev-secrets.sh` with change record |
 | Incident or failed health check | Follow [Recovery Procedures](../references/recovery-procedures.md) |
@@ -819,7 +827,7 @@ Use the right account for the right task. Using the wrong one usually looks like
 
 | Use Case | Account Source | Intended Privilege | Notes |
 |---|---|---|---|
-| Boomi audit write URI secret (`scripts/create-audit-writer-secret.sh`) | `MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD` in `psmdb-secrets` | Application data read/write | This is the account used to build `oms-audit-writer` secret. |
+| Boomi audit write URI secret (`scripts/create-audit-writer-user.sh`) | `audit_writer` MongoDB user, created by the script itself (custom role, insert-only on `oms_audit.auditlogs`) | Insert-only on `oms_audit.auditlogs` | Not the database-admin account — this is a dedicated, restricted-scope user the script creates, used to build the `oms-audit-writer` secret. |
 | In-cluster smoke writer (`scripts/run-audit-telemetry-test.sh`) | `MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD` in `psmdb-secrets` | Application data read/write | Writes and reads `oms_audit.auditlogs` for verification. |
 | Human read-only querying (Compass/mongosh) | `audit_reader` created by `scripts/create-audit-reader.sh` | Read-only on `oms_audit` | Recommended for dashboards, audit review, and analyst access. |
 | Cluster administration | `MONGODB_CLUSTER_ADMIN_USER` / `MONGODB_CLUSTER_ADMIN_PASSWORD` | Cluster management operations | Not the recommended account for app-level audit log queries. |
@@ -846,10 +854,12 @@ Use AWS Secrets Manager path only when at least one is true:
 **Create the K8s Secret** (one-time):
 
 ```bash
-scripts/create-audit-writer-secret.sh
+scripts/create-audit-writer-user.sh
 ```
 
-This creates `oms-audit-writer` in the `mongodb` namespace with a `mongoUri` key containing the full connection string.
+This creates a dedicated `audit_writer` MongoDB user (insert-only on
+`oms_audit.auditlogs`) and `oms-audit-writer` in the `mongodb` namespace with
+a `mongoUri` key containing the full connection string for that user.
 
 The script uses database-admin credentials from `psmdb-secrets` (`MONGODB_DATABASE_ADMIN_USER` / `MONGODB_DATABASE_ADMIN_PASSWORD`), not `clusterAdmin`.
 

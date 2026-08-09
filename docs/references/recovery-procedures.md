@@ -533,7 +533,7 @@ bash scripts/destroy.sh all --auto-approve --export-first
 # 2. Re-provision from scratch
 bash scripts/provision.sh all
 scripts/bootstrap-dev-secrets.sh
-scripts/create-audit-writer-secret.sh
+scripts/create-audit-writer-user.sh
 scripts/validate-dev-render.sh
 
 # 3. Re-provision SigNoz + its dashboards/alerts
