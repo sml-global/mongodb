@@ -114,7 +114,7 @@ All credentials in the system and how to access them:
 | AWS SSO login | AWS IAM Identity Center | All infra roles | `aws sso login --profile default` |
 | MongoDB operator users (4) | K8s Secret `psmdb-secrets` + local escrow | Operators (bootstrap only) | `scripts/bootstrap-dev-secrets.sh` auto-creates |
 | MongoDB encryption key | K8s Secret `psmdb-encryption-key` + escrow | Operators (bootstrap only) | `scripts/bootstrap-dev-secrets.sh` auto-creates |
-| MongoDB audit-writer URI | K8s Secret `oms-audit-writer` | Boomi library (automatic) | `scripts/create-audit-writer-secret.sh` (one-time) |
+| MongoDB audit-writer URI | K8s Secret `oms-audit-writer` | Boomi library (automatic) | `scripts/create-audit-writer-user.sh` (one-time; insert-only role, see [Audit Enforcement Gaps](#audit-enforcement-gaps-target-state)) |
 | MongoDB audit reader | Created in MongoDB | Boomi Admin, Compliance | `scripts/create-audit-reader.sh` (one-time) |
 | PostgreSQL master password | `terraform.tfvars` (local) + TF state | Operators (provision only) | Set manually in tfvars |
 | SigNoz dashboard login | SigNoz internal DB | All who view telemetry | Root user auto-created at pod startup (`scripts/create-signoz-root-user-secret.sh`); Infra Architect/Admin then invites Editor/Viewer users |
@@ -261,9 +261,10 @@ for the exact files):
   `platform-prerequisites/terraform/eks-access/` — grants a Boomi Admin
   principal cluster access scoped to that namespace, so Boomi's own
   deployment tooling can reach the cluster.
-- The `oms-audit-writer` Kubernetes Secret (`scripts/create-audit-writer-secret.sh`)
+- The `oms-audit-writer` Kubernetes Secret (`scripts/create-audit-writer-user.sh`)
   — a MongoDB connection URI for an *external* Boomi process to consume;
-  not a pod spec.
+  built from a restricted `audit_writer` MongoDB user (insert-only on
+  `oms_audit.auditlogs`, not the database-admin account); not a pod spec.
 - Two Groovy libraries (`scripts/groovy/boomi/BoomiAuditLogLibrary.groovy`,
   `BoomiOtelLibrary.groovy`) — code meant to run *inside* Boomi's own
   scripting runtime, not deployed as a Kubernetes workload by this repo.
@@ -371,7 +372,7 @@ for the full Now/Later backlog this feeds into).
 
 | Gap | Priority | Current state | Target |
 |---|---|---|---|
-| **Insert-only writer role** | **Now** | The audit-writer secret uses a database-admin identity that can update/delete (`scripts/create-audit-writer-secret.sh`). "Immutable" is convention, not enforced. | Add a **new**, narrower MongoDB role granting only `insert` on `oms_audit.auditlogs`, used solely by the audit-writer secret; `update`/`remove`/`dropCollection`/index admin denied for that identity only. **Existing db-admin/userAdmin identities are unaffected and keep full rights** — this change only swaps which identity the Boomi-facing secret uses. Read-back for tests uses a separate identity. |
+| **Insert-only writer role** | **Now** (fix implemented, see #103) | Previously: the audit-writer secret used a database-admin identity that could update/delete (`scripts/create-audit-writer-secret.sh`), "immutable" as convention only. Now: `scripts/create-audit-writer-user.sh` creates a dedicated `audit_writer` MongoDB user under a custom role granting only `insert` on `oms_audit.auditlogs` — `update`/`remove`/`dropCollection`/index admin denied for that identity. **Existing db-admin/userAdmin identities are unaffected and keep full rights** — this only swaps which identity the Boomi-facing secret uses. | Once live in every environment (dev/UAT/Prod) and the old admin-based secret is rotated out everywhere, this gap can be marked closed. Read-back for tests still uses a separate identity (`scripts/create-audit-reader.sh`'s read-only user), unaffected by this change. |
 | **Tamper evidence** | Later | RBAC only; a privileged admin could alter history undetectably. | Periodic signed digest / hash-chain sealing so admin-side mutation is detectable independent of RBAC. |
 | **Trusted recorded-at** | Later | `time` is caller-supplied; even the ObjectId timestamp is client-generated, so backdating is undetectable. | Treat `_id` generation time as de-facto recorded-at for drift forensics; enforce NTP/chrony on producers and alert on clock skew beyond tolerance. |
 | **Payload lifecycle** | Later | `std.payload_uri` objects have no coupled lifecycle. Concretely: some audit records reference a large payload stored outside MongoDB (e.g. an S3 object) instead of embedding it; nothing today keeps that external object's lifetime in sync with the audit record's own retention. | Offloaded-object storage lifetime ≥ audit retention; store `std.payload_sha256` for integrity/404 detection; delete the object in coordination with its audit row so no orphaned payload outlives its index. |

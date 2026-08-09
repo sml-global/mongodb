@@ -206,7 +206,7 @@ Components must be deployed in this sequence due to dependencies:
 | `scripts/provision.sh <scope>` | Full provisioning entrypoint | Operator | Day-1 and change-driven reruns |
 | `scripts/destroy.sh <scope>` | Scoped teardown entrypoint (`mongodb`, `pg`, `signoz`, `all`) | Operator | Post-test cleanup and rebuild prep |
 | `scripts/bootstrap-dev-secrets.sh` | Create MongoDB encryption + credential secrets | Operator | Day-1 or when secrets are intentionally regenerated |
-| `scripts/create-audit-writer-secret.sh` | Create K8s Secret with MongoDB URI for Boomi library | Operator | Day-1 and when Mongo URI changes |
+| `scripts/create-audit-writer-user.sh` | Create restricted-scope MongoDB user (readWrite on audit DB only) + K8s Secret with its URI for Boomi library | Operator | Day-1 and when Mongo URI/password changes |
 | `scripts/create-audit-reader.sh` | Create read-only MongoDB user for querying audit logs | Operator/Architect | Day-1 and user onboarding |
 | `scripts/create-signoz-root-user-secret.sh` | Bootstrap SigNoz admin account (no manual signup) | Operator | Once per environment, before/with `provision.sh signoz` |
 | `scripts/provision.sh signoz-observability` | Apply SigNoz dashboards + alerts as code (auto-bootstraps Service Account/API key via headless browser if needed) | Operator | Once per environment, then safe to re-run |

@@ -133,7 +133,7 @@ Use these exact entry paths if you are new to this repository.
 ### Boomi Admin (integration and operations)
 
 1. Read [docs/guides/boomi-integration-guide.md](docs/guides/boomi-integration-guide.md)
-2. Ask Operator to ensure `scripts/create-audit-writer-secret.sh` and SigNoz provisioning are complete
+2. Ask Operator to ensure `scripts/create-audit-writer-user.sh` and SigNoz provisioning are complete
 3. Run `scripts/run-audit-telemetry-test.sh`
 4. Confirm test logs with `service.name = oms-audit-test-pod` in SigNoz
 5. If you need to inspect records in Compass, follow [MongoDB Compass (Dev Access)](#mongodb-compass-dev-access)
