@@ -44,6 +44,19 @@ mongodb_internal_provision_mongodb_access() {
   return 0
 }
 
+# mongodb_internal_destroy_mongodb_access() below is the real, environment-
+# aware teardown for the oms-audit-writer k8s Secret that
+# scripts/create-audit-writer-user.sh (#103) creates. Provision above
+# remains an info-log stub only -- the real creation still requires running
+# that script by hand (documented follow-up from #107, out of scope for
+# this destroy-only rewrite). Destroy needs no equivalent stub: deleting
+# the Secret is sufficient to satisfy mongodb's own pre-destroy guard's
+# mongodb_access_absent check (see live-observations.sh's
+# _mongodb_live_access_absent, which only checks Secret presence), and the
+# underlying MongoDB user itself is torn down along with the whole cluster
+# by mongodb_internal_destroy_mongodb() immediately afterward -- dropping
+# it individually here first would be redundant.
+
 mongodb_internal_destroy_mongodb() {
   local root_dir="${_ORCHESTRATOR_ROOT_DIR:?_ORCHESTRATOR_ROOT_DIR must be set}"
   local namespace="${MONGODB_NAMESPACE:?MONGODB_NAMESPACE must be set}"
@@ -69,6 +82,8 @@ mongodb_internal_destroy_mongodb() {
 }
 
 mongodb_internal_destroy_mongodb_access() {
-  printf 'INFO: mongodb-access destroy: namespace=%s\n' "${MONGODB_NAMESPACE:-mongodb}"
-  return 0
+  local namespace="${MONGODB_NAMESPACE:?MONGODB_NAMESPACE must be set}"
+
+  printf 'Removing mongodb-access resources in namespace %s...\n' "$namespace"
+  kubectl -n "$namespace" delete secret oms-audit-writer --ignore-not-found=true || true
 }

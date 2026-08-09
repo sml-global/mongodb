@@ -13,6 +13,7 @@ Covers:
 
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -209,6 +210,28 @@ class DestroyEnvironmentAwareTests(unittest.TestCase):
         # because a forbidden-account guard rejected the UAT account.
         self.assertNotIn("not yet environment-aware", result.stderr)
         self.assertNotIn("Refusing to run against forbidden AWS account", result.stderr)
+
+    def test_mongodb_access_destroy_targets_resolved_namespace(self):
+        destroy_k8s_path = REPO_ROOT / "scripts" / "lib" / "packages" / "30-mongodb" / "internal" / "destroy-k8s.sh"
+        script = (
+            f'source "{destroy_k8s_path}"; '
+            f'source "{REPO_ROOT / INTERNAL_LIFECYCLE}"; '
+            'export MONGODB_NAMESPACE=mongodb-uat; '
+            'mongodb_internal_destroy_mongodb_access'
+        )
+        fake_bin = tempfile.mkdtemp()
+        kubectl_stub = Path(fake_bin) / "kubectl"
+        kubectl_stub.write_text('#!/usr/bin/env bash\necho "KUBECTL_CALL: $*" >&2\nexit 0\n')
+        kubectl_stub.chmod(0o755)
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env={"PATH": f"{fake_bin}:/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("KUBECTL_CALL: -n mongodb-uat delete secret oms-audit-writer", result.stderr)
+        self.assertNotIn("INFO: mongodb-access destroy", result.stdout)
 
 
 if __name__ == "__main__":
