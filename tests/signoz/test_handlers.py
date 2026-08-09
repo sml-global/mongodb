@@ -122,20 +122,24 @@ class TestSignozHandlers(unittest.TestCase):
 class DestroyEnvironmentGuardTests(unittest.TestCase):
     """Issue #95: signoz_internal_destroy_{signoz,signoz_observability} shell
     out to the DEV-hardcoded scripts/legacy/dev/destroy.sh and are not yet
-    environment-aware. Until rewritten, they must refuse to run for any
-    $ENVIRONMENT other than dev, rather than silently destroying DEV
-    resources while believing they target UAT/Prod.
+    environment-aware. Until rewritten, they must refuse to run whenever
+    EXPECTED_AWS_ACCOUNT_ID resolves to UAT or Production, rather than
+    silently destroying DEV resources while believing they target them.
     """
 
     LIFECYCLE_PATH = (
         Path(__file__).parent.parent.parent / "scripts" / "lib" / "packages"
         / "50-signoz" / "internal" / "lifecycle-handlers.sh"
     )
+    CONTRACTS_PATH = (
+        Path(__file__).parent.parent.parent / "scripts" / "lib" / "environment-contracts.sh"
+    )
 
-    def _run(self, function_name, environment):
+    def _run(self, function_name, account_id):
         script = (
+            f'source "{self.CONTRACTS_PATH}"; '
             f'source "{self.LIFECYCLE_PATH}"; '
-            f'ENVIRONMENT={environment} {function_name}'
+            f'EXPECTED_AWS_ACCOUNT_ID={account_id} {function_name}'
         )
         return subprocess.run(
             ["bash", "-c", script],
@@ -144,24 +148,34 @@ class DestroyEnvironmentGuardTests(unittest.TestCase):
             text=True,
         )
 
-    def test_signoz_refuses_to_run_for_uat(self):
-        result = self._run("signoz_internal_destroy_signoz", "uat")
+    def test_signoz_refuses_to_run_for_uat_account(self):
+        result = self._run("signoz_internal_destroy_signoz", "672172129937")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not yet environment-aware", result.stderr)
         self.assertIn("issue #95", result.stderr)
 
-    def test_signoz_observability_refuses_to_run_for_uat(self):
-        result = self._run("signoz_internal_destroy_signoz_observability", "uat")
+    def test_signoz_observability_refuses_to_run_for_uat_account(self):
+        result = self._run("signoz_internal_destroy_signoz_observability", "672172129937")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not yet environment-aware", result.stderr)
 
-    def test_signoz_does_not_block_dev(self):
-        result = self._run("signoz_internal_destroy_signoz", "dev")
+    def test_signoz_refuses_to_run_for_prod_account(self):
+        result = self._run("signoz_internal_destroy_signoz", "632674123947")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+
+    def test_signoz_observability_refuses_to_run_for_prod_account(self):
+        result = self._run("signoz_internal_destroy_signoz_observability", "632674123947")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not yet environment-aware", result.stderr)
+
+    def test_signoz_does_not_block_dev_account(self):
+        result = self._run("signoz_internal_destroy_signoz", "815402439714")
         self.assertNotIn("not yet environment-aware", result.stderr)
         self.assertIn("No such file or directory", result.stderr)
 
-    def test_signoz_observability_does_not_block_dev(self):
-        result = self._run("signoz_internal_destroy_signoz_observability", "dev")
+    def test_signoz_observability_does_not_block_dev_account(self):
+        result = self._run("signoz_internal_destroy_signoz_observability", "815402439714")
         self.assertNotIn("not yet environment-aware", result.stderr)
         self.assertIn("No such file or directory", result.stderr)
 

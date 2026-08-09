@@ -19,11 +19,14 @@
 #
 # CAUTION (see issue #95): the destroy handler below is NOT actually
 # environment-aware yet — it shells out to the frozen, DEV-hardcoded
-# scripts/legacy/dev/destroy.sh regardless of $ENVIRONMENT. It fails closed
-# for any non-dev $ENVIRONMENT until it is rewritten to target the
-# requested environment's own cluster/account/state, mirroring the
-# provision-side environment-aware pattern already used by eks-platform/
-# workload-identity. Do not remove this guard without that rewrite.
+# legacy destroy script regardless of $ENVIRONMENT. It refuses to run
+# whenever the resolved EXPECTED_AWS_ACCOUNT_ID is on the forbidden-account
+# list in scripts/lib/environment-contracts.sh's
+# destroy_account_id_forbidden_for_legacy_shellout (the single source of
+# truth for this restriction) until it is rewritten to target the requested
+# environment's own cluster/account/state, mirroring the provision-side
+# environment-aware pattern already used by eks-platform/workload-identity.
+# Do not remove this guard without that rewrite.
 
 mongodb_internal_error() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -46,8 +49,8 @@ mongodb_internal_provision_mongodb_access() {
 mongodb_internal_destroy_mongodb() {
   local root_dir="${_ORCHESTRATOR_ROOT_DIR:?_ORCHESTRATOR_ROOT_DIR must be set}"
 
-  if [[ "${ENVIRONMENT:-}" != "dev" ]]; then
-    mongodb_internal_error "mongodb destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of \$ENVIRONMENT=${ENVIRONMENT:-<unset>}. Refusing to run against a non-dev environment."
+  if destroy_account_id_forbidden_for_legacy_shellout "${EXPECTED_AWS_ACCOUNT_ID:-}"; then
+    mongodb_internal_error "mongodb destroy is not yet environment-aware (issue #95) — it would target the DEV-hardcoded legacy script regardless of the requested account. Refusing to run against forbidden AWS account ${EXPECTED_AWS_ACCOUNT_ID:-<unset>}."
     return 1
   fi
 
