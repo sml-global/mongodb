@@ -2,8 +2,8 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PG_VARS = REPO_ROOT / "platform-prerequisites/terraform/postgresql/variables.tf"
-PG_MAIN = REPO_ROOT / "platform-prerequisites/terraform/postgresql/main.tf"
+PG_VARS = REPO_ROOT / "platform-prerequisites/terraform/postgresql-core/variables.tf"
+PG_MODULE_MAIN = REPO_ROOT / "platform-prerequisites/terraform/modules/postgresql/main.tf"
 
 
 class AuroraResourceTests(unittest.TestCase):
@@ -22,21 +22,21 @@ class AuroraResourceTests(unittest.TestCase):
             self.assertIn(f'variable "{name}"', text)
 
     def test_db_subnet_group_resource_exists(self):
-        text = PG_MAIN.read_text(encoding="utf-8")
+        text = PG_MODULE_MAIN.read_text(encoding="utf-8")
         self.assertIn('resource "aws_db_subnet_group" "aurora"', text)
 
     def test_rds_cluster_resource_exists_and_uses_managed_password(self):
-        text = PG_MAIN.read_text(encoding="utf-8")
+        text = PG_MODULE_MAIN.read_text(encoding="utf-8")
         self.assertIn('resource "aws_rds_cluster" "aurora"', text)
         self.assertIn("manage_master_user_password = true", text)
         self.assertNotIn("master_password", text)
 
     def test_rds_cluster_instance_resource_exists(self):
-        text = PG_MAIN.read_text(encoding="utf-8")
+        text = PG_MODULE_MAIN.read_text(encoding="utf-8")
         self.assertIn('resource "aws_rds_cluster_instance" "aurora"', text)
 
     def test_security_group_restricts_ingress_to_source_sg_only(self):
-        text = PG_MAIN.read_text(encoding="utf-8")
+        text = PG_MODULE_MAIN.read_text(encoding="utf-8")
         self.assertIn('resource "aws_security_group" "aurora"', text)
         self.assertIn("var.allowed_source_security_group_id", text)
 
