@@ -18,18 +18,8 @@ variable "name_prefix" {
   type        = string
 }
 
-variable "cnpg_backup_bucket_name" {
-  description = "S3 bucket for CloudNativePG WAL archive and base backup (from Phase 2 platform_contract)."
-  type        = string
-}
-
-variable "postgresql_operator_iam_role_arn" {
-  description = "From platform_contract.postgresql_operator_iam_role_arn (Phase 2 output)."
-  type        = string
-}
-
 variable "cluster_kms_key_arn" {
-  description = "KMS key ARN for CNPG S3 backup encryption."
+  description = "KMS key ARN for Aurora storage encryption (from eks-platform's platform_contract output)."
   type        = string
 }
 

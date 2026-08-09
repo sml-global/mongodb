@@ -29,7 +29,7 @@ prerequisite resources.
 cp platform-prerequisites/terraform/postgresql-core/terraform.tfvars.sample platform-prerequisites/terraform/postgresql-core/terraform.tfvars
 ```
 
-2. Fill required values (`vpc_id`, `database_subnet_ids`, `allowed_source_security_group_id`, `cnpg_backup_bucket_name`, `postgresql_operator_iam_role_arn`, `cluster_kms_key_arn`, `aurora_engine_version`).
+2. Fill required values (`vpc_id`, `database_subnet_ids`, `allowed_source_security_group_id`, `cluster_kms_key_arn`, `aurora_engine_version`). `vpc_id`/`database_subnet_ids`/`cluster_kms_key_arn` come from `eks-platform`'s `platform_contract` output (`terraform output` in `platform-prerequisites/terraform/eks-platform/`); copy manually, this root has no remote_state dependency.
 3. Run from repository root:
 
 ```bash
