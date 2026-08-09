@@ -331,6 +331,7 @@ class EksGuardRuntimeFixture(RepositoryFixture):
         super().setUp()
         self.copy(
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/environment-contracts.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",
@@ -351,6 +352,7 @@ class EksGuardRuntimeFixture(RepositoryFixture):
         )
         for rel in (
             "scripts/lib/orchestrator.sh",
+            "scripts/lib/terraform-destroy-scope.sh",
             "scripts/lib/platform-env.sh",
             "scripts/lib/platform-guards.sh",
         ):
