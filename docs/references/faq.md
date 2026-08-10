@@ -225,8 +225,33 @@ Also see [Architect Reference § EKS Node Instance Type Upgrade](../guides/archi
 
 ---
 
+### Why does the SigNoz Helm upgrade get stuck in `pending-upgrade`?
+
+**Symptom:** After bumping the SigNoz chart version (e.g. 0.130.1 → 0.136.1), the Flux `HelmRelease` gets stuck in `pending-upgrade`, and the `signoz-telemetrystore-migrator` pre-upgrade hook job fails or hangs.
+
+**Root cause:** The chart's pre-upgrade migration hook runs a ClickHouse schema migration written for the *new* chart version's expectations (e.g. requiring `object_serialization_version`, added in ClickHouse 25.12.x), but Helm applies chart values before the ClickHouse operator has actually reconciled the `ClickHouseInstallation` (CHI) CR onto the new image. The migration hook races ahead of the ClickHouse upgrade and can run against a ClickHouse server that doesn't support what it needs yet.
+
+**Fix (automated):** `scripts/provision-k8s-components.sh`'s `apply_signoz()` calls `sync_clickhouse_image_ahead_of_helm_upgrade()` before applying the SigNoz kustomize overlay. It resolves the target chart version's own default `clickhouse.image` (via `helm show values signoz/signoz --version <version>`), compares it to the live CHI's current image, and if the target is *newer*, patches the CHI directly and waits for the operator to roll the pod before letting Helm's migration hook run. See issue #125 and the originating incident in #123/#124.
+
+**If it still gets stuck** (e.g. this automation predates your checkout, or the chart's migration expectations changed again): manually patch the CHI's pod template image to match the new chart's default, wait for `kubectl -n <namespace> get pods -l clickhouse.altinity.com/chi=<chi-name>` to show `2/2 Running`, then suspend/resume (or `helm upgrade --force`) the stuck HelmRelease.
+
+### Why must ClickHouse image bumps only ever go forward, never backward?
+
+**Symptom (confirmed live, see below):** Patching a running `ClickHouseInstallation` CR's pod image to an *older* tag than what's currently running causes the ClickHouse container to `CrashLoopBackOff` immediately — even between close versions (e.g. `25.12.5` → `25.5.6`).
+
+**Root cause:** Once ClickHouse has started on a newer version, it can migrate on-disk data/metadata to that version's format. An older binary doesn't necessarily know how to read the newer format, so a downgrade is not a safe symmetric operation — it can break the server outright, not just "revert a setting."
+
+**How this was found:** While validating the fix for the `pending-upgrade` race above, a live test in UAT (2026-08-10) intentionally patched the CHI backward from `25.12.5` to `25.5.6` to simulate stale-image drift. The ClickHouse pod immediately `CrashLoopBackOff`'d and had to be patched forward again to recover. This also uncovered a real bug in the first draft of `sync_clickhouse_image_ahead_of_helm_upgrade()`: it blindly patched toward whatever image the *configured chart version* declared as default, with no check that this was actually newer than what was already running. Because the chart version string being tested (`0.130.1`, pre-#123) is older than what UAT was actually running (`25.12.4`, from the later `0.136.1` chart), the function "corrected" ClickHouse **backward**, breaking it a second time.
+
+**Fix:** the function now compares the current and target image tags with `sort -V` before patching. If the target is not newer, it logs a warning and skips the sync entirely, leaving ClickHouse untouched, rather than downgrading it. A same-minor-line, forward, compatible bump (`25.12.4` → `25.12.5`) was also verified live in UAT: the function correctly detected the drift, patched forward, waited for the pod to roll, and the SigNoz apply completed cleanly.
+
+**Takeaway:** never manually patch a live `ClickHouseInstallation` CR backward to "test" or "fix" something unless you are prepared for the ClickHouse pod to crash and need a few minutes to recover it. If you need to simulate stale-image drift for testing, only ever drift within versions you've confirmed are mutually compatible (e.g. adjacent patch releases of the same minor line), never across a version where you don't know the on-disk format changed.
+
+---
+
 ## Revision History
 
 | Date | Changes |
 |---|---|
+| 2026-08-10 | Added SigNoz/ClickHouse pre-upgrade sync FAQ — `pending-upgrade` race (#125) and the forward-only ClickHouse image constraint discovered while validating the fix live in UAT |
 | 2026-08-07 | Initial version — MongoDB anti-affinity, network architecture, environment strategy, naming convention, safety rules, troubleshooting |
