@@ -509,6 +509,85 @@ apply_overlay() {
   kubectl apply -k "$ROOT_DIR/k8s/overlays/${ENVIRONMENT:-dev}"
 }
 
+SIGNOZ_CLICKHOUSE_READY_TIMEOUT_SECONDS="${SIGNOZ_CLICKHOUSE_READY_TIMEOUT_SECONDS:-300}"
+
+# Pre-bumps the live ClickHouseInstallation CR's pod image to match the
+# target SigNoz chart's own default clickhouse.image before the Helm
+# upgrade runs. See issue #125: the chart's pre-upgrade migration hook
+# (signoz-telemetrystore-migrator) runs a ClickHouse schema migration
+# tied to the NEW chart version's expectations, but Helm applies chart
+# values before the ClickHouse operator reconciles the CHI -- so on a
+# ClickHouse major-version bump between chart versions, the hook can run
+# against the still-old ClickHouse server and get stuck in
+# `pending-upgrade` (observed with chart 0.130.1 -> 0.136.1, ClickHouse
+# 25.5.6 -> 25.12.5, missing `object_serialization_version` support).
+# Patching the CHI directly and waiting for the operator to roll the pod
+# here closes that race for every future signoz apply, not just this one.
+sync_clickhouse_image_ahead_of_helm_upgrade() {
+  local namespace="$1"
+  local chart_version="$2"
+  local chi_name="signoz-clickhouse"
+
+  if ! kubectl -n "$namespace" get chi "$chi_name" >/dev/null 2>&1; then
+    # First-ever install: no live CHI yet for the operator to race against.
+    return 0
+  fi
+
+  helm repo add signoz https://charts.signoz.io >/dev/null 2>&1 || true
+  helm repo update signoz >/dev/null 2>&1 || true
+
+  local target_image
+  target_image="$(helm show values signoz/signoz --version "$chart_version" 2>/dev/null \
+    | python3 -c '
+import sys, yaml
+values = yaml.safe_load(sys.stdin) or {}
+image = (values.get("clickhouse") or {}).get("image") or {}
+registry = image.get("registry", "docker.io")
+repository = image.get("repository", "clickhouse/clickhouse-server")
+tag = image.get("tag")
+if tag:
+    print(f"{registry}/{repository}:{tag}")
+')"
+
+  if [[ -z "$target_image" ]]; then
+    echo "WARNING: could not resolve clickhouse.image from signoz chart ${chart_version}; skipping pre-upgrade ClickHouse image sync." >&2
+    return 0
+  fi
+
+  local current_image
+  current_image="$(kubectl -n "$namespace" get chi "$chi_name" \
+    -o jsonpath='{.spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse")].image}' 2>/dev/null || true)"
+
+  if [[ "$current_image" == "$target_image" ]]; then
+    return 0
+  fi
+
+  echo "Pre-bumping ClickHouse image ahead of SigNoz chart ${chart_version} upgrade: ${current_image:-<unknown>} -> ${target_image} (see issue #125)"
+  kubectl -n "$namespace" patch chi "$chi_name" --type=json -p "$(python3 -c "
+import json
+print(json.dumps([{'op': 'replace', 'path': '/spec/templates/podTemplates/0/spec/containers/0/image', 'value': '${target_image}'}]))
+")"
+
+  echo "Waiting for ClickHouse pod to roll onto ${target_image} (timeout: ${SIGNOZ_CLICKHOUSE_READY_TIMEOUT_SECONDS}s) ..."
+  local deadline=$((SECONDS + SIGNOZ_CLICKHOUSE_READY_TIMEOUT_SECONDS))
+  while true; do
+    local rolled_ready
+    rolled_ready="$(kubectl -n "$namespace" get pods -l "clickhouse.altinity.com/chi=${chi_name}" \
+      -o jsonpath='{range .items[*]}{.spec.containers[?(@.name=="clickhouse")].image}{" "}{.status.containerStatuses[?(@.name=="clickhouse")].ready}{"\n"}{end}' 2>/dev/null || true)"
+
+    if [[ -n "$rolled_ready" ]] && ! grep -qv "^${target_image} true$" <<<"$rolled_ready"; then
+      break
+    fi
+
+    if (( SECONDS >= deadline )); then
+      echo "ERROR: ClickHouse pod(s) did not roll onto ${target_image} within ${SIGNOZ_CLICKHOUSE_READY_TIMEOUT_SECONDS}s." >&2
+      echo "Hint: run 'kubectl -n $namespace get pods -l clickhouse.altinity.com/chi=${chi_name}' and 'kubectl -n $namespace get chi ${chi_name} -o yaml' for details." >&2
+      exit 1
+    fi
+    sleep 5
+  done
+}
+
 apply_signoz() {
   # Environment-aware namespace/overlay selection (see issue #118): every
   # other apply_* function in this file selects its overlay via
@@ -546,6 +625,15 @@ apply_signoz() {
     secret_existed_before="true"
   fi
   "$ROOT_DIR/scripts/create-signoz-root-user-secret.sh" --namespace "$signoz_namespace"
+
+  local signoz_chart_version
+  signoz_chart_version="$(python3 -c '
+import yaml
+with open("'"$ROOT_DIR"'/gitops/signoz/base/helmreleases.yaml") as f:
+    docs = [d for d in yaml.safe_load_all(f) if d and d.get("metadata", {}).get("name") == "signoz"]
+print(docs[0]["spec"]["chart"]["spec"]["version"])
+')"
+  sync_clickhouse_image_ahead_of_helm_upgrade "$signoz_namespace" "$signoz_chart_version"
 
   kubectl apply -k "$ROOT_DIR/gitops/signoz/overlays/${ENVIRONMENT:-dev}"
 
