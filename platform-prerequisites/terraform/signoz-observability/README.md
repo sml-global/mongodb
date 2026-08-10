@@ -52,46 +52,58 @@ This bootstraps the Service Account/API key if needed (see above), reads
 port-forward if nothing is listening there), then runs `terraform fmt`,
 `validate`, `plan`, `apply` -- fully unattended end to end.
 
-## Known Provider Limitation (v0.0.14)
+## Provider Version and Schema History
 
-The `SigNoz/signoz` Terraform provider is early-stage (published within the
-last week as of this writing). Two round-trip quirks were found and handled:
+This root uses the `SigNoz/signoz` Terraform provider `~> 0.1.1` against
+SigNoz app `v0.136.1` (see `gitops/signoz/base/helmreleases.yaml`). Both were
+upgraded together (#122/#123) from provider `0.0.14`/SigNoz `v0.130.1`:
+
+- **Alerts**: `signoz_rule` (typed, v2alpha1 rules API) replaced the
+  deprecated `signoz_alert` (opaque `jsonencode(...)` blobs, v1 rules API)
+  in #117/#119. `signoz_rule`'s schema is unchanged between provider `0.0.17`
+  and `0.1.1` -- the schema itself was never the blocker. What blocked alert
+  creation until this upgrade (#121) was that SigNoz `v0.130.1`'s `/api/v2/rules`
+  endpoint didn't accept the provider's wire format at all
+  (`unknown field "builder_query"` when the provider's own official
+  test-fixture payload was sent directly). Upgrading the app resolved this;
+  no further alerts.tf changes were needed once the platform-prerequisites
+  is running against `v0.136.1`.
+- **Dashboards**: `signoz_dashboard`'s schema was completely rewritten in
+  provider `0.1.0`/`0.1.1` (a fully typed Perses-based `spec` tree replacing
+  the old `jsonencode(layout)`/`jsonencode(widgets)`/`jsonencode(variables)`
+  flat-attribute design), and requires SigNoz `>= v0.135.0` (the version
+  that exposes the dashboards v2 API, `/api/v2/dashboards`). `dashboards.tf`
+  was migrated using the provider's own `terraform plan -generate-config-out`
+  workflow against the already-migrated live dashboards (import by ID, no
+  dashboard recreated) -- see
+  `SigNoz/terraform-provider-signoz`'s `docs/guides/v0.0.x-to-v0.1.0.md` for
+  the full migration guide this followed. The `dashboards/signoz-import-pack/`
+  vendored JSON templates (used by the old `jsondecode(file(...))` pattern)
+  are no longer read by `dashboards.tf` -- the generated HCL is now the
+  source of truth; the JSON pack remains only as historical/import
+  reference material for anyone recreating a dashboard from scratch.
+
+## Known Historical Provider Limitations (provider 0.0.14, `signoz_alert` -- no longer applicable)
+
+The issues below applied only to the retired `signoz_alert` resource on
+provider `0.0.14` and no longer apply to this root's current `signoz_rule`
+resources. Kept here for historical context in case an older branch/tag is
+consulted:
 
 1. **`panel_map` inconsistency**: submitting an empty JSON object (`"{}"`)
-   for `panel_map` causes the provider to report a "Provider produced
-   inconsistent result" error on the next apply. Fixed by only setting
-   `panel_map` when the source dashboard JSON's `panelMap` is non-empty
-   (see `dashboards.tf`).
+   for `panel_map` caused the provider to report a "Provider produced
+   inconsistent result" error on the next apply.
 2. **`signoz_alert` computed-field drift**: `preferred_channels`,
    `broadcast_to_all`, `create_at`/`update_at`, and similar computed
-   attributes do not stabilize between plan/apply cycles for alert
-   resources. `terraform plan` will perpetually show benign in-place
-   "updates" to these fields. This is cosmetic: the underlying alert
-   definition (condition, thresholds, eval window) is correctly applied
-   and does not drift. Re-running `terraform apply` is safe and idempotent
-   -- it will not duplicate or misconfigure alerts.
-3. **`signoz_alert` first-apply taint (auto-healed)**: on apply, the
-   provider can return an unknown value for `preferred_channels`, causing
+   attributes did not stabilize between plan/apply cycles for alert
+   resources.
+3. **`signoz_alert` first-apply taint**: the provider could return an
+   unknown value for `preferred_channels` on apply, causing
    `Error: Provider returned invalid result object after apply` and marking
-   the resource tainted -- even though the alert was actually
-   created/updated successfully in SigNoz. **`terraform untaint` alone does
-   NOT reliably fix this**: an untainted resource is replaced (destroy +
-   recreate) on the next apply, and that fresh creation can hit the exact
-   same bug again, looping indefinitely rather than settling (observed
-   directly -- 6+ untaint/reapply cycles in a row all failed the same way).
-   `scripts/provision-signoz-observability.sh` handles this automatically
-   by patching Terraform state directly instead: it clears the tainted
-   status and sets `preferred_channels = []` (the value this repo always
-   uses, since `alerts.tf` never sets a non-empty value) without going
-   through the provider again at all, then re-plans and re-applies. This is
-   fully automatic -- no manual `terraform untaint` is needed.
-
-If you ever need to do this by hand: `terraform state pull > state.json`,
-remove the `"status": "tainted"` key and set `"preferred_channels": []` for
-the affected `signoz_alert` instance(s), bump `"serial"` by 1, then
-`terraform state push state.json`.
+   the resource tainted even though the alert was actually created.
 
 ## Boundaries
 - Do not commit the SigNoz API key to git. It is only ever read from the
   `signoz-api-key` Kubernetes Secret via environment variables at apply time.
 - Do not reuse this root's state key for the mongodb/postgresql roots.
+

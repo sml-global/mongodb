@@ -79,7 +79,7 @@ Single source of truth for all deployed versions. Update this table when any com
 | PBM (backup agent) | 2.6.0 | `k8s/base/psmdb-cluster.yaml` | Ships with operator version |
 | PostgreSQL (Aurora, UAT/Prod) | 18.4 | `terraform.tfvars` (`aurora_engine_version`, no committed default — set per operator) | `aws rds describe-db-engine-versions --engine aurora-postgresql --query 'DBEngineVersions[*].EngineVersion' --region ap-east-1` |
 | PostgreSQL (CNPG, Dev/SIT) | 18.4 | `gitops/postgresql-coredb/overlays/dev/cluster.yaml`, `gitops/postgresql-branddb/overlays/dev/cluster.yaml` | `ghcr.io/cloudnative-pg/postgresql` image tags |
-| SigNoz | chart 0.130.1 (app v0.130.1) | `gitops/signoz/base/helmreleases.yaml` | `helm search repo signoz/signoz --versions` |
+| SigNoz | chart 0.136.1 (app v0.136.1) | `gitops/signoz/base/helmreleases.yaml` | `helm search repo signoz/signoz --versions` |
 
 ### Platform Controllers
 
@@ -121,7 +121,7 @@ Single source of truth for all deployed versions. Update this table when any com
 ### Upgrade Notes
 
 - **Percona Operator**: current 1.18.0 is 4 versions behind latest (1.22.0). Upgrade path: 1.18→1.19→1.20→1.21→1.22 (one minor at a time). Check [Percona Operator release notes](https://docs.percona.com/percona-operator-for-mongodb/ReleaseNotes/index.html) and the [upgrade matrix](https://docs.percona.com/percona-operator-for-mongodb/update.html) for inter-version compatibility. See [Architect Reference § Upgrade Procedures](../guides/architect-reference.md#upgrade-procedures).
-- **SigNoz**: current 0.130.1, latest 0.131.0 — minor version bump, generally safe. Check [SigNoz changelog](https://github.com/SigNoz/signoz/releases).
+- **SigNoz**: current 0.136.1 (latest as of the #122/#123 upgrade). Upgraded from 0.130.1 → 0.136.1 in one jump — required a manual ClickHouse image bump (`clickhouse.image.tag`, chart default 25.12.5) ahead of the Helm upgrade itself, since the chart's pre-upgrade migration hook expects the new ClickHouse schema features and races ahead of the ClickHouseInstallation CR's own rollout. See `platform-prerequisites/terraform/signoz-observability/README.md` § "Provider Version and Schema History" for the Terraform-side half of this upgrade (signoz_alert → signoz_rule, signoz_dashboard v1 → v2). Check [SigNoz changelog](https://github.com/SigNoz/signoz/releases) before re-pinning further.
 - **PostgreSQL (Aurora, UAT/Prod)**: pinned at 18.4 (confirmed available via `aws rds describe-db-engine-versions --engine aurora-postgresql --region ap-east-1`, the current latest 18.x minor as of 2026-08-03). Set via `aurora_engine_version` in each root's `terraform.tfvars` — check for newer point releases via the same command before re-pinning.
 - **PostgreSQL (CNPG, Dev/SIT)**: pinned at 18.4 via `imageName: ghcr.io/cloudnative-pg/postgresql:18.4` in each cluster's `cluster.yaml` — check the [CloudNativePG PostgreSQL container image tags](https://github.com/cloudnative-pg/postgres-containers) before re-pinning.
 - **EKS**: AWS manages control plane upgrades. Node groups may need manual update. Check [EKS version calendar](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html).
@@ -221,13 +221,13 @@ Single source of truth for all deployed versions. Update this table when any com
 |---|---|
 | **What** | A Terraform root using the official `SigNoz/signoz` provider that declares dashboards and alert rules for every monitored signal (K8s, MongoDB, PostgreSQL, OTel Collector pipelines, Boomi app telemetry). |
 | **Why** | Dashboards/alerts are otherwise UI-only (clicked together by hand). Managing them as code makes them reviewable, reproducible across environments, and re-appliable with one command. |
-| **How it helps** | Sources dashboard JSON from [dashboards/signoz-import-pack](../../dashboards/signoz-import-pack) via `jsondecode()`, so templates aren't hand-transcribed into HCL. |
+| **How it helps** | `dashboards.tf` uses the typed `signoz_dashboard` (v2, Perses-based `spec` schema) and `alerts.tf` uses the typed `signoz_rule` (v2alpha1 rules API) — both fully typed HCL, plan-time validated, no opaque `jsonencode(...)` blobs. [dashboards/signoz-import-pack](../../dashboards/signoz-import-pack) is retained as historical/import reference material only; `dashboards.tf` no longer reads it. |
 | **Namespace** | N/A (SigNoz application-layer config, not a k8s workload) |
 | **Owner** | Infra Architect / Platform team |
-| **Depends on** | SigNoz root user bootstrap (`signoz-root-user` Secret), a Service Account + API key (`signoz-api-key` Secret) — auto-bootstrapped via a headless-browser script if missing, see [SigNoz Dashboard Import Pack](signoz-dashboard-import-pack.md) |
+| **Depends on** | SigNoz root user bootstrap (`signoz-root-user` Secret), a Service Account + API key (`signoz-api-key` Secret) — auto-bootstrapped via a headless-browser script if missing, see [SigNoz Dashboard Import Pack](signoz-dashboard-import-pack.md); SigNoz app `>= v0.135.0` for the dashboards v2 API |
 | **Depended on by** | Operators / EA (dashboard views, alert notifications) |
 | **Provisioned by** | `bash scripts/provision.sh signoz-observability` (wraps `platform-prerequisites/terraform/signoz-observability`) |
-| **Verification** | `curl $SIGNOZ_ENDPOINT/api/v1/rules -H "SIGNOZ-API-KEY: $SIGNOZ_ACCESS_TOKEN"` — see the Terraform root's [README.md](../../platform-prerequisites/terraform/signoz-observability/README.md) for a known provider-side cosmetic drift caveat |
+| **Verification** | `curl $SIGNOZ_ENDPOINT/api/v2/rules -H "SIGNOZ-API-KEY: $SIGNOZ_ACCESS_TOKEN"` and `curl $SIGNOZ_ENDPOINT/api/v2/dashboards -H "SIGNOZ-API-KEY: $SIGNOZ_ACCESS_TOKEN"` — see the Terraform root's [README.md](../../platform-prerequisites/terraform/signoz-observability/README.md) § "Provider Version and Schema History" |
 
 ## Platform Controllers
 
