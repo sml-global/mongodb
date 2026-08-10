@@ -303,7 +303,7 @@ main() {
 
   if [[ -f "$tf_dir/terraform.tfstate" ]]; then
     echo "Remote state missing but local terraform.tfstate found. Migrating local state once."
-    terraform -chdir="$tf_dir" init -migrate-state -input=false \
+    terraform -chdir="$tf_dir" init -migrate-state -force-copy -input=false \
       -backend-config="bucket=$bucket" \
       -backend-config="key=$key" \
       -backend-config="region=$region" \
