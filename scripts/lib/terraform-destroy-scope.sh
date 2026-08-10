@@ -30,38 +30,19 @@ _terraform_destroy_scope_error() {
 # selection (terraform.<environment>.tfvars if present, else the plain
 # terraform.tfvars) -- the destroy path must resolve tfvars identically to
 # how that scope was provisioned, or a destroy could target the wrong
-# variable set entirely.
+# variable set entirely. Prints nothing (empty string) if neither file
+# exists -- not every root requires a tfvars file (e.g.
+# signoz-observability's variables.tf gives every variable a default);
+# callers must treat an empty result as "omit -var-file", not an error.
 terraform_destroy_scope_resolve_tfvars_file() {
   local tf_dir="$1"
   local environment="$2"
 
   if [[ -n "$environment" && -f "${tf_dir}/terraform.${environment}.tfvars" ]]; then
     printf 'terraform.%s.tfvars' "$environment"
-  else
+  elif [[ -f "${tf_dir}/terraform.tfvars" ]]; then
     printf 'terraform.tfvars'
   fi
-}
-
-# terraform_destroy_scope_ensure_tfvars <tf_dir> <tfvars_file>
-#
-# tfvars_file is a bare filename (e.g. "terraform.uat.tfvars"), resolved
-# relative to tf_dir -- callers get it from
-# terraform_destroy_scope_resolve_tfvars_file above.
-terraform_destroy_scope_ensure_tfvars() {
-  local tf_dir="$1"
-  local tfvars_file="$2"
-  local tfvars_path="${tf_dir}/${tfvars_file}"
-  local sample_path="${tf_dir}/terraform.tfvars.sample"
-
-  if [[ -f "$tfvars_path" ]]; then
-    return 0
-  fi
-
-  _terraform_destroy_scope_error "missing required tfvars file: ${tfvars_path}"
-  if [[ -f "$sample_path" ]]; then
-    _terraform_destroy_scope_error "create it from sample and set required values: cp ${sample_path} ${tfvars_path}"
-  fi
-  return 1
 }
 
 # terraform_destroy_scope <tf_dir> <tf_state_key> <tf_state_bucket> <tf_state_region> <environment> <auto_approve> <bootstrap_backend_script>
@@ -88,7 +69,10 @@ terraform_destroy_scope() {
   local tfvars_file
   tfvars_file="$(terraform_destroy_scope_resolve_tfvars_file "$tf_dir" "$environment")"
 
-  terraform_destroy_scope_ensure_tfvars "$tf_dir" "$tfvars_file" || return 1
+  local -a var_file_args=()
+  if [[ -n "$tfvars_file" ]]; then
+    var_file_args=(-var-file="$tfvars_file")
+  fi
 
   "$bootstrap_backend_script" \
     --tf-dir "$tf_dir" \
@@ -99,8 +83,8 @@ terraform_destroy_scope() {
 
   printf 'Destroying Terraform scope at %s (state key: %s)\n' "$tf_dir" "$tf_state_key"
   if [[ "$auto_approve" == "true" ]]; then
-    terraform -chdir="$tf_dir" destroy -input=false -var-file="$tfvars_file" -auto-approve
+    terraform -chdir="$tf_dir" destroy -input=false "${var_file_args[@]+"${var_file_args[@]}"}" -auto-approve
   else
-    terraform -chdir="$tf_dir" destroy -input=false -var-file="$tfvars_file"
+    terraform -chdir="$tf_dir" destroy -input=false "${var_file_args[@]+"${var_file_args[@]}"}"
   fi
 }
