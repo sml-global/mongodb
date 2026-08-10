@@ -13,7 +13,12 @@ set -euo pipefail
 # Usage:
 #   scripts/bootstrap-signoz-service-account.sh [--account-name NAME] [--role ROLE]
 
-NAMESPACE="signoz"
+# See issue #118: NAMESPACE previously hardcoded "signoz" -- when invoked
+# via the unified --env uat orchestrator (transitively from
+# provision-signoz-observability.sh), SIGNOZ_NAMESPACE is already exported
+# as signoz-uat by load_platform_env, so this fallback only applies to the
+# legacy dev-only invocation path.
+NAMESPACE="${SIGNOZ_NAMESPACE:-signoz}"
 ACCOUNT_NAME="terraform-automation"
 ROLE="signoz-admin"
 KEY_NAME="terraform-automation-key-$(date +%s)"
@@ -98,7 +103,7 @@ ROOT_PASSWORD="$(kubectl -n "$NAMESPACE" get secret signoz-root-user -o jsonpath
 # open-signoz-ui.sh session on the default 3301 port).
 STARTED_PORT_FORWARD="false"
 if ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:${PORT}/api/v1/health"; then
-  echo "Starting temporary port-forward to signoz:8080 on 127.0.0.1:${PORT} ..."
+  echo "Starting temporary port-forward to ${NAMESPACE}:8080 on 127.0.0.1:${PORT} ..."
   kubectl -n "$NAMESPACE" port-forward svc/signoz "${PORT}:8080" >/tmp/signoz-bootstrap-pf.log 2>&1 &
   PF_PID=$!
   STARTED_PORT_FORWARD="true"
