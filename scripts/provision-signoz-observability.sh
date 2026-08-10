@@ -193,95 +193,12 @@ run_apply() {
   fi
 }
 
-# Known SigNoz Terraform provider bug (v0.0.14): on apply, the provider can
-# return an unknown value for the computed `preferred_channels` field on
-# signoz_alert resources, causing Terraform to report "Provider returned
-# invalid result object after apply" and mark the resource tainted -- even
-# though the alert was actually created/updated successfully in SigNoz.
-# `terraform untaint` does NOT reliably fix this: an untainted resource is
-# replaced (destroy + recreate) on the next apply, and that fresh creation
-# hits the exact same bug again -- observed to loop indefinitely rather than
-# eventually settling, even with backoff between retries. The only
-# deterministic fix is to directly patch the state: clear the tainted
-# status and set `preferred_channels` to `[]` (the correct value, since
-# this repo never sets a non-empty value for it -- see alerts.tf) without
-# going through the provider again at all. This function detects the known
-# error signature and performs that state surgery automatically.
-# See platform-prerequisites/terraform/signoz-observability/README.md
-# "Known Provider Limitation" for full details.
-retry_on_known_taint_bug() {
-  local apply_output apply_status state_file
-
-  set +e
-  apply_output="$(run_apply tfplan 2>&1)"
-  apply_status=$?
-  set -e
-
-  if [[ "$apply_status" -eq 0 ]]; then
-    echo "$apply_output"
-    return 0
-  fi
-
-  if ! echo "$apply_output" | grep -q "Provider returned invalid result object after apply"; then
-    echo "$apply_output"
-    echo "Error: terraform apply failed for a reason other than the known provider taint bug." >&2
-    return "$apply_status"
-  fi
-
-  echo ""
-  echo "Detected the known SigNoz provider computed-field bug (preferred_channels)."
-  echo "Initial apply returned a provider error, but this is auto-healed below."
-  if [[ "${SIGNOZ_VERBOSE:-false}" == "true" ]]; then
-    echo ""
-    echo "[SIGNOZ_VERBOSE=true] Raw provider output from the initial apply:"
-    echo "$apply_output"
-  fi
-  echo "Patching Terraform state directly (clearing taint, setting preferred_channels=[]) instead of untaint+replace ..."
-
-  state_file="$(mktemp)"
-  terraform -chdir="$TF_DIR" state pull > "$state_file"
-
-  python3 - "$state_file" <<'PYEOF'
-import json
-import sys
-
-path = sys.argv[1]
-with open(path) as f:
-    state = json.load(f)
-
-patched = 0
-for resource in state.get("resources", []):
-    if resource.get("type") != "signoz_alert":
-        continue
-    for instance in resource.get("instances", []):
-        if instance.get("status") == "tainted":
-            del instance["status"]
-            patched += 1
-        if instance.get("attributes", {}).get("preferred_channels") is None:
-            instance["attributes"]["preferred_channels"] = []
-
-if patched:
-    state["serial"] = state.get("serial", 0) + 1
-
-with open(path, "w") as f:
-    json.dump(state, f)
-
-print(f"Patched {patched} tainted signoz_alert instance(s).")
-PYEOF
-
-  terraform -chdir="$TF_DIR" state push "$state_file"
-  rm -f "$state_file"
-
-  terraform -chdir="$TF_DIR" plan -out=tfplan
-  run_apply tfplan
-}
-
 init_backend
 terraform -chdir="$TF_DIR" fmt -recursive
 terraform -chdir="$TF_DIR" validate
 
 terraform -chdir="$TF_DIR" plan -out=tfplan
-retry_on_known_taint_bug
+run_apply tfplan
 
 echo "Completed: signoz-observability (dashboards + alerts)"
 echo "Terraform root: $TF_DIR"
