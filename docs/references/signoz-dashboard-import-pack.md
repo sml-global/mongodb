@@ -178,11 +178,11 @@ available in this folder for manual import experiments.
 
 | Terraform resource | Alert name | Fires when |
 |---|---|---|
-| `signoz_alert.mongodb_no_data` | MongoDB replica set - no metrics received | `mongodb_connections_current` reports no data for 10 minutes |
-| `signoz_alert.postgres_cpu_high` | PostgreSQL (Aurora writer) - CPU utilization high | Aurora writer CPU > 80% for 10 minutes |
-| `signoz_alert.k8s_node_cpu_high` | K8s node - CPU utilization high | Any node's CPU > 85% for 15 minutes |
-| `signoz_alert.otel_collector_export_failures` | OTel Collector - export failures | Any collector fails to export metric points |
-| `signoz_alert.app_telemetry_no_data` | Boomi audit writes - no telemetry received | No `service.name = oms-audit-writer` logs received for 60 minutes |
+| `signoz_rule.mongodb_no_data` | MongoDB replica set - no metrics received | `mongodb_connections_current` reports no data for 10 minutes |
+| `signoz_rule.postgres_cpu_high` | PostgreSQL (Aurora writer) - CPU utilization high | Aurora writer CPU > 80% for 10 minutes |
+| `signoz_rule.k8s_node_cpu_high` | K8s node - CPU utilization high | Any node's CPU > 85% for 15 minutes |
+| `signoz_rule.otel_collector_export_failures` | OTel Collector - export failures | Any collector fails to export metric points |
+| `signoz_rule.app_telemetry_no_data` | Boomi audit writes - no telemetry received | No `service.name = oms-audit-writer` logs received for 60 minutes |
 
 Alert rationale and ownership:
 

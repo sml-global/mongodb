@@ -510,6 +510,19 @@ apply_overlay() {
 }
 
 apply_signoz() {
+  # Environment-aware namespace/overlay selection (see issue #118): every
+  # other apply_* function in this file selects its overlay via
+  # ${ENVIRONMENT:-dev} (see apply_overlay, apply_kustomize_operators) --
+  # this one previously didn't, so it always applied gitops/signoz/base
+  # (namespace 'signoz') regardless of --env, creating a stray duplicate
+  # install in UAT/Production instead of targeting signoz-<env> per the
+  # naming convention in CLAUDE.md. SIGNOZ_NAMESPACE is exported by
+  # load_platform_env (config/environments/<env>.env) before this handler
+  # runs; the ${SIGNOZ_NAMESPACE:-signoz} fallback only matters for the
+  # legacy dev-only invocation path (scripts/legacy/dev/*), which does not
+  # export it and has always meant the dev namespace 'signoz'.
+  local signoz_namespace="${SIGNOZ_NAMESPACE:-signoz}"
+
   # SigNoz's PVCs (gitops/signoz/base/helmreleases.yaml) request the
   # gp3-mongodb StorageClass, which is otherwise only ever applied as part
   # of the mongodb/overlay scope's own manifests (k8s/base/
@@ -529,28 +542,28 @@ apply_signoz() {
   # doesn't exist yet. Ensure it exists BEFORE applying, so this scope is
   # self-sufficient regardless of call order.
   local secret_existed_before="false"
-  if kubectl -n signoz get secret signoz-root-user >/dev/null 2>&1; then
+  if kubectl -n "$signoz_namespace" get secret signoz-root-user >/dev/null 2>&1; then
     secret_existed_before="true"
   fi
-  "$ROOT_DIR/scripts/create-signoz-root-user-secret.sh"
+  "$ROOT_DIR/scripts/create-signoz-root-user-secret.sh" --namespace "$signoz_namespace"
 
-  kubectl apply -k "$ROOT_DIR/gitops/signoz/base"
+  kubectl apply -k "$ROOT_DIR/gitops/signoz/overlays/${ENVIRONMENT:-dev}"
 
   # If the Secret didn't exist before (this run just created it) AND the
   # signoz-0 pod already existed from a prior apply, it was created without
   # the env var resolving -- Kubernetes does not hot-inject secretKeyRef
   # values into a running/errored pod, so force a restart to pick it up.
-  if [[ "$secret_existed_before" == "false" ]] && kubectl -n signoz get statefulset signoz >/dev/null 2>&1; then
+  if [[ "$secret_existed_before" == "false" ]] && kubectl -n "$signoz_namespace" get statefulset signoz >/dev/null 2>&1; then
     echo "Restarting signoz StatefulSet so it picks up the newly created signoz-root-user Secret ..."
-    kubectl -n signoz rollout restart statefulset/signoz
+    kubectl -n "$signoz_namespace" rollout restart statefulset/signoz
   fi
 
   echo "Waiting for SigNoz application pod signoz-0 to become Ready (timeout: ${SIGNOZ_READY_TIMEOUT_SECONDS}s) ..."
   local deadline=$((SECONDS + SIGNOZ_READY_TIMEOUT_SECONDS))
   while true; do
-    if kubectl -n signoz get pod signoz-0 >/dev/null 2>&1; then
+    if kubectl -n "$signoz_namespace" get pod signoz-0 >/dev/null 2>&1; then
       local ready
-      ready="$(kubectl -n signoz get pod signoz-0 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || true)"
+      ready="$(kubectl -n "$signoz_namespace" get pod signoz-0 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || true)"
       if [[ "$ready" == "true" ]]; then
         break
       fi
@@ -558,7 +571,7 @@ apply_signoz() {
 
     if (( SECONDS >= deadline )); then
       echo "ERROR: SigNoz application pod signoz-0 did not become Ready within ${SIGNOZ_READY_TIMEOUT_SECONDS}s." >&2
-      echo "Hint: run 'kubectl -n signoz get pods' and 'kubectl -n signoz describe pod signoz-0' for details." >&2
+      echo "Hint: run 'kubectl -n $signoz_namespace get pods' and 'kubectl -n $signoz_namespace describe pod signoz-0' for details." >&2
       exit 1
     fi
     sleep 5
