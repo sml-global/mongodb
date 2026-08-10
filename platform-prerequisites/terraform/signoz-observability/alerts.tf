@@ -32,7 +32,7 @@ resource "signoz_rule" "mongodb_no_data" {
             spec = {
               metrics = {
                 name          = "A"
-                step_interval = "60"
+                step_interval = jsonencode("60s")
                 signal        = "metrics"
                 source        = ""
                 aggregations = [
@@ -121,7 +121,7 @@ resource "signoz_rule" "postgres_cpu_high" {
             spec = {
               metrics = {
                 name          = "A"
-                step_interval = "60"
+                step_interval = jsonencode("60s")
                 signal        = "metrics"
                 source        = ""
                 aggregations = [
@@ -210,7 +210,7 @@ resource "signoz_rule" "k8s_node_cpu_high" {
             spec = {
               metrics = {
                 name          = "A"
-                step_interval = "60"
+                step_interval = jsonencode("60s")
                 signal        = "metrics"
                 source        = ""
                 aggregations = [
@@ -302,7 +302,7 @@ resource "signoz_rule" "otel_collector_export_failures" {
             spec = {
               metrics = {
                 name          = "A"
-                step_interval = "60"
+                step_interval = jsonencode("60s")
                 signal        = "metrics"
                 source        = ""
                 aggregations = [
@@ -391,7 +391,7 @@ resource "signoz_rule" "app_telemetry_no_data" {
             spec = {
               logs = {
                 name          = "A"
-                step_interval = "60"
+                step_interval = jsonencode("60s")
                 signal        = "logs"
                 source        = ""
                 aggregations = [

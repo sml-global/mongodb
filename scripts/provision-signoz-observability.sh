@@ -65,30 +65,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 # READINESS GATES: Ensure SigNoz platform services are Ready before provisioning
+#
+# The current SigNoz Helm chart (0.130.1) runs a single consolidated
+# StatefulSet pod (signoz-0, label app.kubernetes.io/name=signoz) that
+# serves both query-service and frontend -- there is no longer a separate
+# query-service/frontend Deployment/pod to select by those labels (see
+# issue #120). apply_signoz() in provision-k8s-components.sh already
+# checks signoz-0 directly; mirror that here instead of waiting on labels
+# that no longer exist on any pod.
 echo ""
 echo "=== SigNoz Readiness Checks ==="
 echo "Waiting for SigNoz API services to be ready..."
 echo ""
 
-echo "  → Waiting for query-service..."
-if kubectl wait --for=condition=ready pod \
-  -l app.kubernetes.io/name=query-service \
+echo "  → Waiting for signoz-0..."
+if kubectl wait --for=condition=ready pod signoz-0 \
   -n "$SIGNOZ_NAMESPACE" \
   --timeout=300s >/dev/null 2>&1; then
-  echo "  ✅ query-service is Ready"
+  echo "  ✅ signoz-0 is Ready"
 else
-  echo "  ❌ query-service failed to reach Ready state within 300s"
-  exit 1
-fi
-
-echo "  → Waiting for frontend..."
-if kubectl wait --for=condition=ready pod \
-  -l app.kubernetes.io/name=frontend \
-  -n "$SIGNOZ_NAMESPACE" \
-  --timeout=300s >/dev/null 2>&1; then
-  echo "  ✅ frontend is Ready"
-else
-  echo "  ❌ frontend failed to reach Ready state within 300s"
+  echo "  ❌ signoz-0 failed to reach Ready state within 300s"
   exit 1
 fi
 
@@ -97,10 +93,14 @@ max_attempts=30
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
-  # Use kubectl exec into existing frontend pod (no ephemeral pod creation/cleanup spam)
-  if kubectl exec -n "$SIGNOZ_NAMESPACE" -it \
-    $(kubectl get pod -n "$SIGNOZ_NAMESPACE" -l app.kubernetes.io/name=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) \
-    -- curl -f -s http://localhost:3301/api/v1/dashboards >/dev/null 2>&1; then
+  # Use kubectl exec into the existing signoz-0 pod (no ephemeral pod creation/cleanup spam).
+  # The container image (Alpine) has wget, not curl; the app listens on 8080
+  # internally (3301 is only the port-forward's local-side mapping used
+  # elsewhere in this script). /api/v1/health is unauthenticated, so a
+  # successful connection here means the API is up, without needing an
+  # API key at this point in the flow.
+  if kubectl exec -n "$SIGNOZ_NAMESPACE" signoz-0 \
+    -- wget -q -O /dev/null http://localhost:8080/api/v1/health >/dev/null 2>&1; then
     echo "  ✅ API endpoint is responsive"
     break
   fi
@@ -123,7 +123,7 @@ if [[ ! "$ENDPOINT" =~ (svc\.cluster\.local|127\.0\.0\.1|localhost) ]]; then
   echo "⚠️  WARNING: SIGNOZ_ENDPOINT is not internal to cluster"
   echo "   Endpoint: $ENDPOINT"
   echo "   This will route dashboard import traffic through AWS NAT gateway"
-  echo "   Recommended: Use http://frontend.${SIGNOZ_NAMESPACE}.svc.cluster.local:3301"
+  echo "   Recommended: Use http://signoz.${SIGNOZ_NAMESPACE}.svc.cluster.local:8080"
   echo ""
   echo "Proceeding in 5 seconds (non-interactive mode)..."
   sleep 5
