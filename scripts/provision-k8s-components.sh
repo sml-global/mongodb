@@ -562,6 +562,24 @@ if tag:
     return 0
   fi
 
+  # Never move ClickHouse backward: once it has started on a newer tag, its
+  # on-disk data/metadata format can be incompatible with an older binary
+  # (confirmed live in UAT while validating this fix -- downgrading
+  # 25.12.x -> 25.5.6 immediately CrashLoopBackOff'd). A backward target can
+  # happen if the configured chart_version is genuinely older than what's
+  # already running (e.g. a chart version bump not yet applied here, or a
+  # rollback) -- in that case leave ClickHouse alone and let a human decide.
+  local current_tag="${current_image##*:}"
+  local target_tag="${target_image##*:}"
+  if [[ -n "$current_tag" && "$current_tag" != "$current_image" ]]; then
+    local lower_tag
+    lower_tag="$(printf '%s\n%s\n' "$current_tag" "$target_tag" | sort -V | head -1)"
+    if [[ "$lower_tag" == "$target_tag" && "$target_tag" != "$current_tag" ]]; then
+      echo "WARNING: SigNoz chart ${chart_version}'s default ClickHouse image (${target_image}) is older than the running image (${current_image}); refusing to downgrade ClickHouse. Skipping pre-upgrade sync -- resolve the chart/ClickHouse version mismatch manually." >&2
+      return 0
+    fi
+  fi
+
   echo "Pre-bumping ClickHouse image ahead of SigNoz chart ${chart_version} upgrade: ${current_image:-<unknown>} -> ${target_image} (see issue #125)"
   kubectl -n "$namespace" patch chi "$chi_name" --type=json -p "$(python3 -c "
 import json
