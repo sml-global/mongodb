@@ -25,6 +25,16 @@ BOOTSTRAP_BACKEND_SCRIPT="$ROOT_DIR/scripts/bootstrap-terraform-s3-backend.sh"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/legacy/dev/load-env-config.sh"
 
+# See issue #118: every kubectl call below previously hardcoded the dev
+# namespace 'signoz' -- when invoked via the unified --env uat orchestrator
+# (scripts/lib/packages/50-signoz/internal/lifecycle-handlers.sh's
+# signoz_internal_provision_signoz_observability), SIGNOZ_NAMESPACE is
+# already exported as signoz-uat by load_platform_env before this script
+# runs; load-env-config.sh above never overwrites an already-set variable,
+# so the ${SIGNOZ_NAMESPACE:-signoz} fallback only applies to the legacy
+# dev-only invocation path.
+SIGNOZ_NAMESPACE="${SIGNOZ_NAMESPACE:-signoz}"
+
 TF_STATE_BUCKET="${TF_STATE_BUCKET:-sml-oms-dev-tfstate}"
 TF_STATE_REGION="${TF_STATE_REGION:-ap-east-1}"
 TF_STATE_KEY="${TF_STATE_KEY:-oms/dev/signoz-observability.tfstate}"
@@ -55,30 +65,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 # READINESS GATES: Ensure SigNoz platform services are Ready before provisioning
+#
+# The current SigNoz Helm chart (0.130.1) runs a single consolidated
+# StatefulSet pod (signoz-0, label app.kubernetes.io/name=signoz) that
+# serves both query-service and frontend -- there is no longer a separate
+# query-service/frontend Deployment/pod to select by those labels (see
+# issue #120). apply_signoz() in provision-k8s-components.sh already
+# checks signoz-0 directly; mirror that here instead of waiting on labels
+# that no longer exist on any pod.
 echo ""
 echo "=== SigNoz Readiness Checks ==="
 echo "Waiting for SigNoz API services to be ready..."
 echo ""
 
-echo "  → Waiting for query-service..."
-if kubectl wait --for=condition=ready pod \
-  -l app.kubernetes.io/name=query-service \
-  -n signoz \
+echo "  → Waiting for signoz-0..."
+if kubectl wait --for=condition=ready pod signoz-0 \
+  -n "$SIGNOZ_NAMESPACE" \
   --timeout=300s >/dev/null 2>&1; then
-  echo "  ✅ query-service is Ready"
+  echo "  ✅ signoz-0 is Ready"
 else
-  echo "  ❌ query-service failed to reach Ready state within 300s"
-  exit 1
-fi
-
-echo "  → Waiting for frontend..."
-if kubectl wait --for=condition=ready pod \
-  -l app.kubernetes.io/name=frontend \
-  -n signoz \
-  --timeout=300s >/dev/null 2>&1; then
-  echo "  ✅ frontend is Ready"
-else
-  echo "  ❌ frontend failed to reach Ready state within 300s"
+  echo "  ❌ signoz-0 failed to reach Ready state within 300s"
   exit 1
 fi
 
@@ -87,10 +93,14 @@ max_attempts=30
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
-  # Use kubectl exec into existing frontend pod (no ephemeral pod creation/cleanup spam)
-  if kubectl exec -n signoz -it \
-    $(kubectl get pod -n signoz -l app.kubernetes.io/name=frontend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) \
-    -- curl -f -s http://localhost:3301/api/v1/dashboards >/dev/null 2>&1; then
+  # Use kubectl exec into the existing signoz-0 pod (no ephemeral pod creation/cleanup spam).
+  # The container image (Alpine) has wget, not curl; the app listens on 8080
+  # internally (3301 is only the port-forward's local-side mapping used
+  # elsewhere in this script). /api/v1/health is unauthenticated, so a
+  # successful connection here means the API is up, without needing an
+  # API key at this point in the flow.
+  if kubectl exec -n "$SIGNOZ_NAMESPACE" signoz-0 \
+    -- wget -q -O /dev/null http://localhost:8080/api/v1/health >/dev/null 2>&1; then
     echo "  ✅ API endpoint is responsive"
     break
   fi
@@ -113,19 +123,19 @@ if [[ ! "$ENDPOINT" =~ (svc\.cluster\.local|127\.0\.0\.1|localhost) ]]; then
   echo "⚠️  WARNING: SIGNOZ_ENDPOINT is not internal to cluster"
   echo "   Endpoint: $ENDPOINT"
   echo "   This will route dashboard import traffic through AWS NAT gateway"
-  echo "   Recommended: Use http://frontend.signoz.svc.cluster.local:3301"
+  echo "   Recommended: Use http://signoz.${SIGNOZ_NAMESPACE}.svc.cluster.local:8080"
   echo ""
   echo "Proceeding in 5 seconds (non-interactive mode)..."
   sleep 5
 fi
 
-if ! kubectl -n signoz get secret signoz-api-key >/dev/null 2>&1; then
-  echo "Secret 'signoz-api-key' not found in namespace 'signoz'; bootstrapping it now (headless browser, one time only) ..."
+if ! kubectl -n "$SIGNOZ_NAMESPACE" get secret signoz-api-key >/dev/null 2>&1; then
+  echo "Secret 'signoz-api-key' not found in namespace '$SIGNOZ_NAMESPACE'; bootstrapping it now (headless browser, one time only) ..."
   bash "$ROOT_DIR/scripts/bootstrap-signoz-service-account.sh"
 fi
 
 export SIGNOZ_ACCESS_TOKEN
-SIGNOZ_ACCESS_TOKEN="$(kubectl -n signoz get secret signoz-api-key -o jsonpath='{.data.token}' | base64 -d)"
+SIGNOZ_ACCESS_TOKEN="$(kubectl -n "$SIGNOZ_NAMESPACE" get secret signoz-api-key -o jsonpath='{.data.token}' | base64 -d)"
 export SIGNOZ_ENDPOINT="$ENDPOINT"
 
 echo "Using SigNoz endpoint: $SIGNOZ_ENDPOINT"
@@ -146,8 +156,8 @@ trap cleanup_port_forward EXIT
 if [[ "$ENDPOINT" =~ ^https?://(127\.0\.0\.1|localhost):([0-9]+)$ ]]; then
   endpoint_local_port="${BASH_REMATCH[2]}"
   if ! curl -s -o /dev/null --max-time 2 "$ENDPOINT/api/v1/health"; then
-    echo "Starting temporary port-forward to signoz:8080 on 127.0.0.1:${endpoint_local_port} ..."
-    kubectl -n signoz port-forward svc/signoz "${endpoint_local_port}:8080" >/tmp/signoz-observability-pf.log 2>&1 &
+    echo "Starting temporary port-forward to ${SIGNOZ_NAMESPACE}:8080 on 127.0.0.1:${endpoint_local_port} ..."
+    kubectl -n "$SIGNOZ_NAMESPACE" port-forward svc/signoz "${endpoint_local_port}:8080" >/tmp/signoz-observability-pf.log 2>&1 &
     PF_PID=$!
     for _ in $(seq 1 30); do
       curl -s -o /dev/null --max-time 2 "$ENDPOINT/api/v1/health" && break
