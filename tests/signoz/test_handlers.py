@@ -119,17 +119,31 @@ class TestSignozHandlers(unittest.TestCase):
             f"scope-handlers.d/50-signoz.sh has invalid bash syntax: {result.stderr}")
 
 
-class DestroyEnvironmentGuardTests(unittest.TestCase):
-    """Issue #95: signoz_internal_destroy_{signoz,signoz_observability} shell
-    out to the DEV-hardcoded scripts/legacy/dev/destroy.sh and are not yet
-    environment-aware. Until rewritten, they must refuse to run whenever
-    EXPECTED_AWS_ACCOUNT_ID resolves to UAT or Production, rather than
-    silently destroying DEV resources while believing they target them.
+class DestroyEnvironmentAwareTests(unittest.TestCase):
+    """Issue #111: signoz_internal_destroy_{signoz,signoz_observability} are
+    now environment-aware -- they call destroy-k8s.sh/destroy-observability.sh
+    directly with the caller's own environment values, instead of shelling
+    out to the DEV-hardcoded scripts/legacy/dev/destroy.sh. The
+    forbidden-account guard from #95/#96/#97 no longer applies to this
+    scope; this replaces the removed DestroyEnvironmentGuardTests for
+    signoz specifically (postgresql keeps its own guard tests until it
+    gets the same rewrite).
     """
 
     LIFECYCLE_PATH = (
         Path(__file__).parent.parent.parent / "scripts" / "lib" / "packages"
         / "50-signoz" / "internal" / "lifecycle-handlers.sh"
+    )
+    DESTROY_K8S_PATH = (
+        Path(__file__).parent.parent.parent / "scripts" / "lib" / "packages"
+        / "50-signoz" / "internal" / "destroy-k8s.sh"
+    )
+    DESTROY_OBSERVABILITY_PATH = (
+        Path(__file__).parent.parent.parent / "scripts" / "lib" / "packages"
+        / "50-signoz" / "internal" / "destroy-observability.sh"
+    )
+    TF_DESTROY_PATH = (
+        Path(__file__).parent.parent.parent / "scripts" / "lib" / "terraform-destroy-scope.sh"
     )
     CONTRACTS_PATH = (
         Path(__file__).parent.parent.parent / "scripts" / "lib" / "environment-contracts.sh"
@@ -138,46 +152,32 @@ class DestroyEnvironmentGuardTests(unittest.TestCase):
     def _run(self, function_name, account_id):
         script = (
             f'source "{self.CONTRACTS_PATH}"; '
+            f'source "{self.TF_DESTROY_PATH}"; '
+            f'source "{self.DESTROY_K8S_PATH}"; '
+            f'source "{self.DESTROY_OBSERVABILITY_PATH}"; '
             f'source "{self.LIFECYCLE_PATH}"; '
-            f'EXPECTED_AWS_ACCOUNT_ID={account_id} {function_name}'
+            'export SIGNOZ_NAMESPACE=signoz-uat ENVIRONMENT=uat '
+            'SIGNOZ_OBSERVABILITY_STATE_KEY=oms/uat/signoz-observability.tfstate '
+            'TF_STATE_BUCKET=sml-oms-uat-tfstate-672172129937 TF_STATE_REGION=ap-east-1 '
+            f'EXPECTED_AWS_ACCOUNT_ID={account_id}; '
+            f'{function_name}'
         )
         return subprocess.run(
             ["bash", "-c", script],
-            env={"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-guard-test-root", "PATH": "/usr/bin:/bin"},
+            env={"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-destroy-test-root", "PATH": "/usr/bin:/bin"},
             capture_output=True,
             text=True,
         )
 
-    def test_signoz_refuses_to_run_for_uat_account(self):
+    def test_signoz_uses_environment_values_not_forbidden_account_guard(self):
         result = self._run("signoz_internal_destroy_signoz", "672172129937")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-        self.assertIn("issue #95", result.stderr)
+        self.assertNotIn("not yet environment-aware", result.stderr)
+        self.assertNotIn("Refusing to run against forbidden AWS account", result.stderr)
 
-    def test_signoz_observability_refuses_to_run_for_uat_account(self):
+    def test_signoz_observability_uses_environment_values_not_forbidden_account_guard(self):
         result = self._run("signoz_internal_destroy_signoz_observability", "672172129937")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-
-    def test_signoz_refuses_to_run_for_prod_account(self):
-        result = self._run("signoz_internal_destroy_signoz", "632674123947")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-
-    def test_signoz_observability_refuses_to_run_for_prod_account(self):
-        result = self._run("signoz_internal_destroy_signoz_observability", "632674123947")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-
-    def test_signoz_does_not_block_dev_account(self):
-        result = self._run("signoz_internal_destroy_signoz", "815402439714")
         self.assertNotIn("not yet environment-aware", result.stderr)
-        self.assertIn("No such file or directory", result.stderr)
-
-    def test_signoz_observability_does_not_block_dev_account(self):
-        result = self._run("signoz_internal_destroy_signoz_observability", "815402439714")
-        self.assertNotIn("not yet environment-aware", result.stderr)
-        self.assertIn("No such file or directory", result.stderr)
+        self.assertNotIn("Refusing to run against forbidden AWS account", result.stderr)
 
 
 if __name__ == '__main__':

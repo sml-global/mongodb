@@ -2,9 +2,10 @@
 #
 # SigNoz scope handler fragment — canonical wrappers only.
 #
-# Sources live-observations.sh, lifecycle-handlers.sh, and
-# pre-destroy-guards.sh via the foundation-validated package-source helper.
-# No verifier file is sourced here.
+# Sources live-observations.sh, destroy-k8s.sh, destroy-observability.sh,
+# lifecycle-handlers.sh, and pre-destroy-guards.sh via the
+# foundation-validated package-source helper. No verifier file is sourced
+# here.
 #
 # Defines exactly the six canonical handler/guard wrapper symbols assigned
 # by the fixed registry (scripts/lib/scope-registry.sh):
@@ -16,6 +17,8 @@
 #   scope_registry_pre_destroy_guard_signoz_observability
 
 source_package_internal_library "50-signoz/internal/live-observations.sh" || return 1
+source_package_internal_library "50-signoz/internal/destroy-k8s.sh" || return 1
+source_package_internal_library "50-signoz/internal/destroy-observability.sh" || return 1
 source_package_internal_library "50-signoz/internal/lifecycle-handlers.sh" || return 1
 source_package_internal_library "50-signoz/internal/pre-destroy-guards.sh" || return 1
 
