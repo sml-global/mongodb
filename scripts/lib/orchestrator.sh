@@ -822,12 +822,21 @@ _orchestrator_run_destroy() {
   local confirmation_artifact_given="false"
   local confirmation_artifact_path=""
   local -a cli_confirmations=()
+  local -a confirm_remove_protected=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --auto-approve)
         auto_approve="true"
         shift
+        ;;
+      --confirm-remove-protected)
+        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+          _orchestrator_error "--confirm-remove-protected requires a value"
+          return 1
+        fi
+        confirm_remove_protected+=("$2")
+        shift 2
         ;;
       --confirmation-artifact)
         if [[ "$confirmation_artifact_given" == "true" ]]; then
@@ -870,6 +879,17 @@ _orchestrator_run_destroy() {
       return 1
     fi
     seen_confirmations+=("$candidate_confirmation")
+  done
+
+  local -a seen_remove_protected=()
+  local candidate_remove_protected
+  for candidate_remove_protected in "${confirm_remove_protected[@]:-}"; do
+    [[ -n "$candidate_remove_protected" ]] || continue
+    if _orchestrator_in_list "$candidate_remove_protected" "${seen_remove_protected[@]:-}"; then
+      _orchestrator_error "duplicate --confirm-remove-protected value: ${candidate_remove_protected}"
+      return 1
+    fi
+    seen_remove_protected+=("$candidate_remove_protected")
   done
 
   require_environment_mutation_authorized "$environment_name" || return 1
@@ -946,6 +966,20 @@ _orchestrator_run_destroy() {
       "$environment_name" "$scope" "$expected_account_id" "${#cli_confirmations[@]}" "${order[@]}"
     return $?
   fi
+
+  # UNIFIED_CONFIRM_REMOVE_PROTECTED carries --confirm-remove-protected
+  # resource addresses to destroy handlers as a newline-separated env var,
+  # mirroring the UNIFIED_AUTO_APPROVE pattern below. It is exported here
+  # (not inside _orchestrator_destroy_second_pass) because this is the
+  # single call site for both the with-artifact and preparation paths, and
+  # the flag only ever matters once dispatch actually runs.
+  local remove_protected_newline=""
+  local remove_protected_item
+  for remove_protected_item in "${confirm_remove_protected[@]:-}"; do
+    [[ -n "$remove_protected_item" ]] || continue
+    remove_protected_newline+="${remove_protected_item}"$'\n'
+  done
+  export UNIFIED_CONFIRM_REMOVE_PROTECTED="$remove_protected_newline"
 
   _orchestrator_destroy_second_pass \
     "$environment_name" "$scope" "$expected_account_id" "$auto_approve" \
