@@ -28,9 +28,9 @@ node_max_size         = 9
 node_root_volume_size = 100
 node_spot_enabled     = false
 
-# Placeholder — operator must replace with the real KMS key ARN before apply.
+# Resolved from the first eks-platform apply's `platform_contract.iam_roles.oidc_provider` output (2026-08-11).
 cluster_oidc_thumbprint = "9e99a48a9960b14926bb7f3b02e22da0afd40a4d"
-cluster_oidc_issuer_url = "https://oidc.eks.ap-east-1.amazonaws.com/id/REPLACE-ME-PROD-OIDC"
+cluster_oidc_issuer_url = "https://oidc.eks.ap-east-1.amazonaws.com/id/145C35AC6D78AEF86CE1540C88F3BDF0"
 enable_load_balancer_controller = true
 
 efs_enabled         = true
