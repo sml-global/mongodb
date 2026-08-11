@@ -2,7 +2,7 @@ apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDB
 metadata:
   name: psmdb
-  namespace: mongodb-dev
+  namespace: mongodb
 spec:
   replsets:
     - name: rs0
