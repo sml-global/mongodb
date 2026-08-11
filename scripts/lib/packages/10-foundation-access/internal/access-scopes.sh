@@ -252,6 +252,10 @@ destroy_eks_platform_scope() {
 
   provision_backend_scope "eks-platform" || return 1
 
+  if [[ -n "${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION:-}" ]]; then
+    _eks_platform_disable_live_deletion_protection "$var_file" || return 1
+  fi
+
   local -a confirmed_addresses=()
   local confirm_line
   while IFS= read -r confirm_line; do
@@ -266,6 +270,74 @@ destroy_eks_platform_scope() {
 
   _run_eks_platform_destroy_with_confirmed_overrides \
     "$EKS_PLATFORM_TF_DIR" "$var_file" "${confirmed_addresses[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# _eks_platform_disable_live_deletion_protection
+# ---------------------------------------------------------------------------
+#
+# The EKS cluster's `deletionProtection` is a live AWS API attribute (not a
+# Terraform lifecycle block) -- AWS refuses DeleteCluster while it's true,
+# independent of and in addition to Terraform's own lifecycle.prevent_destroy
+# resources. eks-platform's own Terraform `check "eks_deletion_protection_
+# required"` block (eks-platform/checks.tf) asserts deletion_protection must
+# be true, but check blocks emit a warning, not a hard plan failure --
+# confirmed via `terraform plan -var-file=<patched-tfvars>`, which completes
+# cleanly and shows the intended `deletion_protection: true -> false`
+# in-place update. The check exists as a provisioning-time signal (don't
+# provision this stack without deletion protection), not a runtime
+# assertion that blocks this narrow, explicitly-confirmed destroy-time
+# override.
+#
+# Only called when UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION is non-empty
+# (validated in orchestrator.sh against EKS_CLUSTER_NAME before this ever
+# runs). Backs up the tfvars file on disk, patches deletion_protection to
+# false, applies -target=module.eks.aws_eks_cluster.this to push that one
+# attribute live, restores the tfvars unconditionally via a trap on
+# EXIT/INT/TERM (mirroring _run_eks_platform_destroy_with_confirmed_overrides
+# in this same file), and leaves the caller's normal destroy flow to run
+# next -- restoring the tfvars here does NOT re-enable deletion protection
+# on the now-mid-destroy cluster; it only prevents a stale tfvars edit from
+# lingering on disk after this function returns.
+_eks_platform_disable_live_deletion_protection() {
+  local var_file="$1"
+  local backup_file="${var_file}.deletion_protection_override_backup"
+
+  cp "$var_file" "$backup_file"
+
+  _eks_platform_restore_deletion_protection_tfvars() {
+    [[ -f "$backup_file" ]] || return 0
+    cp "$backup_file" "$var_file"
+    rm -f "$backup_file"
+  }
+  trap _eks_platform_restore_deletion_protection_tfvars EXIT INT TERM
+
+  if ! grep -qE '^deletion_protection[[:space:]]*=[[:space:]]*true' "$var_file"; then
+    _access_scopes_error "eks-platform: expected 'deletion_protection = true' in ${var_file}; refusing to patch an unexpected tfvars shape"
+    _eks_platform_restore_deletion_protection_tfvars
+    trap - EXIT INT TERM
+    return 1
+  fi
+
+  sed -i.bak -E 's/^deletion_protection([[:space:]]*=[[:space:]]*)true/deletion_protection\1false/' "$var_file"
+  rm -f "${var_file}.bak"
+
+  _access_scopes_error "eks-platform: applying deletion_protection=false to live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); tfvars restored on any exit path, including interruption"
+
+  terraform -chdir="$EKS_PLATFORM_TF_DIR" apply -input=false -auto-approve \
+    -target=module.eks.aws_eks_cluster.this -var-file="$var_file"
+  local apply_rc=$?
+
+  _eks_platform_restore_deletion_protection_tfvars
+  trap - EXIT INT TERM
+  _access_scopes_error "eks-platform: deletion_protection tfvars restored"
+
+  if [[ "$apply_rc" -ne 0 ]]; then
+    _access_scopes_error "eks-platform: failed to disable live deletion protection; destroy not attempted"
+    return 1
+  fi
+
+  return 0
 }
 
 # ---------------------------------------------------------------------------
