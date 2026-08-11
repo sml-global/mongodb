@@ -1,0 +1,133 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - platform-settings.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      platform.oms/environment: prod
+      platform.oms/visibility: private
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.CLUSTER_NAME
+    targets:
+      - select:
+          kind: HelmRelease
+          name: cluster-autoscaler
+        fieldPaths:
+          - spec.values.autoDiscovery.clusterName
+      - select:
+          kind: HelmRelease
+          name: aws-load-balancer-controller
+        fieldPaths:
+          - spec.values.clusterName
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.CLUSTER_AUTOSCALER_ROLE_ARN
+    targets:
+      - select:
+          kind: HelmRelease
+          name: cluster-autoscaler
+        fieldPaths:
+          - spec.values.rbac.serviceAccount.annotations.[eks.amazonaws.com/role-arn]
+      - select:
+          kind: ServiceAccount
+          name: REPLACE_AUTOSCALER_SERVICE_ACCOUNT
+        fieldPaths:
+          - metadata.annotations.[eks.amazonaws.com/role-arn]
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.AUTOSCALER_SERVICE_ACCOUNT
+    targets:
+      - select:
+          kind: HelmRelease
+          name: cluster-autoscaler
+        fieldPaths:
+          - spec.values.rbac.serviceAccount.name
+      - select:
+          kind: ServiceAccount
+          name: REPLACE_AUTOSCALER_SERVICE_ACCOUNT
+        fieldPaths:
+          - metadata.name
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.LOAD_BALANCER_CONTROLLER_ROLE_ARN
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: aws-load-balancer-controller
+        fieldPaths:
+          - metadata.annotations.[eks.amazonaws.com/role-arn]
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.SUSPEND_METRICS_SERVER
+    targets:
+      - select:
+          kind: HelmRelease
+          name: metrics-server
+        fieldPaths:
+          - spec.suspend
+        options:
+          create: true
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.SUSPEND_AWS_LOAD_BALANCER_CONTROLLER
+    targets:
+      - select:
+          kind: HelmRelease
+          name: aws-load-balancer-controller
+        fieldPaths:
+          - spec.suspend
+        options:
+          create: true
+  - source:
+      kind: ConfigMap
+      name: platform-controller-settings
+      fieldPath: data.CLUSTER_ARN
+    targets:
+      - select:
+          kind: HelmRelease
+          name: cert-manager
+        fieldPaths:
+          - metadata.annotations.[platform.oms/cluster-arn]
+        options:
+          create: true
+      - select:
+          kind: HelmRelease
+          name: kyverno
+        fieldPaths:
+          - metadata.annotations.[platform.oms/cluster-arn]
+        options:
+          create: true
+      - select:
+          kind: HelmRelease
+          name: cluster-autoscaler
+        fieldPaths:
+          - metadata.annotations.[platform.oms/cluster-arn]
+        options:
+          create: true
+      - select:
+          kind: HelmRelease
+          name: metrics-server
+        fieldPaths:
+          - metadata.annotations.[platform.oms/cluster-arn]
+        options:
+          create: true
+      - select:
+          kind: HelmRelease
+          name: aws-load-balancer-controller
+        fieldPaths:
+          - metadata.annotations.[platform.oms/cluster-arn]
+        options:
+          create: true
