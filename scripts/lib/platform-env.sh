@@ -352,7 +352,7 @@ _platform_env_validate_value() {
   case "$validator_name" in
     environment)
       case "$value" in
-        dev|uat) ;;
+        dev|uat|prod) ;;
         *)
           _platform_env_error "invalid value for ${key_name}: ${value}"
           return 1
@@ -613,9 +613,9 @@ load_platform_env() {
   local requested_env_value
 
   case "$requested_environment" in
-    dev|uat) ;;
+    dev|uat|prod) ;;
     *)
-      _platform_env_error "load_platform_env accepts only dev or uat"
+      _platform_env_error "load_platform_env accepts only dev, uat, or prod"
       return 1
       ;;
   esac

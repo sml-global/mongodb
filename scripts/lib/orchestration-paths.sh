@@ -70,9 +70,9 @@ initialize_orchestration_paths() {
   local component
 
   case "$environment_name" in
-    dev|uat) ;;
+    dev|uat|prod) ;;
     *)
-      _orchestration_paths_error "initialize_orchestration_paths accepts only dev or uat"
+      _orchestration_paths_error "initialize_orchestration_paths accepts only dev, uat, or prod"
       return 1
       ;;
   esac

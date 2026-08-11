@@ -48,9 +48,9 @@ _platform_guards_require_environment_loaded() {
   done
 
   case "$ENVIRONMENT" in
-    dev|uat) ;;
+    dev|uat|prod) ;;
     *)
-      _platform_guards_error "ENVIRONMENT must be dev or uat, got: ${ENVIRONMENT}"
+      _platform_guards_error "ENVIRONMENT must be dev, uat, or prod, got: ${ENVIRONMENT}"
       return 1
       ;;
   esac

@@ -29,6 +29,10 @@ immutable_environment_value() {
     uat:APPLICATION_DEVELOPER_ROLE_PREFIX) printf '%s\n' 'AWSReservedSSO_UATApplicationDeveloper_' ;;
     uat:BOOMI_ADMIN_ROLE_PREFIX) printf '%s\n' 'AWSReservedSSO_UATBoomiAdmin_' ;;
     uat:PROCESS_OWNER_ROLE_PREFIX) printf '%s\n' 'AWSReservedSSO_UATBoomiProcessOwner_' ;;
+    prod:EXPECTED_AWS_ACCOUNT_ID) printf '%s\n' '632674123947' ;;
+    prod:AWS_REGION|prod:TF_STATE_REGION) printf '%s\n' 'ap-east-1' ;;
+    prod:TF_STATE_PREFIX) printf '%s\n' 'oms/prod' ;;
+    prod:PROMOTION_MODE) printf '%s\n' 'uat-build' ;;
     *) return 1 ;;
   esac
 }
