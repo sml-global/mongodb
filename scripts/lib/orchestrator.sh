@@ -137,18 +137,20 @@ _orchestrator_parse_timestamp_to_epoch() {
 # The sole environment-mutation gate for every unified provision/destroy
 # operation. It reads PROMOTION_MODE from the already-loaded, already-
 # immutable-contract-validated environment (`load_platform_env` guarantees
-# dev's PROMOTION_MODE is always exactly "modeled" and uat's is always
-# exactly "uat-build"), so this single rule produces the exact required dev
-# message with no environment-name special-casing:
+# dev's PROMOTION_MODE is always exactly "modeled", uat's is always exactly
+# "uat-build", and prod's is also "uat-build" -- prod deliberately reuses
+# uat's gate value rather than getting its own distinct literal; see #130),
+# so this single rule produces the exact required dev message with no
+# environment-name special-casing:
 #   "ERROR: unified dev mutation is blocked while PROMOTION_MODE=modeled"
 
 require_environment_mutation_authorized() {
   local environment_name="${1:-}"
 
   case "$environment_name" in
-    dev|uat) ;;
+    dev|uat|prod) ;;
     *)
-      _orchestrator_error "require_environment_mutation_authorized accepts only dev or uat"
+      _orchestrator_error "require_environment_mutation_authorized accepts only dev, uat, or prod"
       return 1
       ;;
   esac
@@ -1440,16 +1442,16 @@ run_unified_command() {
   reject_execution_environment_overrides || return 1
 
   if [[ "${1:-}" != "--env" ]]; then
-    _orchestrator_error "unified commands require a leading --env <dev|uat> argument"
+    _orchestrator_error "unified commands require a leading --env <dev|uat|prod> argument"
     return 1
   fi
   shift || true
 
   local environment_name="${1:-}"
   case "$environment_name" in
-    dev|uat) ;;
+    dev|uat|prod) ;;
     *)
-      _orchestrator_error "unified commands require --env dev or --env uat, got: ${environment_name:-<empty>}"
+      _orchestrator_error "unified commands require --env dev, --env uat, or --env prod, got: ${environment_name:-<empty>}"
       return 1
       ;;
   esac
