@@ -251,7 +251,62 @@ destroy_eks_platform_scope() {
   }
 
   provision_backend_scope "eks-platform" || return 1
-  terraform -chdir="$EKS_PLATFORM_TF_DIR" destroy -input=false -auto-approve -var-file="$var_file"
+  _run_terraform_destroy_or_report_prevent_destroy \
+    "eks-platform" "$EKS_PLATFORM_TF_DIR" "$var_file"
+}
+
+# ---------------------------------------------------------------------------
+# _run_terraform_destroy_or_report_prevent_destroy
+# ---------------------------------------------------------------------------
+#
+# Runs `terraform destroy` for a scope, streaming its output live, and on
+# failure inspects that output for Terraform's `lifecycle.prevent_destroy`
+# rejection ("Instance cannot be destroyed" / "has lifecycle.prevent_destroy
+# set"). That specific failure means Terraform refused before mutating any
+# state (see terraform-mode docs on prevent_destroy) -- distinct from every
+# other destroy failure (auth, drift, provider errors), which this leaves
+# to surface as-is. On a prevent_destroy hit, replaces the raw multi-block
+# Terraform error dump with one clear, actionable summary naming every
+# protected resource address found, per issue #145 (destroy wrapper gave no
+# guidance when eks-platform's KMS keys / EFS filesystem blocked a full
+# UAT teardown in #142 -- root cause was intentional prevent_destroy, not a
+# bug, but the failure mode wasn't surfaced clearly).
+_run_terraform_destroy_or_report_prevent_destroy() {
+  local scope_name="$1"
+  local tf_dir="$2"
+  local var_file="$3"
+  local output_file
+  local destroy_rc
+
+  output_file="$(mktemp)" || {
+    _access_scopes_error "${scope_name}: unable to create temp file for destroy output capture"
+    return 1
+  }
+
+  # A wide COLUMNS keeps each "Resource X has lifecycle.prevent_destroy
+  # set" message on one line; Terraform otherwise wraps at the terminal
+  # width, which breaks the resource-address parsing below. This does not
+  # affect color -- the user's terminal still sees Terraform's normal
+  # colored, live-streamed output via tee.
+  COLUMNS=1000 terraform -chdir="$tf_dir" destroy -input=false -auto-approve -var-file="$var_file" 2>&1 | tee "$output_file"
+  destroy_rc="${PIPESTATUS[0]}"
+
+  if [[ "$destroy_rc" -ne 0 ]] && grep -q "has lifecycle.prevent_destroy set" "$output_file"; then
+    local -a protected_addresses=()
+    while IFS= read -r line; do
+      protected_addresses+=("$line")
+    done < <(grep -o 'Resource [^ ]* has$\|Resource [^ ]* has ' "$output_file" | sed -E 's/^Resource (.*) has ?$/\1/' | sort -u)
+
+    _access_scopes_error "${scope_name}: destroy refused by Terraform's lifecycle.prevent_destroy guard on ${#protected_addresses[@]} resource(s); no state was changed:"
+    local addr
+    for addr in "${protected_addresses[@]}"; do
+      _access_scopes_error "  - ${addr}"
+    done
+    _access_scopes_error "${scope_name}: this is a deliberate safety rail (see the module's main.tf), not a script defect. To proceed, explicitly remove prevent_destroy from the affected resource(s) as its own reviewed change, or destroy with -target to exclude them."
+  fi
+
+  rm -f "$output_file"
+  return "$destroy_rc"
 }
 
 # ---------------------------------------------------------------------------
