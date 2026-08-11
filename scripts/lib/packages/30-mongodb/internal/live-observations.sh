@@ -45,10 +45,31 @@ _mongodb_live_pvc_protection_enabled() {
 
 # Percona Backup for MongoDB is enabled via the PerconaServerMongoDB CR's
 # spec.backup.enabled field (k8s/base/psmdb-cluster.yaml).
+#
+# A missing CR (kubectl exit 1 with a NotFound stderr) is a valid platform
+# state -- the cluster was never provisioned or was already torn down at the
+# k8s layer -- and is distinct from a real read failure (auth/connectivity).
+# Only the latter should abort the guard; the former reports psmdb_cr_absent
+# so the guard can skip the backup/PVC protection checks it can't evaluate
+# against a resource that isn't there.
 _mongodb_live_pbm_backup_enabled() {
   local namespace="$1"
-  local enabled
-  enabled="$(kubectl -n "$namespace" get perconaservermongodb psmdb -o jsonpath='{.spec.backup.enabled}' 2>/dev/null)" || return 1
+  local combined_output enabled
+
+  combined_output="$(kubectl -n "$namespace" get perconaservermongodb psmdb -o jsonpath='{.spec.backup.enabled}' 2>&1)"
+  if [[ $? -ne 0 ]]; then
+    case "$combined_output" in
+      *NotFound*)
+        printf 'absent'
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+
+  enabled="$combined_output"
   case "$enabled" in
     true) printf 'enabled' ;;
     *) printf 'disabled' ;;
