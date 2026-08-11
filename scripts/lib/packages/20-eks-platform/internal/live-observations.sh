@@ -58,8 +58,42 @@ _eks_live_efs_prevent_destroy_declared() {
 # transitional IN_PROGRESS window and is `None`/absent once a lock is fully
 # committed -- `Locked` (boolean) is the durable, committed-state indicator
 # and is what this checks.
+#
+# `describe-backup-vault` returns AccessDeniedException -- not
+# ResourceNotFoundException -- for a vault name that simply doesn't exist
+# (confirmed live: an obviously-fake vault name produces the identical
+# error as a real permissions failure would). That makes the error
+# indistinguishable from a genuine access problem on its own, so a missing
+# vault is checked first via `list-backup-vaults` (which succeeds and
+# reports an accurate, if empty, list regardless of whether any specific
+# vault exists) before ever calling describe-backup-vault. A vault absent
+# from that list reports 'absent' -- a valid state meaning the vault was
+# already destroyed (e.g. an earlier destroy run got partway through
+# before failing on a later resource) and there is nothing left to
+# protect -- distinct from every other describe-backup-vault failure,
+# which still hard-fails as before.
 _eks_live_vault_lock_state() {
   local vault_name="$1"
+  local vault_names
+  vault_names="$(aws backup list-backup-vaults \
+    --region "$AWS_REGION" \
+    --query 'BackupVaultList[].BackupVaultName' \
+    --output text 2>/dev/null)" || return 1
+
+  local existing_name
+  local vault_found="false"
+  for existing_name in $vault_names; do
+    if [[ "$existing_name" == "$vault_name" ]]; then
+      vault_found="true"
+      break
+    fi
+  done
+
+  if [[ "$vault_found" == "false" ]]; then
+    printf 'absent'
+    return 0
+  fi
+
   local locked
   locked="$(aws backup describe-backup-vault \
     --backup-vault-name "$vault_name" \

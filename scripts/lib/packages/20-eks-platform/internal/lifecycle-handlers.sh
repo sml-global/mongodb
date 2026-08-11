@@ -38,7 +38,8 @@ eks_internal_read_destroy_drift_vector() {
 }
 
 eks_internal_validate_destroy_drift_vector() {
-  local vector="$1"
+  local scope_name="$1"
+  local vector="$2"
   local account=""
   local region=""
   local environment_name=""
@@ -89,11 +90,22 @@ eks_internal_validate_destroy_drift_vector() {
     return 1
   fi
 
+  # eks_deletion_protection may legitimately be 'disabled' here only for
+  # the eks-platform scope itself, only when
+  # UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION was explicitly confirmed
+  # (validated against EKS_CLUSTER_NAME in orchestrator.sh) -- mirrors the
+  # same bypass in eks_internal_eks_platform_pre_destroy_guard. workload-
+  # identity and platform-controllers still require it enabled
+  # unconditionally.
   case "$eks_deletion_protection" in
     enabled|true) ;;
     *)
-      eks_internal_error "EKS deletion protection is not enabled"
-      return 1
+      if [[ "$scope_name" == "eks-platform" && -n "${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION:-}" ]]; then
+        :
+      else
+        eks_internal_error "EKS deletion protection is not enabled"
+        return 1
+      fi
       ;;
   esac
 
@@ -106,7 +118,7 @@ eks_internal_validate_destroy_drift_vector() {
   esac
 
   case "$vault_lock_state" in
-    locked|effective) ;;
+    locked|effective|absent) ;;
     *)
       eks_internal_error "backup vault lock is not effective"
       return 1
@@ -140,7 +152,7 @@ eks_internal_capture_destroy_drift_vector() {
   local vector=""
 
   vector="$(eks_internal_read_destroy_drift_vector "$scope_name" "$phase_name")" || return 1
-  eks_internal_validate_destroy_drift_vector "$vector" || return 1
+  eks_internal_validate_destroy_drift_vector "$scope_name" "$vector" || return 1
   printf '%s' "$vector"
 }
 
