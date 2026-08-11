@@ -131,8 +131,8 @@ def validate_schema(payload):
         )
 
     environment = payload["environment"]
-    if environment not in ("dev", "uat"):
-        _error(f"environment must be dev or uat, got: {environment!r}")
+    if environment not in ("dev", "uat", "prod"):
+        _error(f"environment must be dev, uat, or prod, got: {environment!r}")
 
     account_id = payload["account_id"]
     if not isinstance(account_id, str) or not ACCOUNT_ID_RE.match(account_id):
