@@ -307,8 +307,8 @@ comments elsewhere.
 
 | Scope | Provision | Destroy | Verify | Pre-destroy guard |
 |---|---|---|---|---|
-| `backend` | Real | Blocked by design (break-glass only) | — | — |
-| `access-governance` | Real | Blocked by design (retained-control) | — | — |
+| `backend` | Real | Blocked by design (break-glass only — see below) | — | — |
+| `access-governance` | Real | Blocked by design (retained-control — see below) | — | — |
 | `eks-access` | Real | **Missing** (no handler file) | Real | — |
 | `eks-platform` | Real (identity/drift-vector logic) | Real | Real | Real |
 | `platform-controllers` | Real | Real | Real | Real |
@@ -322,6 +322,121 @@ comments elsewhere.
 | `boomi-runtime` | **Missing entirely** | Missing | Missing | Missing |
 | `database-access-core` | **Missing entirely** | Missing | Missing | Missing |
 | `database-access-brand` | **Missing entirely** | Missing | Missing | Missing |
+
+### 5.1 Why `backend` and `access-governance` are permanently blocked, and how to destroy them anyway
+
+`scripts/destroy.sh` refuses to destroy these two scopes unconditionally
+(`foundation_destroy_backend_blocked` / `foundation_destroy_access_governance_blocked`
+in `scripts/lib/scope-registry.sh`) — there is no flag, override, or scope
+string that reaches them through the normal orchestrator, by design:
+
+- **`backend`** is the single S3 bucket (`TF_STATE_BUCKET`, e.g.
+  `sml-oms-uat-tfstate-672172129937`) holding **every other scope's**
+  Terraform state in the account — mongodb, eks-platform, signoz,
+  access-governance, all of it. It is not "a resource" in the usual sense;
+  it is the ledger that makes any of this scriptable at all. Destroying it
+  while any other scope still has live state pointed at it would strand
+  real, running AWS resources with nothing left to track or destroy them.
+- **`access-governance`** is the account's AWS Access Analyzer — an
+  account-wide security/governance control, not application
+  infrastructure. It is meant to outlive any single environment's
+  app-layer teardown; ordinary destroy/reprovision testing cycles should
+  never need to touch it.
+
+#### What each scope actually contains, and the catastrophic effect of removing it
+
+**`backend` — the S3 Terraform-state bucket.** A typical live bucket
+(verified against UAT, `sml-oms-uat-tfstate-672172129937`) holds one
+`.tfstate` object per provisioned scope, e.g.:
+
+```
+oms/uat/access-governance.tfstate
+oms/uat/eks-platform.tfstate
+oms/uat/mongo.tfstate
+oms/uat/signoz-observability.tfstate
+oms/uat/workload-identity.tfstate
+```
+
+Deleting this bucket while any of the underlying AWS resources those
+files describe are still live means:
+
+- **Terraform loses all record of every resource it ever created in this
+  account** — EKS clusters, VPCs, IAM roles, KMS keys, RDS/Aurora
+  instances, EFS filesystems, AWS Backup vaults, MongoDB/PostgreSQL
+  prerequisites, SigNoz dashboards, everything any scope in this repo
+  ever provisioned.
+- **Every resource not already destroyed becomes an orphan**: still
+  running, still billing, with no Terraform configuration anywhere able
+  to plan, modify, or destroy it again through this repo's tooling.
+  Recovering from that means one of two manual, error-prone paths: (a)
+  finding and deleting every orphaned resource by hand across the AWS
+  console/CLI, resource by resource, with no guarantee every dependency
+  is found, or (b) `terraform import`-ing each surviving resource back
+  into a brand-new, empty state file one at a time, re-deriving the
+  correct resource addresses and attributes from scratch.
+- **There is no undo.** S3 versioning on this bucket does not help here —
+  deleting the bucket itself removes every object version and delete
+  marker along with it. There is nothing left to restore from once the
+  bucket is gone, unlike a single accidentally-deleted state *object*
+  (see `docs/references/recovery-procedures.md` § "Symptom: State bucket
+  accidentally deleted" for that much narrower, recoverable case).
+
+**`access-governance` — the account's AWS Access Analyzer.** A single
+resource (`aws_accessanalyzer_analyzer.uat_account` for UAT) — a
+continuous, account-wide security control that flags IAM policies, S3
+bucket policies, KMS key policies, and other resource-based policies
+granting unintended access to principals outside the account. Deleting
+it means:
+
+- **The account loses all ongoing external-access findings
+  immediately** — not just new findings going forward, but the entire
+  finding history tied to that analyzer instance.
+- **A real detection gap, not just a configuration change**: any existing
+  IAM/S3/KMS misconfiguration that was previously flagged, or any new one
+  introduced after this deletion, goes completely undetected until a
+  fresh analyzer is created and completes its own baseline scan from
+  zero.
+- **Possible compliance exposure independent of the gap itself**: if any
+  audit or compliance process (SOC2, internal security review, etc.)
+  depends on this analyzer's continued existence, removing it may itself
+  be a reportable control gap, regardless of whether anything it would
+  have caught actually occurred.
+
+If a genuine full-account decommission is ever needed, use
+`scripts/break-glass-destroy.sh` — a standalone script deliberately kept
+**outside** the orchestrator/scope-registry dispatch path entirely (it does
+not source `orchestrator.sh`, `scope-registry.sh`, or any package
+fragment, and is unreachable via `destroy.sh --env <env> <scope>` no
+matter what scope string is passed):
+
+```
+scripts/break-glass-destroy.sh --env uat --scope backend --i-understand-this-is-irreversible
+scripts/break-glass-destroy.sh --env uat --scope access-governance --i-understand-this-is-irreversible
+```
+
+Before ever prompting for confirmation, the script prints a live,
+read-only enumeration of exactly what it is about to destroy — every
+current object in the bucket (for `backend`) or every resource in
+Terraform state (for `access-governance`) — plus the same catastrophic-
+consequence text above, so the operator sees the concrete blast radius,
+not just an abstract warning. It then requires typing back an exact
+confirmation phrase (`destroy <scope> in <env> <account-id>`) — not just
+a flag or a bare "yes" — and appends an audit-log line to
+`.local/<env>/evidence/break-glass-destroy.log` for every invocation,
+confirmed or aborted, before any destroy is attempted.
+
+**Both scopes must be destroyed last, after every other scope in the
+environment has already been destroyed and re-verified empty.** The
+script does not enforce ordering between the two of itself, but it does
+refuse to destroy `backend` while any *other* scope's tfstate object
+still describes live resources (it checks each current tfstate object's
+resource count directly, ignoring `access-governance.tfstate`, since that
+scope is expected to still hold its own resource until destroyed via this
+same script). There is no equivalent technical safeguard for
+`access-governance` — it has no destroy-order dependency on the other
+scopes, only the operator's judgment that it should be the deliberate,
+audited final step, not a routine one.
+
 
 "Stub" = function exists, is called correctly by the orchestrator, but its
 body only prints an INFO/PASS line and returns success — it never calls
