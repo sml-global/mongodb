@@ -251,8 +251,179 @@ destroy_eks_platform_scope() {
   }
 
   provision_backend_scope "eks-platform" || return 1
+
+  local -a confirmed_addresses=()
+  local confirm_line
+  while IFS= read -r confirm_line; do
+    [[ -n "$confirm_line" ]] && confirmed_addresses+=("$confirm_line")
+  done <<< "${UNIFIED_CONFIRM_REMOVE_PROTECTED:-}"
+
+  if [[ "${#confirmed_addresses[@]}" -eq 0 ]]; then
+    _run_terraform_destroy_or_report_prevent_destroy \
+      "eks-platform" "$EKS_PLATFORM_TF_DIR" "$var_file"
+    return $?
+  fi
+
+  _run_eks_platform_destroy_with_confirmed_overrides \
+    "$EKS_PLATFORM_TF_DIR" "$var_file" "${confirmed_addresses[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# _eks_platform_protected_resource_module_file /
+# _eks_platform_parse_module_resource_address
+# ---------------------------------------------------------------------------
+#
+# eks-platform has exactly 3 resources with lifecycle.prevent_destroy today
+# (module.kms.aws_kms_key.cluster, module.kms.aws_kms_key.backup,
+# module.efs[0].aws_efs_file_system.this -- see modules/kms/main.tf and
+# modules/efs/main.tf). This is an explicit, hardcoded registry rather than
+# a generic Terraform-address-to-file resolver: adding a new
+# prevent_destroy resource anywhere in eks-platform requires updating this
+# map, by design -- an override path that silently "discovers" newly
+# protected resources would defeat the point of requiring an explicit
+# --confirm-remove-protected per address.
+_eks_platform_protected_resource_module_file() {
+  local module_name="$1"
+  case "$module_name" in
+    kms) printf '%s/platform-prerequisites/terraform/modules/kms/main.tf' "$_ACCESS_SCOPES_ROOT_DIR" ;;
+    efs) printf '%s/platform-prerequisites/terraform/modules/efs/main.tf' "$_ACCESS_SCOPES_ROOT_DIR" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Parses a Terraform resource address (as printed in `has lifecycle.
+# prevent_destroy set` errors and as passed to --confirm-remove-protected)
+# into its module name and `type.name` resource reference. Handles an
+# optional module index, e.g. `module.efs[0].aws_efs_file_system.this` ->
+# module_name=efs, resource_ref=aws_efs_file_system.this.
+_eks_platform_parse_module_resource_address() {
+  local address="$1"
+  case "$address" in
+    module.*)
+      local remainder="${address#module.}"
+      local module_name="${remainder%%.*}"
+      module_name="${module_name%%\[*}"
+      local resource_ref="${remainder#*.}"
+      printf '%s\n%s\n' "$module_name" "$resource_ref"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _run_eks_platform_destroy_with_confirmed_overrides
+# ---------------------------------------------------------------------------
+#
+# For each --confirm-remove-protected address, resolves its module file and
+# resource block, backs the file up to <file>.prevent_destroy_override_backup
+# (an on-disk backup, not just an in-memory copy, so a restore is still
+# possible after a SIGINT/SIGTERM/crash mid-destroy -- a trap registered
+# below restores from these files on any exit path), flips that resource's
+# `prevent_destroy = true` to `false` (scoped to the resource's own block
+# via an awk address range, so a file with multiple protected resources --
+# e.g. modules/kms/main.tf's cluster and backup keys -- only has the
+# explicitly confirmed one(s) patched), runs the destroy, and restores every
+# backed-up file before returning the destroy's real exit status. An
+# address that doesn't resolve to a known module/resource aborts before any
+# file is touched -- never silently skipped, never silently expanded to
+# "disable everything in this file".
+_run_eks_platform_destroy_with_confirmed_overrides() {
+  local tf_dir="$1"
+  local var_file="$2"
+  shift 2
+  local -a confirmed_addresses=("$@")
+
+  local -a backup_files=()
+  local address module_name resource_ref resource_type resource_name
+  local module_file parsed
+
+  _eks_platform_restore_prevent_destroy_backups() {
+    local restore_file backup_file
+    for restore_file in "${backup_files[@]}"; do
+      backup_file="${restore_file}.prevent_destroy_override_backup"
+      [[ -f "$backup_file" ]] || continue
+      cp "$backup_file" "$restore_file"
+      rm -f "$backup_file"
+    done
+  }
+  trap _eks_platform_restore_prevent_destroy_backups EXIT INT TERM
+
+  for address in "${confirmed_addresses[@]}"; do
+    parsed="$(_eks_platform_parse_module_resource_address "$address")" || {
+      _access_scopes_error "eks-platform: unrecognized --confirm-remove-protected address (expected module.<name>.<type>.<resource>): ${address}"
+      return 1
+    }
+    module_name="$(printf '%s' "$parsed" | sed -n '1p')"
+    resource_ref="$(printf '%s' "$parsed" | sed -n '2p')"
+    resource_type="${resource_ref%%.*}"
+    resource_name="${resource_ref#*.}"
+
+    module_file="$(_eks_platform_protected_resource_module_file "$module_name")" || {
+      _access_scopes_error "eks-platform: no known protected-resource module file for --confirm-remove-protected address: ${address} (module: ${module_name})"
+      return 1
+    }
+    [[ -f "$module_file" ]] || {
+      _access_scopes_error "eks-platform: module file for --confirm-remove-protected does not exist: ${module_file}"
+      return 1
+    }
+    if ! grep -q "resource \"${resource_type}\" \"${resource_name}\"" "$module_file"; then
+      _access_scopes_error "eks-platform: resource ${resource_type}.${resource_name} not found in ${module_file} (from --confirm-remove-protected address: ${address})"
+      return 1
+    fi
+
+    if ! _orchestrator_in_list "$module_file" "${backup_files[@]:-}" 2>/dev/null; then
+      backup_files+=("$module_file")
+      cp "$module_file" "${module_file}.prevent_destroy_override_backup"
+    fi
+
+    # Patch from the file's CURRENT on-disk content, not the backup --
+    # when two confirmed resources share a module file (e.g. both KMS
+    # keys in modules/kms/main.tf), the second patch must build on the
+    # first's edit, or it would silently discard it by rewriting from the
+    # original content.
+    local patched
+    patched="$(awk -v type="$resource_type" -v name="$resource_name" '
+      BEGIN { in_block = 0; depth = 0 }
+      {
+        if (!in_block && $0 ~ ("resource \"" type "\" \"" name "\" \\{")) {
+          in_block = 1
+          depth = 1
+          print
+          next
+        }
+        if (in_block) {
+          for (i = 1; i <= length($0); i++) {
+            c = substr($0, i, 1)
+            if (c == "{") depth++
+            if (c == "}") depth--
+          }
+          if ($0 ~ /prevent_destroy[[:space:]]*=[[:space:]]*true/) {
+            gsub(/prevent_destroy[[:space:]]*=[[:space:]]*true/, "prevent_destroy = false")
+          }
+          print
+          if (depth == 0) in_block = 0
+          next
+        }
+        print
+      }
+    ' "$module_file")"
+    printf '%s\n' "$patched" > "$module_file"
+  done
+
+  _access_scopes_error "eks-platform: temporarily disabling prevent_destroy for ${#confirmed_addresses[@]} explicitly confirmed resource(s) in ${#backup_files[@]} file(s) -- restored on any exit path, including interruption"
+
+  local destroy_rc
   _run_terraform_destroy_or_report_prevent_destroy \
-    "eks-platform" "$EKS_PLATFORM_TF_DIR" "$var_file"
+    "eks-platform" "$tf_dir" "$var_file"
+  destroy_rc=$?
+
+  _eks_platform_restore_prevent_destroy_backups
+  trap - EXIT INT TERM
+  _access_scopes_error "eks-platform: prevent_destroy override restored on ${#backup_files[@]} file(s)"
+
+  return "$destroy_rc"
 }
 
 # ---------------------------------------------------------------------------
