@@ -1,0 +1,10 @@
+signoz_alert.app_telemetry_no_data
+signoz_alert.k8s_node_cpu_high
+signoz_alert.mongodb_no_data
+signoz_alert.otel_collector_export_failures
+signoz_alert.postgres_cpu_high
+signoz_dashboard.k8s_node_metrics
+signoz_dashboard.k8s_pod_metrics
+signoz_dashboard.mongodb_overview
+signoz_dashboard.otel_collector_pipeline_health
+signoz_dashboard.postgres_overview
