@@ -307,8 +307,8 @@ comments elsewhere.
 
 | Scope | Provision | Destroy | Verify | Pre-destroy guard |
 |---|---|---|---|---|
-| `backend` | Real | Blocked by design (break-glass only) | — | — |
-| `access-governance` | Real | Blocked by design (retained-control) | — | — |
+| `backend` | Real | Blocked by design (break-glass only — see below) | — | — |
+| `access-governance` | Real | Blocked by design (retained-control — see below) | — | — |
 | `eks-access` | Real | **Missing** (no handler file) | Real | — |
 | `eks-platform` | Real (identity/drift-vector logic) | Real | Real | Real |
 | `platform-controllers` | Real | Real | Real | Real |
@@ -322,6 +322,56 @@ comments elsewhere.
 | `boomi-runtime` | **Missing entirely** | Missing | Missing | Missing |
 | `database-access-core` | **Missing entirely** | Missing | Missing | Missing |
 | `database-access-brand` | **Missing entirely** | Missing | Missing | Missing |
+
+### 5.1 Why `backend` and `access-governance` are permanently blocked, and how to destroy them anyway
+
+`scripts/destroy.sh` refuses to destroy these two scopes unconditionally
+(`foundation_destroy_backend_blocked` / `foundation_destroy_access_governance_blocked`
+in `scripts/lib/scope-registry.sh`) — there is no flag, override, or scope
+string that reaches them through the normal orchestrator, by design:
+
+- **`backend`** is the single S3 bucket (`TF_STATE_BUCKET`, e.g.
+  `sml-oms-uat-tfstate-672172129937`) holding **every other scope's**
+  Terraform state in the account — mongodb, eks-platform, signoz,
+  access-governance, all of it. It is not "a resource" in the usual sense;
+  it is the ledger that makes any of this scriptable at all. Destroying it
+  while any other scope still has live state pointed at it would strand
+  real, running AWS resources with nothing left to track or destroy them.
+- **`access-governance`** is the account's AWS Access Analyzer — an
+  account-wide security/governance control, not application
+  infrastructure. It is meant to outlive any single environment's
+  app-layer teardown; ordinary destroy/reprovision testing cycles should
+  never need to touch it.
+
+If a genuine full-account decommission is ever needed, use
+`scripts/break-glass-destroy.sh` — a standalone script deliberately kept
+**outside** the orchestrator/scope-registry dispatch path entirely (it does
+not source `orchestrator.sh`, `scope-registry.sh`, or any package
+fragment, and is unreachable via `destroy.sh --env <env> <scope>` no
+matter what scope string is passed):
+
+```
+scripts/break-glass-destroy.sh --env uat --scope backend --i-understand-this-is-irreversible
+scripts/break-glass-destroy.sh --env uat --scope access-governance --i-understand-this-is-irreversible
+```
+
+It requires typing back an exact confirmation phrase (`destroy <scope> in
+<env> <account-id>`) — not just a flag or a bare "yes" — and appends an
+audit-log line to `.local/<env>/evidence/break-glass-destroy.log` for
+every invocation, confirmed or aborted, before any destroy is attempted.
+
+**Both scopes must be destroyed last, after every other scope in the
+environment has already been destroyed and re-verified empty.** The
+script does not enforce ordering between the two of itself, but it does
+refuse to destroy `backend` while any *other* scope's tfstate object
+still describes live resources (it checks each current tfstate object's
+resource count directly, ignoring `access-governance.tfstate`, since that
+scope is expected to still hold its own resource until destroyed via this
+same script). There is no equivalent technical safeguard for
+`access-governance` — it has no destroy-order dependency on the other
+scopes, only the operator's judgment that it should be the deliberate,
+audited final step, not a routine one.
+
 
 "Stub" = function exists, is called correctly by the orchestrator, but its
 body only prints an INFO/PASS line and returns success — it never calls
