@@ -267,7 +267,7 @@ class EnvironmentContractTests(RepositoryFixture):
         result = self.load("production")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("accepts only dev or uat", result.stderr)
+        self.assertIn("accepts only dev, uat, or prod", result.stderr)
         self.assertFalse(self.command_log.exists())
 
 
