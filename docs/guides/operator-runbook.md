@@ -136,37 +136,52 @@ narrower access-only script.
 
 ---
 
-## Unified UAT Provisioning (`--env uat`)
+## Unified UAT/Production Provisioning (`--env uat` / `--env prod`)
 
 `scripts/provision.sh`, `scripts/destroy.sh`, and
-`scripts/verify-platform-health.sh` all accept a leading `--env uat` (or
-`--env dev`) argument that routes to a newer, broader orchestrator covering
-the full scope graph: `backend`, `access-governance`, `eks-platform`,
-`eks-access`, `workload-identity`, `platform-controllers`, and (as later work
-packages land) the data-layer scopes. Omitting `--env` runs the older,
-narrower legacy dev-only flow described elsewhere in this runbook — the two
-paths are separate implementations, not aliases of each other.
+`scripts/verify-platform-health.sh` all accept a leading `--env uat`,
+`--env prod`, or `--env dev` argument that routes to a newer, broader
+orchestrator covering the full scope graph: `backend`, `access-governance`,
+`eks-platform`, `eks-access`, `workload-identity`, `platform-controllers`, and
+(as later work packages land) the data-layer scopes. Omitting `--env` runs the
+older, narrower legacy dev-only flow described elsewhere in this runbook — the
+two paths are separate implementations, not aliases of each other. Production
+support (`--env prod`) was added in #130/#131 and does not yet have its own
+Access Foundation Procedure written up above — the AWS SSO login and
+`AdministratorAccess-632674123947` profile steps mirror UAT's, substituting
+the Production account ID and profile name; see
+[Authorized UAT Workstation Setup](environment-setup.md#authorized-uat-workstation-setup)
+for the pattern to follow until a dedicated Production section exists.
 
 ### Prerequisites specific to this path
 
 - Complete [Authorized UAT Workstation Setup](environment-setup.md#authorized-uat-workstation-setup)
-  and the UAT Access Foundation Procedure above through at least
-  `eks-platform` — `workload-identity`/`platform-controllers` depend on it.
-- `unset AWS_PROFILE` before running any `--env uat` command. The
+  (substituting the Production account/profile when running `--env prod`) and
+  the UAT Access Foundation Procedure above through at least `eks-platform` —
+  `workload-identity`/`platform-controllers` depend on it.
+- `unset AWS_PROFILE` before running any `--env uat`/`--env prod` command. The
   orchestrator's `reject_execution_environment_overrides` guard blocks
   `AWS_PROFILE` as an environment variable and expects the `default` AWS CLI
-  profile to already resolve to the target account (see
+  identity (session credentials via `aws sso login` +
+  `aws configure export-credentials --format env`, or an equivalent) to
+  already resolve to the target account (see
   [Authorized UAT Workstation Setup](environment-setup.md#authorized-uat-workstation-setup)
   for how that profile is configured).
 - `helm` must be installed and on `PATH` — `platform-controllers` bootstraps
   Flux itself via `helm upgrade --install`, the same mechanism the legacy
   dev-only flow uses, so no separate Flux install step is required or
   supported for this path.
+- **Production-specific**: the Kubernetes API endpoint for `oms-prod-eks-cluster`
+  is private-only (`endpoint_public_access=false`) by design — see #134.
+  There is currently no office-network route into it; run `--env prod`
+  commands from a session already authenticated via AWS SSO (which resolves
+  over AWS APIs, not direct network routing to the cluster) until the
+  planned org-level Network/Transit account exists.
 
 ### Provisioning order
 
 Provision scopes one at a time, in this order, since each depends on the
-one before it:
+one before it (substitute `uat` for `prod` to target Production):
 
 ```bash
 unset AWS_PROFILE
@@ -190,7 +205,7 @@ only once a real workload needs a dedicated Pod Identity association.
 
 `platform-controllers` is gitops/Flux-managed, not Terraform-owned. Running it
 bootstraps Flux (if its CRDs aren't already registered on the cluster) and
-then applies `gitops/platform-controllers/overlays/uat`, which brings up
+then applies `gitops/platform-controllers/overlays/<uat|prod>`, which brings up
 cert-manager, Kyverno, cluster-autoscaler, metrics-server, and (unless
 suspended for the environment) the AWS Load Balancer Controller — including
 the ServiceAccounts each of them needs, already wired to the correct IAM
@@ -217,9 +232,9 @@ bash scripts/verify-platform-health.sh --env uat --full
 Reports a genuine `PASS`/`FAIL` per scope (not a placeholder). `backend`,
 `access-governance`, `eks-platform`, `workload-identity`, and
 `platform-controllers` should all report `PASS` once provisioned in order
-above. Scopes gated on a work package not yet implemented in this repo report
-their honest `requires work package N` message, distinguishable from a real
-failure.
+above (substitute `--env prod` to verify Production). Scopes gated on a work
+package not yet implemented in this repo report their honest
+`requires work package N` message, distinguishable from a real failure.
 
 ### Destroying
 
