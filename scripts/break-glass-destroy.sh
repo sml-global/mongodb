@@ -351,11 +351,81 @@ case "$scope" in
       exit 1
     fi
 
-    aws s3 rm "s3://${TF_STATE_BUCKET}" --recursive --region "$TF_STATE_REGION"
-    aws s3api delete-bucket \
+    # `aws s3 rm --recursive` only removes current-version objects; on a
+    # versioned bucket (this one has versioning enabled) that leaves every
+    # old version and a fresh delete marker behind, and `delete-bucket`
+    # unconditionally refuses a bucket that still has ANY object versions
+    # (BucketNotEmpty) -- confirmed live: after `s3 rm --recursive`, the
+    # bucket still reported 300+ object versions from its history. Uses
+    # plain `aws s3api` (stdlib-only Python for JSON handling, no boto3 --
+    # not assumed installed) with the CLI's own NextKeyMarker/
+    # NextVersionIdMarker pagination tokens, looping until a response
+    # comes back untruncated.
+    printf 'Purging all object versions and delete markers from %s...\n' "$TF_STATE_BUCKET"
+    purge_failed="false"
+    key_marker=""
+    version_id_marker=""
+    while :; do
+      marker_args=()
+      [[ -n "$key_marker" ]] && marker_args+=(--key-marker "$key_marker")
+      [[ -n "$version_id_marker" ]] && marker_args+=(--version-id-marker "$version_id_marker")
+
+      page_json="$(aws s3api list-object-versions \
+        --bucket "$TF_STATE_BUCKET" \
+        --region "$TF_STATE_REGION" \
+        --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID" \
+        "${marker_args[@]}" \
+        --output json 2>/dev/null)" || {
+        purge_failed="true"
+        break
+      }
+
+      delete_batch_json="$(printf '%s' "$page_json" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+objs = [{"Key": v["Key"], "VersionId": v["VersionId"]} for v in d.get("Versions", [])]
+objs += [{"Key": m["Key"], "VersionId": m["VersionId"]} for m in d.get("DeleteMarkers", [])]
+print(json.dumps({"Objects": objs, "Quiet": True}))
+')" || { purge_failed="true"; break; }
+
+      batch_count="$(printf '%s' "$delete_batch_json" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["Objects"]))')"
+      if [[ "$batch_count" -gt 0 ]]; then
+        if ! printf '%s' "$delete_batch_json" > /tmp/.break-glass-delete-batch.$$ 2>/dev/null; then
+          purge_failed="true"
+          break
+        fi
+        if ! aws s3api delete-objects \
+          --bucket "$TF_STATE_BUCKET" \
+          --region "$TF_STATE_REGION" \
+          --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID" \
+          --delete "file:///tmp/.break-glass-delete-batch.$$" >/dev/null 2>&1; then
+          rm -f "/tmp/.break-glass-delete-batch.$$"
+          purge_failed="true"
+          break
+        fi
+        rm -f "/tmp/.break-glass-delete-batch.$$"
+      fi
+
+      is_truncated="$(printf '%s' "$page_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("true" if d.get("IsTruncated") else "false")')"
+      [[ "$is_truncated" == "true" ]] || break
+      key_marker="$(printf '%s' "$page_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("NextKeyMarker") or "")')"
+      version_id_marker="$(printf '%s' "$page_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("NextVersionIdMarker") or "")')"
+    done
+
+    if [[ "$purge_failed" == "true" ]]; then
+      _break_glass_error "failed to purge all object versions from ${TF_STATE_BUCKET}; bucket NOT deleted, some old versions may remain. Re-run to retry."
+      _break_glass_log "$log_path" "failed" "$scope" "$environment" "${EXPECTED_AWS_ACCOUNT_ID}" "version purge did not complete"
+      exit 1
+    fi
+
+    if ! aws s3api delete-bucket \
       --bucket "$TF_STATE_BUCKET" \
       --region "$TF_STATE_REGION" \
-      --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID"
+      --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID"; then
+      _break_glass_error "delete-bucket failed for ${TF_STATE_BUCKET} after purging versions; check for remaining objects or a bucket policy blocking deletion"
+      _break_glass_log "$log_path" "failed" "$scope" "$environment" "${EXPECTED_AWS_ACCOUNT_ID}" "delete-bucket API call failed after version purge"
+      exit 1
+    fi
     _break_glass_log "$log_path" "destroyed" "$scope" "$environment" "${EXPECTED_AWS_ACCOUNT_ID}" "bucket ${TF_STATE_BUCKET} deleted"
     printf 'Bucket %s deleted.\n' "$TF_STATE_BUCKET"
     ;;
