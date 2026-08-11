@@ -182,6 +182,75 @@ fi
 
 expected_phrase="destroy ${scope} in ${environment} ${EXPECTED_AWS_ACCOUNT_ID}"
 
+# ---------------------------------------------------------------------------
+# _break_glass_enumerate_components
+# ---------------------------------------------------------------------------
+#
+# Lists exactly what will be destroyed for the named scope, read-only,
+# before the confirmation prompt is ever shown -- mirrors the DESTROY
+# PREVIEW pattern scripts/destroy.sh shows for every other scope
+# (scripts/lib/enumerate-destroy-resources.sh), which this script
+# deliberately does not share code with, but should give the operator the
+# same "see it before you confirm it" guarantee.
+_break_glass_enumerate_backend_components() {
+  printf 'Live objects currently in s3://%s (region %s):\n' "$TF_STATE_BUCKET" "$TF_STATE_REGION"
+  local listing
+  listing="$(aws s3api list-objects-v2 \
+    --bucket "$TF_STATE_BUCKET" \
+    --region "$TF_STATE_REGION" \
+    --expected-bucket-owner "$EXPECTED_AWS_ACCOUNT_ID" \
+    --query 'Contents[].[Key,Size]' \
+    --output text 2>/dev/null)" || listing=""
+  if [[ -z "$listing" ]]; then
+    printf '  (unable to list bucket contents, or bucket is already empty)\n'
+  else
+    printf '%s\n' "$listing" | while IFS=$'\t' read -r key size; do
+      printf '  - %s (%s bytes)\n' "$key" "$size"
+    done
+  fi
+  printf '\nThis bucket is the ONLY copy of Terraform state for every scope in this\naccount. Once deleted:\n'
+  printf '  - Terraform loses all record of every AWS resource it ever created here\n'
+  printf '    (EKS clusters, VPCs, IAM roles, KMS keys, RDS/Aurora instances, EFS,\n'
+  printf '    backup vaults, MongoDB/Postgres prerequisites, SigNoz dashboards --\n'
+  printf '    anything any scope in this repo ever provisioned).\n'
+  printf '  - Any resource NOT already destroyed becomes an orphan: still running,\n'
+  printf '    still billing, with no Terraform configuration able to plan, modify,\n'
+  printf '    or destroy it again. Recovering from that means manually finding and\n'
+  printf '    deleting every such resource by hand across the AWS console/CLI, or\n'
+  printf '    re-importing each one into a fresh empty state file one at a time.\n'
+  printf '  - There is no undo. S3 versioning on this bucket does not help --\n'
+  printf '    deleting the bucket itself removes all versions and delete markers\n'
+  printf '    with it; there is nothing left to roll back to.\n'
+}
+
+_break_glass_enumerate_access_governance_components() {
+  local tf_dir="${ROOT_DIR}/platform-prerequisites/terraform/access-governance"
+  printf 'Live resources currently tracked in the access-governance Terraform root:\n'
+  if [[ -d "${tf_dir}/.terraform" ]] || [[ -f "${tf_dir}/.terraform.lock.hcl" ]]; then
+    local state_list
+    state_list="$(terraform -chdir="$tf_dir" state list 2>/dev/null)" || state_list=""
+    if [[ -n "$state_list" ]]; then
+      printf '%s\n' "$state_list" | sed 's/^/  - /'
+    else
+      printf '  (terraform state list returned nothing, or backend is not yet initialized here -- re-run after backend init to see the live list)\n'
+    fi
+  else
+    printf '  (Terraform not yet initialized in this script'"'"'s process -- the AWS Access Analyzer resource, e.g. aws_accessanalyzer_analyzer.uat_account, is what this destroys)\n'
+  fi
+  printf '\nThis is the account'"'"'s AWS Access Analyzer -- a continuous, account-wide\nsecurity control that flags IAM policies, S3 bucket policies, KMS key\npolicies, and other resource policies granting unintended access to\nprincipals outside this account. Once deleted:\n'
+  printf '  - The account loses ALL ongoing external-access findings immediately --\n'
+  printf '    not just new ones going forward, but the entire finding history tied\n'
+  printf '    to this analyzer.\n'
+  printf '  - Any existing IAM/S3/KMS misconfiguration that was previously flagged\n'
+  printf '    (or a new one introduced after this deletion) will go completely\n'
+  printf '    undetected until a new analyzer is created and has run its own\n'
+  printf '    baseline scan -- there is a real detection gap, not just a\n'
+  printf '    configuration change.\n'
+  printf '  - If any compliance/audit process depends on this analyzer existing\n'
+  printf '    (SOC2, internal security review, etc.), removing it may itself be a\n'
+  printf '    reportable control gap independent of anything it would have caught.\n'
+}
+
 cat <<EOF
 
 ═══════════════════════════════════════════════════════════════════════════
@@ -194,6 +263,12 @@ $(if [[ "$scope" == "backend" ]]; then
   printf '  it is the S3 bucket (%s) holding every OTHER scope'"'"'s Terraform\n  state in this account. Destroying it while any other scope still has\n  live state pointed at it will strand real AWS resources with nothing\n  left to track or destroy them.\n' "$TF_STATE_BUCKET"
 else
   printf '  it is the account'"'"'s AWS Access Analyzer -- a security/governance\n  control, not application infrastructure, meant to outlive any single\n  environment'"'"'s app-layer teardown.\n'
+fi)
+
+$(if [[ "$scope" == "backend" ]]; then
+  _break_glass_enumerate_backend_components
+else
+  _break_glass_enumerate_access_governance_components
 fi)
 
 Before continuing, confirm every other scope in this environment has
