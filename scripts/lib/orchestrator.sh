@@ -823,12 +823,25 @@ _orchestrator_run_destroy() {
   local confirmation_artifact_path=""
   local -a cli_confirmations=()
   local -a confirm_remove_protected=()
+  local confirm_disable_deletion_protection=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --auto-approve)
         auto_approve="true"
         shift
+        ;;
+      --confirm-disable-deletion-protection)
+        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+          _orchestrator_error "--confirm-disable-deletion-protection requires a value"
+          return 1
+        fi
+        if [[ -n "$confirm_disable_deletion_protection" ]]; then
+          _orchestrator_error "--confirm-disable-deletion-protection may be given at most once"
+          return 1
+        fi
+        confirm_disable_deletion_protection="$2"
+        shift 2
         ;;
       --confirm-remove-protected)
         if [[ $# -lt 2 || -z "${2:-}" ]]; then
@@ -891,6 +904,16 @@ _orchestrator_run_destroy() {
     fi
     seen_remove_protected+=("$candidate_remove_protected")
   done
+
+  # --confirm-disable-deletion-protection must name the exact cluster it
+  # will affect (the same "spell out what you're unprotecting" pattern as
+  # --confirm-remove-protected), validated against the immutable
+  # environment contract's EKS_CLUSTER_NAME -- never inferred, never a
+  # bare boolean flag.
+  if [[ -n "$confirm_disable_deletion_protection" && "$confirm_disable_deletion_protection" != "$EKS_CLUSTER_NAME" ]]; then
+    _orchestrator_error "--confirm-disable-deletion-protection value (${confirm_disable_deletion_protection}) does not match this environment's cluster name (${EKS_CLUSTER_NAME})"
+    return 1
+  fi
 
   require_environment_mutation_authorized "$environment_name" || return 1
 
@@ -980,6 +1003,12 @@ _orchestrator_run_destroy() {
     remove_protected_newline+="${remove_protected_item}"$'\n'
   done
   export UNIFIED_CONFIRM_REMOVE_PROTECTED="$remove_protected_newline"
+
+  # UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION carries the already-
+  # validated (matches EKS_CLUSTER_NAME) --confirm-disable-deletion-
+  # protection value through to destroy_eks_platform_scope. Empty means
+  # "not confirmed" -- the flag was never given.
+  export UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION="$confirm_disable_deletion_protection"
 
   _orchestrator_destroy_second_pass \
     "$environment_name" "$scope" "$expected_account_id" "$auto_approve" \
