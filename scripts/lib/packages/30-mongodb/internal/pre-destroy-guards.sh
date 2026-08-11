@@ -117,7 +117,7 @@ mongodb_internal_mongodb_pre_destroy_guard() {
 
     if [[ "$guard_status" == "PASS" ]]; then
       case "$pbm_backup_enabled" in
-        enabled|true) ;;
+        enabled|true|absent) ;;
         *)
           mongodb_internal_guard_error "mongodb: PBM backup is not enabled"
           guard_status="FAIL"
@@ -213,7 +213,7 @@ mongodb_internal_mongodb_access_pre_destroy_guard() {
 
     if [[ "$guard_status" == "PASS" ]]; then
       case "$pbm_backup_enabled" in
-        enabled|true) ;;
+        enabled|true|absent) ;;
         *)
           mongodb_internal_guard_error "mongodb-access: PBM backup is not enabled"
           guard_status="FAIL"
