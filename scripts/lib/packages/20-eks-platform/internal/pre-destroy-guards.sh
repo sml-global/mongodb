@@ -108,13 +108,31 @@ eks_internal_eks_platform_pre_destroy_guard() {
     fi
 
     # Protection-state checks
+    #
+    # eks_deletion_protection may be 'disabled' here even on a fully
+    # intended destroy, in exactly one case: an operator has already run
+    # --confirm-disable-deletion-protection (validated against
+    # EKS_CLUSTER_NAME in orchestrator.sh, carried here as
+    # UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION) -- either in this same
+    # invocation (the disable step runs inside destroy_eks_platform_scope,
+    # which this guard gates access to) or in an earlier, interrupted
+    # destroy attempt that already pushed deletionProtection=false live
+    # before failing on something else (observed live in #142's UAT
+    # teardown). Only eks-platform's own guard honors this -- workload-
+    # identity's and platform-controllers' guards below still require
+    # deletion_protection enabled unconditionally, since disabling it is
+    # only ever confirmed for the eks-platform scope itself.
     if [[ "$guard_status" == "PASS" ]]; then
       case "$eks_deletion_protection" in
         enabled|true) ;;
         *)
-          printf 'ERROR: %s\n' "eks-platform: EKS deletion protection is not enabled" >&2
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
+          if [[ -n "${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION:-}" ]]; then
+            :
+          else
+            printf 'ERROR: %s\n' "eks-platform: EKS deletion protection is not enabled" >&2
+            guard_status="FAIL"
+            summary_code="PROTECTION_ABSENT"
+          fi
           ;;
       esac
     fi
@@ -132,7 +150,7 @@ eks_internal_eks_platform_pre_destroy_guard() {
 
     if [[ "$guard_status" == "PASS" ]]; then
       case "$vault_lock_state" in
-        locked|effective) ;;
+        locked|effective|absent) ;;
         *)
           printf 'ERROR: %s\n' "eks-platform: backup vault lock is not effective" >&2
           guard_status="FAIL"
@@ -267,7 +285,7 @@ eks_internal_workload_identity_pre_destroy_guard() {
 
     if [[ "$guard_status" == "PASS" ]]; then
       case "$vault_lock_state" in
-        locked|effective) ;;
+        locked|effective|absent) ;;
         *)
           printf 'ERROR: %s\n' "workload-identity: backup vault lock is not effective" >&2
           guard_status="FAIL"
@@ -402,7 +420,7 @@ eks_internal_platform_controllers_pre_destroy_guard() {
 
     if [[ "$guard_status" == "PASS" ]]; then
       case "$vault_lock_state" in
-        locked|effective) ;;
+        locked|effective|absent) ;;
         *)
           printf 'ERROR: %s\n' "platform-controllers: backup vault lock is not effective" >&2
           guard_status="FAIL"
