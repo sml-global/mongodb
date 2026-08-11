@@ -303,6 +303,22 @@ _eks_platform_disable_live_deletion_protection() {
   local var_file="$1"
   local backup_file="${var_file}.deletion_protection_override_backup"
 
+  # AWS rejects UpdateClusterConfig as a no-op ("InvalidParameterException:
+  # No changes needed") if deletionProtection is already false live --
+  # which happens if a prior destroy attempt already disabled it before
+  # failing on something else downstream (observed live in #142's UAT
+  # teardown). Checking first avoids treating that as a fresh failure.
+  local live_deletion_protection
+  live_deletion_protection="$(aws eks describe-cluster \
+    --name "$EKS_CLUSTER_NAME" \
+    --region "$AWS_REGION" \
+    --query 'cluster.deletionProtection' \
+    --output text 2>/dev/null)"
+  if [[ "$live_deletion_protection" == "False" ]]; then
+    _access_scopes_error "eks-platform: deletion protection is already disabled on the live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); skipping the apply"
+    return 0
+  fi
+
   cp "$var_file" "$backup_file"
 
   _eks_platform_restore_deletion_protection_tfvars() {
