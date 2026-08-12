@@ -159,14 +159,10 @@ for the pattern to follow until a dedicated Production section exists.
   (substituting the Production account/profile when running `--env prod`) and
   the UAT Access Foundation Procedure above through at least `eks-platform` —
   `workload-identity`/`platform-controllers` depend on it.
-- `unset AWS_PROFILE` before running any `--env uat`/`--env prod` command. The
-  orchestrator's `reject_execution_environment_overrides` guard blocks
-  `AWS_PROFILE` as an environment variable and expects the `default` AWS CLI
-  identity (session credentials via `aws sso login` +
-  `aws configure export-credentials --format env`, or an equivalent) to
-  already resolve to the target account (see
-  [Authorized UAT Workstation Setup](environment-setup.md#authorized-uat-workstation-setup)
-  for how that profile is configured).
+- A correctly-established shell session — AWS identity **and** `kubectl`
+  context both pointed at the target environment. See
+  [Session setup](#session-setup-do-this-first-every-session) below; it
+  applies to every command in this path, not just destroys.
 - `helm` must be installed and on `PATH` — `platform-controllers` bootstraps
   Flux itself via `helm upgrade --install`, the same mechanism the legacy
   dev-only flow uses, so no separate Flux install step is required or
@@ -178,13 +174,61 @@ for the pattern to follow until a dedicated Production section exists.
   over AWS APIs, not direct network routing to the cluster) until the
   planned org-level Network/Transit account exists.
 
+### Session setup (do this first, every session)
+
+Every `--env uat`/`--env prod` command — provision, verify, **and** destroy —
+runs behind foundation guards that fail closed unless both your AWS identity
+and your `kubectl` context already resolve to the target environment. Neither
+is inferred or auto-corrected: the orchestrator refuses rather than risk
+acting against the wrong account or cluster. Establish both once per shell
+session, and re-run after an SSO session expires.
+
+Substitute the target environment throughout: UAT is account `672172129937`
+with cluster `oms-uat-eks-cluster`; Production is account `632674123947` with
+cluster `oms-prod-eks-cluster`.
+
+```bash
+# 1. Authenticate (opens a browser; re-run when the SSO session expires)
+aws sso login --profile AdministratorAccess-632674123947
+
+# 2. Export those credentials into the shell as the *default* identity, and
+#    clear AWS_PROFILE — the orchestrator's
+#    reject_execution_environment_overrides guard blocks AWS_PROFILE as an
+#    environment variable and reads the default AWS CLI identity instead.
+eval "$(aws configure export-credentials --profile AdministratorAccess-632674123947 --format env)"
+unset AWS_PROFILE
+
+# 3. Verify the identity actually resolves to the target account before
+#    running anything destructive.
+aws sts get-caller-identity      # expect "Account": "632674123947"
+
+# 4. Point kubectl at that environment's cluster. The context guard compares
+#    the current context's resolved cluster ARN against the environment
+#    contract's expected ARN and fails closed on mismatch.
+aws eks update-kubeconfig --name oms-prod-eks-cluster --region ap-east-1 --alias oms-prod-eks-cluster
+kubectl config use-context oms-prod-eks-cluster
+
+# 5. Verify the context.
+kubectl config current-context   # expect oms-prod-eks-cluster
+```
+
+Skipping step 2 surfaces as `unable to read the active AWS account with sts
+get-caller-identity`, or a `reject_execution_environment_overrides` rejection
+if `AWS_PROFILE` is still set. Skipping step 4 surfaces as:
+
+```
+ERROR: current Kubernetes context '...oms-uat-eks-cluster' does not target prod; expected 'arn:aws:eks:ap-east-1:632674123947:cluster/oms-prod-eks-cluster'
+```
+
+Both are the guards working as designed, not script defects.
+
 ### Provisioning order
 
-Provision scopes one at a time, in this order, since each depends on the
+Complete [Session setup](#session-setup-do-this-first-every-session) first,
+then provision scopes one at a time, in this order, since each depends on the
 one before it (substitute `uat` for `prod` to target Production):
 
 ```bash
-unset AWS_PROFILE
 bash scripts/provision.sh --env uat backend --auto-approve
 bash scripts/provision.sh --env uat access-governance --auto-approve
 bash scripts/provision.sh --env uat eks-platform --auto-approve
@@ -225,6 +269,9 @@ problem, not an expected transient state.
 
 ### Verifying
 
+Complete [Session setup](#session-setup-do-this-first-every-session) first —
+the health checks read the live cluster through the same guarded context.
+
 ```bash
 bash scripts/verify-platform-health.sh --env uat --full
 ```
@@ -238,20 +285,130 @@ package not yet implemented in this repo report their honest
 
 ### Destroying
 
-Ordinary destroy for scopes in this path is a two-step confirmation:
+Complete [Session setup](#session-setup-do-this-first-every-session) first —
+destroys run the same identity and `kubectl`-context guards as every other
+command in this path, plus additional pre-destroy guards.
+
+Ordinary destroy for scopes in this path is a two-step confirmation. The
+first pass always exits nonzero and prints the exact re-run command to use —
+including one `--confirm <step>` flag per required confirmation (some scopes,
+e.g. `eks-platform`, require one; others may require none or more than one).
+Copy that printed command verbatim rather than reconstructing it by hand —
+omitting `--confirm` causes the second pass to fail with `confirmation set is
+incomplete for this destroy request`:
 
 ```bash
 bash scripts/destroy.sh --env uat platform-controllers --auto-approve
-# prints a confirmation artifact path; re-run supplying it:
+# First pass prints a preview, a confirmation artifact path, and the exact
+# re-run command under "Re-run with:", e.g.:
+#   --confirmation-artifact .local/uat/generated/destroy-confirmation.<id>.json \
+#   --confirm destroy:uat:<account>:<scope>:<resource>:<action> \
+# Re-run using that printed command exactly:
 bash scripts/destroy.sh --env uat platform-controllers --auto-approve \
-  --confirmation-artifact .local/uat/generated/destroy-confirmation.<id>.json
+  --confirmation-artifact .local/uat/generated/destroy-confirmation.<id>.json \
+  --confirm destroy:uat:<account>:<scope>:<resource>:<action>
 ```
 
 Destroy for `workload-identity`/`platform-controllers` runs a real pre-destroy
 guard (verifying live cluster deletion-protection, EFS protection, and AWS
 Backup vault-lock state before proceeding) and writes evidence under
-`.local/uat/evidence/`. The same two-step pattern applies to `eks-platform`
-and every other ordinary-destroy scope in this path.
+`.local/uat/evidence/`. The same two-step pattern — including the required
+`--confirm` flag(s) from the first pass's printed output — applies to
+`eks-platform` and every other ordinary-destroy scope in this path.
+
+#### `eks-platform`'s KMS keys and EFS filesystem are `prevent_destroy`-protected
+
+`eks-platform`'s Terraform modules mark the cluster/backup KMS keys
+(`module.kms.aws_kms_key.cluster`, `module.kms.aws_kms_key.backup`) and the
+EFS filesystem (`module.efs[0].aws_efs_file_system.this`) with Terraform's
+`lifecycle.prevent_destroy = true`. This is a deliberate safety rail against
+irreversible data loss (KMS key deletion has a mandatory waiting period and
+destroys anything still encrypted under that key; EFS deletion destroys
+its data outright) — **not a script defect**, and running an ordinary
+`scripts/destroy.sh --env <uat|prod> eks-platform` (even with a valid
+`--confirmation-artifact`/`--confirm`) will refuse with:
+
+```
+ERROR: eks-platform: destroy refused by Terraform's lifecycle.prevent_destroy guard on N resource(s); no state was changed:
+  - module.kms.aws_kms_key.backup
+  - module.kms.aws_kms_key.cluster
+```
+
+**Note**: unlike `--confirm`, the required `--confirm-remove-protected`
+flags are never printed by the first-pass preview or the "Re-run with:"
+output — the orchestrator only learns a resource is `prevent_destroy`-
+protected by actually attempting the Terraform destroy and parsing this
+error back out of Terraform's output. Expect this ERROR on your first
+real attempt at a full `eks-platform` teardown; it is the signal to add
+the three `--confirm-remove-protected` flags below and re-run (with a
+fresh `--confirmation-artifact` if the original one has since expired).
+
+To actually destroy `eks-platform` in full (e.g. for a genuine teardown-and-
+reverify exercise), pass one `--confirm-remove-protected <module.address>`
+per protected resource named in that error, in addition to the ordinary
+`--confirmation-artifact`/`--confirm` flags:
+
+```bash
+bash scripts/destroy.sh --env prod eks-platform --auto-approve \
+  --confirmation-artifact .local/prod/generated/destroy-confirmation.<id>.json \
+  --confirm destroy:prod:<account>:eks-platform:oms-prod-eks-cluster:delete-cluster \
+  --confirm-remove-protected module.kms.aws_kms_key.cluster \
+  --confirm-remove-protected module.kms.aws_kms_key.backup \
+  --confirm-remove-protected 'module.efs[0].aws_efs_file_system.this'
+```
+
+This temporarily patches `prevent_destroy` to `false` in the module source
+file for only the named resource(s), runs the destroy, and restores the
+original `prevent_destroy = true` afterward on every exit path (success,
+failure, or interruption) — it is not a permanent change to the module.
+Treat `--confirm-remove-protected` with the same weight as any other
+irreversible-action override in this repo: only pass it when you have
+independently decided, resource by resource, that destroying that specific
+KMS key or filesystem now is intended, not merely because the error message
+asked for it.
+
+#### `eks-platform`'s EKS cluster also has live `deletionProtection` — a separate guard
+
+Even after every `--confirm-remove-protected` override above clears
+Terraform's `prevent_destroy` guards, a full `eks-platform` destroy can still
+fail at the very end, after most resources are already gone, with:
+
+```
+Error: deleting EKS Cluster (oms-prod-eks-cluster): operation error EKS: DeleteCluster, ...
+InvalidRequestException: Cluster oms-prod-eks-cluster cannot be deleted while DeletionProtection is enabled.
+```
+
+This is a **separate, independent guard** from `prevent_destroy` — it's a
+live AWS API attribute on the EKS cluster itself
+(`aws_eks_cluster.deletion_protection`), not a Terraform lifecycle block, so
+clearing `prevent_destroy` on the KMS keys/EFS does nothing for it. Like
+`--confirm-remove-protected`, this error is only discoverable by actually
+attempting the destroy — it is not surfaced by the first-pass preview.
+
+To clear it, add `--confirm-disable-deletion-protection <cluster-name>` —
+the value must exactly match this environment's real cluster name (e.g.
+`oms-prod-eks-cluster` for Production; the script rejects any other value)
+— alongside the `--confirm-remove-protected` flags:
+
+```bash
+bash scripts/destroy.sh --env prod eks-platform --auto-approve \
+  --confirmation-artifact .local/prod/generated/destroy-confirmation.<id>.json \
+  --confirm destroy:prod:<account>:eks-platform:oms-prod-eks-cluster:delete-cluster \
+  --confirm-disable-deletion-protection oms-prod-eks-cluster \
+  --confirm-remove-protected module.kms.aws_kms_key.cluster \
+  --confirm-remove-protected module.kms.aws_kms_key.backup \
+  --confirm-remove-protected 'module.efs[0].aws_efs_file_system.this'
+```
+
+This flips `deletion_protection` to `false` live on the cluster via a
+targeted `terraform apply -target=module.eks.aws_eks_cluster.this` before
+the destroy proceeds — it does not touch the committed tfvars file (backed
+up and restored on every exit path). **A prior destroy attempt that failed
+only on this last step (cluster deletion) has already destroyed everything
+else** — VPC, node group, IAM roles, KMS keys, EFS, AWS Backup vault, all
+addons — so a re-run with this flag added will show a much smaller plan
+(often just the cluster and a couple of leftover dependents), not a repeat
+of the full 71-resource destroy.
 
 ---
 
@@ -774,7 +931,9 @@ Do not apply infrastructure until these gates are satisfied.
 
 | Symptom | Fix |
 |---|---|
-| `kubectl` points to wrong cluster | `aws eks update-kubeconfig --name EKS-boomi-runtime-cluster --region ap-east-1` |
+| `kubectl` points to wrong cluster (legacy dev) | `aws eks update-kubeconfig --name EKS-boomi-runtime-cluster --region ap-east-1` |
+| `kubectl` points to wrong cluster (`--env uat`/`--env prod` orchestrator, e.g. `current Kubernetes context '...' does not target prod/uat`) | Re-run [Session setup](#session-setup-do-this-first-every-session) — both the AWS identity and the `kubectl` context must resolve to the same target environment |
+| `unable to read the active AWS account with sts get-caller-identity` (`--env uat`/`--env prod`) | SSO session expired, or credentials were never exported into the shell — re-run [Session setup](#session-setup-do-this-first-every-session) steps 1–3 |
 | `You must be logged in to the server` | `aws sso login --profile default` then retry |
 | `Forbidden` after auth succeeds | Fix EKS Access Entry or RBAC for your role |
 | Namespace `mongodb` not found | Run Terraform prerequisites first |
