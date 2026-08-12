@@ -139,12 +139,30 @@ class InternalLifecycleStaticContractTests(unittest.TestCase):
                     f"{name} must start with postgresql_internal_",
                 )
 
+    @staticmethod
+    def _strip_comments(text):
+        """Drop comment lines and blank lines, keeping executable shell only."""
+        return "\n".join(
+            line for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+
     def test_handler_fragment_has_no_mongodb_references(self):
-        handler_content = (REPO_ROOT / HANDLER_FRAGMENT).read_text(encoding="utf-8")
-        internal_content = self._content()
-        # Case-insensitive search for mongodb references
-        self.assertNotIn("mongodb", handler_content.lower())
-        self.assertNotIn("mongodb", internal_content.lower())
+        """No mongodb symbols may leak into postgresql's handlers -- the
+        original hazard was copy-pasted code calling mongodb functions.
+
+        Comments are excluded deliberately (#162): #111 added prose
+        explaining that these handlers use "the same shared helper
+        mongodb's and signoz's destroy handlers use", which is accurate,
+        useful, and not a code dependency. Asserting over comments made
+        this fail on documentation alone.
+        """
+        handler_code = self._strip_comments(
+            (REPO_ROOT / HANDLER_FRAGMENT).read_text(encoding="utf-8")
+        )
+        internal_code = self._strip_comments(self._content())
+        self.assertNotIn("mongodb", handler_code.lower())
+        self.assertNotIn("mongodb", internal_code.lower())
 
     def test_handler_wrappers_bash_syntax_valid(self):
         result = subprocess.run(
@@ -154,58 +172,76 @@ class InternalLifecycleStaticContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 
-class DestroyEnvironmentGuardTests(unittest.TestCase):
-    """Issue #95: postgresql_internal_destroy_postgresql_{core,brand} shell
-    out to the DEV-hardcoded scripts/legacy/dev/destroy.sh and are not yet
-    environment-aware. Until rewritten, they must refuse to run whenever
-    EXPECTED_AWS_ACCOUNT_ID resolves to UAT or Production, rather than
-    silently destroying DEV resources while believing they target them.
+class DestroyEnvironmentAwarenessTests(unittest.TestCase):
+    """Issue #111: postgresql_internal_destroy_postgresql_{core,brand} are
+    environment-aware.
+
+    They previously shelled out to the DEV-hardcoded
+    scripts/legacy/dev/destroy.sh and refused to run for UAT/Production
+    ("not yet environment-aware", issue #95). Commit 99a240c replaced that
+    with a real teardown calling terraform_destroy_scope directly -- the
+    same shared helper mongodb's and signoz's destroy handlers use -- so
+    the refusal no longer exists and these tests assert the current
+    contract instead (#162).
+
+    The safety property that matters is now structural: the handlers
+    require ENVIRONMENT and the per-scope state key to be set, so they
+    cannot silently act on the wrong environment's state.
     """
 
-    def _run(self, function_name, account_id):
+    def _run(self, function_name, account_id, extra_env=None):
         contracts_path = REPO_ROOT / "scripts" / "lib" / "environment-contracts.sh"
         script = (
             f'source "{contracts_path}"; '
             f'source "{REPO_ROOT / INTERNAL_LIFECYCLE}"; '
             f'EXPECTED_AWS_ACCOUNT_ID={account_id} {function_name}'
         )
+        env = {"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-guard-test-root", "PATH": "/usr/bin:/bin"}
+        if extra_env:
+            env.update(extra_env)
         return subprocess.run(
             ["bash", "-c", script],
-            env={"_ORCHESTRATOR_ROOT_DIR": "/nonexistent-guard-test-root", "PATH": "/usr/bin:/bin"},
+            env=env,
             capture_output=True,
             text=True,
         )
 
-    def test_core_refuses_to_run_for_uat_account(self):
-        result = self._run("postgresql_internal_destroy_postgresql_core", "672172129937")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-        self.assertIn("issue #95", result.stderr)
+    def test_legacy_refusal_is_gone(self):
+        """The #95 refusal must not reappear: these scopes are environment-
+        aware now, and a hardcoded refusal would re-break UAT/Prod destroy."""
+        for function_name in (
+            "postgresql_internal_destroy_postgresql_core",
+            "postgresql_internal_destroy_postgresql_brand",
+        ):
+            for account_id in ("672172129937", "632674123947", "815402439714"):
+                with self.subTest(function=function_name, account=account_id):
+                    result = self._run(function_name, account_id)
+                    self.assertNotIn("not yet environment-aware", result.stderr)
 
-    def test_brand_refuses_to_run_for_uat_account(self):
-        result = self._run("postgresql_internal_destroy_postgresql_brand", "672172129937")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
+    def test_destroy_requires_environment_to_be_set(self):
+        """Fails closed rather than defaulting to an environment: without
+        ENVIRONMENT there is no safe scope to destroy."""
+        for function_name in (
+            "postgresql_internal_destroy_postgresql_core",
+            "postgresql_internal_destroy_postgresql_brand",
+        ):
+            with self.subTest(function=function_name):
+                result = self._run(function_name, "672172129937")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ENVIRONMENT", result.stderr)
 
-    def test_core_refuses_to_run_for_prod_account(self):
-        result = self._run("postgresql_internal_destroy_postgresql_core", "632674123947")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-
-    def test_brand_refuses_to_run_for_prod_account(self):
-        result = self._run("postgresql_internal_destroy_postgresql_brand", "632674123947")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not yet environment-aware", result.stderr)
-
-    def test_core_does_not_block_dev_account(self):
-        result = self._run("postgresql_internal_destroy_postgresql_core", "815402439714")
-        self.assertNotIn("not yet environment-aware", result.stderr)
-        self.assertIn("No such file or directory", result.stderr)
-
-    def test_brand_does_not_block_dev_account(self):
-        result = self._run("postgresql_internal_destroy_postgresql_brand", "815402439714")
-        self.assertNotIn("not yet environment-aware", result.stderr)
-        self.assertIn("No such file or directory", result.stderr)
+    def test_destroy_requires_its_own_state_key(self):
+        """Each scope must demand its own state key, so core can never be
+        destroyed using brand's state (or vice versa)."""
+        cases = (
+            ("postgresql_internal_destroy_postgresql_core", "POSTGRESQL_CORE_STATE_KEY"),
+            ("postgresql_internal_destroy_postgresql_brand", "POSTGRESQL_BRAND_STATE_KEY"),
+        )
+        for function_name, expected_key in cases:
+            with self.subTest(function=function_name):
+                result = self._run(function_name, "672172129937", {"ENVIRONMENT": "uat"})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_key, result.stderr)
 
 
 if __name__ == "__main__":
