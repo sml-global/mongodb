@@ -308,16 +308,47 @@ _eks_platform_disable_live_deletion_protection() {
   # which happens if a prior destroy attempt already disabled it before
   # failing on something else downstream (observed live in #142's UAT
   # teardown). Checking first avoids treating that as a fresh failure.
-  local live_deletion_protection
+  #
+  # The lookup's exit status is captured separately from its output: a
+  # FAILED lookup (expired credentials, missing permission, wrong region,
+  # cluster already gone) must never be silently treated as "protection is
+  # still enabled" and fall through to the apply. Doing so is what produced
+  # #158/#159 -- expired SSO credentials returned empty, empty != "False",
+  # the apply ran anyway, and AWS rejected it as a no-op, deadlocking the
+  # teardown. Fail closed with the real reason instead.
+  local live_deletion_protection lookup_rc
   live_deletion_protection="$(aws eks describe-cluster \
     --name "$EKS_CLUSTER_NAME" \
     --region "$AWS_REGION" \
     --query 'cluster.deletionProtection' \
-    --output text 2>/dev/null)"
-  if [[ "$live_deletion_protection" == "False" ]]; then
-    _access_scopes_error "eks-platform: deletion protection is already disabled on the live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); skipping the apply"
-    return 0
+    --output text 2>&1)"
+  lookup_rc=$?
+
+  if [[ "$lookup_rc" -ne 0 ]]; then
+    # The cluster being already absent is a success for this step: there is
+    # no live deletion protection left to disable, so the precondition this
+    # function exists to establish is already satisfied.
+    if printf '%s' "$live_deletion_protection" | grep -q 'ResourceNotFoundException'; then
+      _access_scopes_error "eks-platform: cluster ${EKS_CLUSTER_NAME} no longer exists; no live deletion protection to disable"
+      return 0
+    fi
+    _access_scopes_error "eks-platform: unable to determine live deletion-protection state for ${EKS_CLUSTER_NAME} (aws exit ${lookup_rc}): ${live_deletion_protection}"
+    _access_scopes_error "eks-platform: refusing to attempt the disable apply without knowing the current state; fix the AWS call above and re-run"
+    return 1
   fi
+
+  # AWS CLI renders the boolean as True/False; accept either case.
+  case "$live_deletion_protection" in
+    False|false)
+      _access_scopes_error "eks-platform: deletion protection is already disabled on the live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); skipping the apply"
+      return 0
+      ;;
+    True|true) ;;
+    *)
+      _access_scopes_error "eks-platform: unexpected live deletion-protection value for ${EKS_CLUSTER_NAME}: '${live_deletion_protection}'; refusing to guess"
+      return 1
+      ;;
+  esac
 
   cp "$var_file" "$backup_file"
 
