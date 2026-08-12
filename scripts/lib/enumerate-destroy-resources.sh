@@ -86,33 +86,126 @@ _enumerate_mongodb_resources() {
 }
 
 _enumerate_workload_identity_resources() {
-  local environment="$1"
-
-  printf "Terraform-managed resources:\n"
-  printf "  - EKS Pod Identity Associations (count varies based on configuration)\n"
-  printf "  - IAM Roles for workload identities\n"
-  printf "\n"
-  printf "Note: This scope provisions identity mappings. Run 'terraform plan -destroy'\n"
-  printf "      in platform-prerequisites/terraform/workload-identity for exact list.\n"
-  return 0
+  _enumerate_terraform_state_resources "workload-identity" "$1"
 }
 
 _enumerate_eks_platform_resources() {
-  local environment="$1"
+  _enumerate_terraform_state_resources "eks-platform" "$1"
+}
 
-  printf "Terraform-managed resources:\n"
-  printf "  - EKS Cluster (oms-${environment}-eks-cluster)\n"
-  printf "  - VPC and subnets\n"
-  printf "  - NAT Gateway and Internet Gateway\n"
-  printf "  - EKS Node Group\n"
-  printf "  - IAM Roles (cluster, node, addon, autoscaler, LBC)\n"
-  printf "  - EFS File System\n"
-  printf "  - AWS Backup Vault (with vault lock)\n"
-  printf "  - KMS Keys (cluster encryption, backup encryption)\n"
-  printf "  - EKS Managed Addons (VPC-CNI, CoreDNS, kube-proxy, EBS CSI, EFS CSI, Pod Identity Agent)\n"
-  printf "\n"
-  printf "⚠️  WARNING: This is a large-scale destruction that removes the entire cluster!\n"
-  printf "⚠️  All workloads, data, and configurations will be permanently deleted.\n"
+# ---------------------------------------------------------------------------
+# _enumerate_terraform_tf_dir_for_scope <scope>
+# ---------------------------------------------------------------------------
+#
+# Explicit scope -> Terraform root mapping. Deliberately a hardcoded case
+# rather than a derived path: a new scope must be added here consciously,
+# and an unmapped scope returns 1 so the caller reports "enumeration
+# unavailable" instead of silently previewing the wrong root.
+_enumerate_terraform_tf_dir_for_scope() {
+  local root="${_ORCHESTRATOR_ROOT_DIR:-.}/platform-prerequisites/terraform"
+  case "${1:-}" in
+    eks-platform)      printf '%s\n' "${root}/eks-platform" ;;
+    workload-identity) printf '%s\n' "${root}/workload-identity" ;;
+    access-governance) printf '%s\n' "${root}/access-governance" ;;
+    eks-access)        printf '%s\n' "${root}/eks-access" ;;
+    mongodb)           printf '%s\n' "${root}/mongodb" ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# _enumerate_terraform_state_resources <scope> <environment>
+# ---------------------------------------------------------------------------
+#
+# Enumerates the resources a destroy would actually target, read from real
+# Terraform state, and annotates each with whether it still exists live.
+#
+# This replaces a hardcoded printf list that never read state (#163). That
+# list was observed announcing an EFS filesystem, a backup vault, a node
+# group and six addons that earlier runs had already destroyed -- i.e. it
+# misinformed the operator at precisely the moment they were deciding
+# whether to destroy production.
+#
+# Two deliberate properties:
+#
+#   1. Fails closed. If state cannot be read, this returns 1 and the caller
+#      prints "enumeration not available" -- it never falls back to a
+#      plausible-looking static list. Showing a confident fiction is worse
+#      than showing nothing.
+#
+#   2. MISSING is informational, never fatal. State can legitimately
+#      disagree with live AWS after a partial destroy, and a partially-
+#      destroyed stack must remain destroyable -- that was the #159
+#      deadlock and must not be reintroduced here.
+_enumerate_terraform_state_resources() {
+  local scope="$1"
+  local environment="$2"
+  local tf_dir state_json
+
+  tf_dir="$(_enumerate_terraform_tf_dir_for_scope "$scope")" || return 1
+  [[ -d "$tf_dir" ]] || return 1
+
+  # Read-only. Assumes the backend is already initialized: the destroy flow
+  # initializes it before this runs. No bootstrap is triggered from a
+  # preview path -- a preview must never create or mutate anything.
+  state_json="$(terraform -chdir="$tf_dir" show -json 2>/dev/null)" || return 1
+  [[ -n "$state_json" ]] || return 1
+
+  local rendered resource_count
+  rendered="$(printf '%s' "$state_json" | "${_ORCHESTRATOR_PYTHON:-python3}" -c '
+import json, sys
+
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+rows = []
+def walk(module):
+    for r in module.get("resources", []):
+        if r.get("mode") != "managed":
+            continue
+        values = r.get("values") or {}
+        ident = values.get("id") or values.get("arn") or values.get("name") or "-"
+        rows.append((r.get("type", "?"), r.get("address") or r.get("name", "?"), str(ident)))
+    for child in module.get("child_modules", []):
+        walk(child)
+
+walk((doc.get("values") or {}).get("root_module") or {})
+
+if not rows:
+    print("  (no managed resources in state -- nothing for this scope to destroy)")
+    print("__RESOURCE_COUNT__=0")
+    sys.exit(0)
+
+rows.sort()
+width = max(len(t) for t, _, _ in rows)
+for rtype, addr, ident in rows:
+    print("  %-*s  %s" % (width, rtype, addr))
+    print("  %-*s    id: %s" % (width, "", ident))
+print("")
+print("  %d managed resource(s) in Terraform state for this scope." % len(rows))
+print("__RESOURCE_COUNT__=%d" % len(rows))
+')" || return 1
+
+  resource_count="$(printf '%s\n' "$rendered" | sed -n 's/^__RESOURCE_COUNT__=//p')"
+  printf '%s\n' "$rendered" | grep -v '^__RESOURCE_COUNT__='
+
+  printf '\n'
+  printf 'Source: live Terraform state for %s (%s).\n' "$scope" "$environment"
+  printf 'State can lag reality after a partial destroy; Terraform re-checks\n'
+  printf 'each resource against AWS during the plan shown before apply.\n'
+
+  # Preserved from the previous static implementation: eks-platform is the
+  # whole cluster, so it keeps an explicit blast-radius warning -- but only
+  # when there is actually something left to destroy. Warning about a
+  # "large-scale destruction" over an empty state is the same kind of
+  # misinformation this change exists to remove.
+  if [[ "$scope" == "eks-platform" && "${resource_count:-0}" -gt 0 ]]; then
+    printf '\n'
+    printf '⚠️  WARNING: This is a large-scale destruction that removes the entire cluster!\n'
+    printf '⚠️  All workloads, data, and configurations will be permanently deleted.\n'
+  fi
   return 0
 }
 
