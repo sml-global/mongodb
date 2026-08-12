@@ -54,6 +54,14 @@ _access_scopes_error() {
   printf 'ERROR: %s\n' "$*" >&2
 }
 
+# Progress/status reporting. Kept on stderr alongside _access_scopes_error so
+# stdout stays clean for command output, but labelled honestly: a successful
+# destroy previously ended with three ERROR:-prefixed lines that all described
+# things going right, which made a working teardown read as a failure (#161).
+_access_scopes_info() {
+  printf 'INFO: %s\n' "$*" >&2
+}
+
 _access_scopes_principal_input_path() {
   printf '%s/config/environments/%s.local/workforce-principals.json' \
     "${_ACCESS_SCOPES_ROOT_DIR}" "${ENVIRONMENT}"
@@ -329,7 +337,7 @@ _eks_platform_disable_live_deletion_protection() {
     # no live deletion protection left to disable, so the precondition this
     # function exists to establish is already satisfied.
     if printf '%s' "$live_deletion_protection" | grep -q 'ResourceNotFoundException'; then
-      _access_scopes_error "eks-platform: cluster ${EKS_CLUSTER_NAME} no longer exists; no live deletion protection to disable"
+      _access_scopes_info "eks-platform: cluster ${EKS_CLUSTER_NAME} no longer exists; no live deletion protection to disable"
       return 0
     fi
     _access_scopes_error "eks-platform: unable to determine live deletion-protection state for ${EKS_CLUSTER_NAME} (aws exit ${lookup_rc}): ${live_deletion_protection}"
@@ -340,7 +348,7 @@ _eks_platform_disable_live_deletion_protection() {
   # AWS CLI renders the boolean as True/False; accept either case.
   case "$live_deletion_protection" in
     False|false)
-      _access_scopes_error "eks-platform: deletion protection is already disabled on the live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); skipping the apply"
+      _access_scopes_info "eks-platform: deletion protection is already disabled on the live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); skipping the apply"
       return 0
       ;;
     True|true) ;;
@@ -369,7 +377,7 @@ _eks_platform_disable_live_deletion_protection() {
   sed -i.bak -E 's/^deletion_protection([[:space:]]*=[[:space:]]*)true/deletion_protection\1false/' "$var_file"
   rm -f "${var_file}.bak"
 
-  _access_scopes_error "eks-platform: applying deletion_protection=false to live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); tfvars restored on any exit path, including interruption"
+  _access_scopes_info "eks-platform: applying deletion_protection=false to live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); tfvars restored on any exit path, including interruption"
 
   terraform -chdir="$EKS_PLATFORM_TF_DIR" apply -input=false -auto-approve \
     -target=module.eks.aws_eks_cluster.this -var-file="$var_file"
@@ -377,7 +385,7 @@ _eks_platform_disable_live_deletion_protection() {
 
   _eks_platform_restore_deletion_protection_tfvars
   trap - EXIT INT TERM
-  _access_scopes_error "eks-platform: deletion_protection tfvars restored"
+  _access_scopes_info "eks-platform: deletion_protection tfvars restored"
 
   if [[ "$apply_rc" -ne 0 ]]; then
     _access_scopes_error "eks-platform: failed to disable live deletion protection; destroy not attempted"
@@ -531,7 +539,7 @@ _run_eks_platform_destroy_with_confirmed_overrides() {
     printf '%s\n' "$patched" > "$module_file"
   done
 
-  _access_scopes_error "eks-platform: temporarily disabling prevent_destroy for ${#confirmed_addresses[@]} explicitly confirmed resource(s) in ${#backup_files[@]} file(s) -- restored on any exit path, including interruption"
+  _access_scopes_info "eks-platform: temporarily disabling prevent_destroy for ${#confirmed_addresses[@]} explicitly confirmed resource(s) in ${#backup_files[@]} file(s) -- restored on any exit path, including interruption"
 
   local destroy_rc
   _run_terraform_destroy_or_report_prevent_destroy \
@@ -540,7 +548,7 @@ _run_eks_platform_destroy_with_confirmed_overrides() {
 
   _eks_platform_restore_prevent_destroy_backups
   trap - EXIT INT TERM
-  _access_scopes_error "eks-platform: prevent_destroy override restored on ${#backup_files[@]} file(s)"
+  _access_scopes_info "eks-platform: prevent_destroy override restored on ${#backup_files[@]} file(s)"
 
   return "$destroy_rc"
 }
