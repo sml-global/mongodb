@@ -180,8 +180,31 @@ Every `--env uat`/`--env prod` command — provision, verify, **and** destroy �
 runs behind foundation guards that fail closed unless both your AWS identity
 and your `kubectl` context already resolve to the target environment. Neither
 is inferred or auto-corrected: the orchestrator refuses rather than risk
-acting against the wrong account or cluster. Establish both once per shell
-session, and re-run after an SSO session expires.
+acting against the wrong account or cluster.
+
+> **These steps do not persist. Re-run them in every new terminal.**
+>
+> Steps 1–3 export **environment variables into the current shell only**.
+> They are lost the moment you close that terminal window or tab, open a
+> new one, split a pane, reconnect over SSH, or let the machine restart —
+> and nothing warns you. A new terminal starts with no credentials, so the
+> very next `--env prod` command fails with `unable to read the active AWS
+> account with sts get-caller-identity`, even though you "already logged
+> in" minutes ago in the window next door. **This is normal shell
+> behaviour, not a broken login.** Re-run steps 1–3 (or 2–3 alone if the
+> browser SSO session is still valid) and continue.
+>
+> Step 4 is different: `aws eks update-kubeconfig` writes to
+> `~/.kube/config` on disk, so the context **does** survive new terminals.
+> But it is machine-global — anything else that switches context (another
+> project, another environment, a teammate's script) silently repoints it,
+> so always re-confirm with step 5 rather than assuming.
+>
+> Do **not** work around this by putting credentials in `~/.zshrc`,
+> `~/.bash_profile`, or a committed `.env`. They are short-lived SSO
+> credentials that expire within hours; persisting them creates a stale,
+> confusing, and credential-leaking setup. Re-running the steps is the
+> intended workflow.
 
 Substitute the target environment throughout: UAT is account `672172129937`
 with cluster `oms-uat-eks-cluster`; Production is account `632674123947` with
@@ -933,7 +956,7 @@ Do not apply infrastructure until these gates are satisfied.
 |---|---|
 | `kubectl` points to wrong cluster (legacy dev) | `aws eks update-kubeconfig --name EKS-boomi-runtime-cluster --region ap-east-1` |
 | `kubectl` points to wrong cluster (`--env uat`/`--env prod` orchestrator, e.g. `current Kubernetes context '...' does not target prod/uat`) | Re-run [Session setup](#session-setup-do-this-first-every-session) — both the AWS identity and the `kubectl` context must resolve to the same target environment |
-| `unable to read the active AWS account with sts get-caller-identity` (`--env uat`/`--env prod`) | SSO session expired, or credentials were never exported into the shell — re-run [Session setup](#session-setup-do-this-first-every-session) steps 1–3 |
+| `unable to read the active AWS account with sts get-caller-identity` (`--env uat`/`--env prod`) | Most often a **new terminal** — the exported credentials live only in the shell that ran them and do not carry over to a new window/tab/pane/SSH session. Re-run [Session setup](#session-setup-do-this-first-every-session) steps 1–3 (steps 2–3 alone if the browser SSO session is still valid) |
 | `You must be logged in to the server` | `aws sso login --profile default` then retry |
 | `Forbidden` after auth succeeds | Fix EKS Access Entry or RBAC for your role |
 | Namespace `mongodb` not found | Run Terraform prerequisites first |
