@@ -248,7 +248,7 @@ class KubernetesContextGuardTests(GuardsAndPathsFixture):
             self.load_env_prefix("uat") + "verify_kubernetes_context",
             extra_env={
                 "MOCK_KUBE_CONTEXT": "totally-different-label",
-                "MOCK_KUBE_CLUSTER_REF": "arn:aws:eks:ap-east-1:672172129937:cluster/EKS-boomi-runtime-cluster",
+                "MOCK_KUBE_CLUSTER_REF": "arn:aws:eks:ap-east-1:672172129937:cluster/oms-uat-eks-cluster",
             },
         )
         self.assertEqual(result.returncode, 0, result.stderr)

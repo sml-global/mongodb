@@ -139,7 +139,7 @@ exit 64
     def test_canonical_uat_kubernetes_context_succeeds(self):
         canonical_reference = (
             "arn:aws:eks:ap-east-1:672172129937:cluster/"
-            "EKS-boomi-runtime-cluster"
+            "oms-uat-eks-cluster"
         )
         result = self.run_shell(
             self.SOURCE_PREFIX + "load_platform_env uat && verify_kubernetes_context",
@@ -174,18 +174,18 @@ exit 64
             self.SOURCE_PREFIX + "load_platform_env uat && verify_kubernetes_context",
             context=(
                 "arn:aws:eks:us-east-1:672172129937:cluster/"
-                "EKS-boomi-runtime-cluster"
+                "oms-uat-eks-cluster"
             ),
             cluster_reference=(
                 "arn:aws:eks:us-east-1:672172129937:cluster/"
-                "EKS-boomi-runtime-cluster"
+                "oms-uat-eks-cluster"
             ),
         )
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "expected 'arn:aws:eks:ap-east-1:672172129937:cluster/"
-            "EKS-boomi-runtime-cluster'",
+            "oms-uat-eks-cluster'",
             result.stderr,
         )
         self.assertEqual(
@@ -201,14 +201,14 @@ exit 64
             context="uat-admin",
             cluster_reference=(
                 "arn:aws:eks:ap-east-1:672172129937:cluster/"
-                "EKS-boomi-runtime-cluster-lookalike"
+                "oms-uat-eks-cluster-lookalike"
             ),
         )
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "expected 'arn:aws:eks:ap-east-1:672172129937:cluster/"
-            "EKS-boomi-runtime-cluster'",
+            "oms-uat-eks-cluster'",
             result.stderr,
         )
         self.assertEqual(
@@ -221,7 +221,7 @@ exit 64
     def test_alias_context_succeeds_when_cluster_reference_is_canonical(self):
         canonical_reference = (
             "arn:aws:eks:ap-east-1:672172129937:cluster/"
-            "EKS-boomi-runtime-cluster"
+            "oms-uat-eks-cluster"
         )
         result = self.run_shell(
             self.SOURCE_PREFIX + "load_platform_env uat && verify_kubernetes_context",
@@ -247,7 +247,7 @@ exit 64
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
             "expected 'arn:aws:eks:ap-east-1:672172129937:cluster/"
-            "EKS-boomi-runtime-cluster'",
+            "oms-uat-eks-cluster'",
             result.stderr,
         )
         self.assertEqual(
