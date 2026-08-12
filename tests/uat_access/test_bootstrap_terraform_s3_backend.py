@@ -162,6 +162,24 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
             arguments.extend(["--expected-bucket-owner", expected_owner])
         return subprocess.run(arguments, env=env, text=True, capture_output=True)
 
+    def assert_owner_not_passed_to_terraform(self, terraform_init):
+        """`expected_bucket_owner` must NOT reach `terraform init`.
+
+        It is not a valid `-backend-config` argument for the S3 backend
+        (confirmed against Terraform 1.15.7 with `use_lockfile = true`) --
+        Terraform rejects it with "Invalid backend configuration argument",
+        so passing it would break every init. Bucket ownership is instead
+        enforced ahead of init by the script's own `verify_bucket_controls`,
+        via the AWS CLI's `--expected-bucket-owner` on each s3api call (see
+        the assertions on those calls above, and
+        scripts/bootstrap-terraform-s3-backend.sh:274-279).
+
+        This asserts the ABSENCE deliberately: the previous version of these
+        tests required the flag to be PRESENT, which could only have been
+        satisfied by reintroducing that breakage (#162).
+        """
+        self.assertNotIn("expected_bucket_owner", terraform_init)
+
     def command_lines(self):
         return self.command_log.read_text().splitlines()
 
@@ -178,10 +196,7 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
             line = next(line for line in lines if f"s3api {operation}" in line)
             self.assertIn(owner_flag, line)
         terraform_init = next(line for line in lines if line.startswith("terraform "))
-        self.assertIn(
-            f"-backend-config=expected_bucket_owner={EXPECTED_OWNER}",
-            terraform_init,
-        )
+        self.assert_owner_not_passed_to_terraform(terraform_init)
 
     def test_owner_mismatch_stops_before_terraform(self):
         result = self.run_backend(bucket_state="wrong-owner")
@@ -319,10 +334,7 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
             line for line in self.command_lines() if line.startswith("terraform ")
         )
         self.assertIn("init -migrate-state", terraform_init)
-        self.assertIn(
-            f"-backend-config=expected_bucket_owner={EXPECTED_OWNER}",
-            terraform_init,
-        )
+        self.assert_owner_not_passed_to_terraform(terraform_init)
 
     def test_fresh_init_includes_owner_backend_config(self):
         result = self.run_backend(remote_state_status="absent")
@@ -332,10 +344,7 @@ printf 'terraform %s\n' "$*" >> "$MOCK_COMMAND_LOG"
             line for line in self.command_lines() if line.startswith("terraform ")
         )
         self.assertIn("init -reconfigure", terraform_init)
-        self.assertIn(
-            f"-backend-config=expected_bucket_owner={EXPECTED_OWNER}",
-            terraform_init,
-        )
+        self.assert_owner_not_passed_to_terraform(terraform_init)
 
     def assert_remote_state_inspection_aborts(self, remote_state_status):
         (self.tf_dir / "terraform.tfstate").write_text("{}\n")
