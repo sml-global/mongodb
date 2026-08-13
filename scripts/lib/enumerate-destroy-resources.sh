@@ -251,7 +251,9 @@ def walk(module):
             continue
         values = r.get("values") or {}
         ident = values.get("id") or values.get("arn") or values.get("name") or "-"
-        rows.append((r.get("type", "?"), r.get("address") or r.get("name", "?"), str(ident)))
+        name = values.get("name") or values.get("tags", {}).get("Name") or ""
+        rows.append((r.get("type", "?"), r.get("address") or r.get("name", "?"),
+                     str(ident), str(name)))
     for child in module.get("child_modules", []):
         walk(child)
 
@@ -262,12 +264,38 @@ if not rows:
     print("__RESOURCE_COUNT__=0")
     sys.exit(0)
 
-rows.sort()
-width = max(len(t) for t, _, _ in rows)
-for rtype, addr, ident in rows:
-    print("  %-*s  %s" % (width, rtype, addr))
-    print("  %-*s    id: %s" % (width, "", ident))
-print("")
+# Group by the Terraform module the resource lives in, so an operator reads
+# "what parts of the stack go" rather than scanning 58 undifferentiated
+# lines. Within a group, sort by type then address for a stable order.
+def group_of(address):
+    # module.network.aws_vpc.this -> network ; top-level -> (root)
+    parts = address.split(".")
+    if len(parts) >= 2 and parts[0] == "module":
+        return parts[1].split("[")[0]
+    return "(root)"
+
+groups = {}
+for rtype, addr, ident, name in rows:
+    groups.setdefault(group_of(addr), []).append((rtype, addr, ident, name))
+
+# Long ids (ARNs, policy attachments) are truncated in the middle: the tail
+# is the identifying part, and a wrapped 150-char ARN is what made this list
+# hard to audit.
+def short(text, limit=64):
+    if len(text) <= limit:
+        return text
+    keep = limit - 3
+    return text[: keep // 2] + "..." + text[-(keep - keep // 2):]
+
+for group in sorted(groups):
+    members = groups[group]
+    print("  %s  (%d)" % (group, len(members)))
+    for rtype, addr, ident, name in sorted(members):
+        label = name if name and name not in ident else ""
+        suffix = ("  %s" % label) if label else ""
+        print("      %-34s %s%s" % (rtype, short(ident), suffix))
+    print("")
+
 print("  %d managed resource(s) in Terraform state for this scope." % len(rows))
 print("__RESOURCE_COUNT__=%d" % len(rows))
 ')" || return 1
