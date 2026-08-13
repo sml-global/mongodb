@@ -76,6 +76,19 @@ mongodb_internal_live_guard_observations() {
 """
 
 # Bash observations that produce a FAIL for each scope
+# `mongodb`'s remaining failure mode from observation DATA is a dependent
+# that is not absent (a destroy-ORDER violation). Protection state -- PVC
+# deletion protection, PBM backup -- is deliberately no longer a
+# precondition on either guard: requiring protections to still be ON
+# blocked an operator from finishing a partially-completed teardown (#159)
+# while adding no safety once a human has typed yes against a real
+# enumerated resource list. The values are still observed, still hashed
+# into the guard digest, and still recorded in the durable evidence record.
+#
+# `mongodb-access` has no dependent-absence check of its own (it is itself
+# a dependent of mongodb), so its only remaining failure mode is being
+# unable to read live observations at all -- covered by
+# MongodbGuardRuntimeSeamMissingTests below.
 _FAIL_OBSERVATIONS = """
 mongodb_internal_live_guard_observations() {
   case "$1" in
@@ -463,13 +476,14 @@ class MongodbGuardRuntimeFailTests(MongodbGuardRuntimeFixture):
         state = self.run_guard("mongodb", _FAIL_OBSERVATIONS)
         self.assertEqual(state.get("RESULT_STATUS"), "FAIL")
 
-    def test_mongodb_access_guard_fail_exit_nonzero(self):
+    def test_mongodb_access_guard_passes_on_lifted_protections(self):
+        """The #159 regression guard: a partially-completed teardown leaves
+        PVC protection already disabled. That must NOT block the operator
+        from finishing the destroy -- it is observed and recorded, not
+        required."""
         state = self.run_guard("mongodb-access", _FAIL_OBSERVATIONS)
-        self.assertNotEqual(state.get("RETURN_CODE"), "0")
-
-    def test_mongodb_access_guard_fail_result_status_is_fail(self):
-        state = self.run_guard("mongodb-access", _FAIL_OBSERVATIONS)
-        self.assertEqual(state.get("RESULT_STATUS"), "FAIL")
+        self.assertEqual(state.get("RETURN_CODE"), "0", state["_result"].stderr)
+        self.assertEqual(state.get("RESULT_STATUS"), "PASS")
 
 
 class MongodbGuardRuntimeSeamMissingTests(MongodbGuardRuntimeFixture):

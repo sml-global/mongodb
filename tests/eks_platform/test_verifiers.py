@@ -97,6 +97,15 @@ eks_internal_live_guard_observations() {
 }
 """
 
+# eks-platform's remaining failure mode from observation DATA is a
+# dependent that is not absent (a destroy-ORDER violation). Protection
+# state -- deletion protection, EFS prevent_destroy, retention, vault lock
+# -- is deliberately no longer a precondition on any of these three guards:
+# requiring protections to still be ON blocked an operator from finishing a
+# partially-completed teardown (#159) while adding no safety once a human
+# has typed yes against a real enumerated resource list. The values are
+# still observed, still hashed into the guard digest, and still recorded in
+# the durable evidence record.
 _FAIL_OBSERVATIONS_EKS_PLATFORM = """
 eks_internal_live_guard_observations() {
   case "$1" in
@@ -115,6 +124,19 @@ eks_internal_live_guard_observations() {
       printf 'vault_lock_state=locked\\n'
       ;;
   esac
+}
+"""
+
+# workload-identity and platform-controllers have no dependent-absence
+# check of their own (they are themselves dependents of eks-platform), so
+# with protection state no longer a precondition their only remaining
+# failure mode is being unable to read live observations at all. That is
+# still a genuine fail-closed path and is what their failure tests below
+# exercise.
+_UNAVAILABLE_OBSERVATIONS = """
+eks_internal_live_guard_observations() {
+  printf 'ERROR: simulated observation failure\\n' >&2
+  return 1
 }
 """
 
@@ -606,11 +628,13 @@ class EksPlatformGuardFailureTests(EksGuardRuntimeFixture):
 
 
 class WorkloadIdentityGuardFailureTests(EksGuardRuntimeFixture):
-    """workload-identity guard: failure path (protection absent)."""
+    """workload-identity guard: failure path (live observations
+    unavailable). Protection state is no longer a precondition -- see the
+    note on _UNAVAILABLE_OBSERVATIONS above and #159."""
 
     def _run_failure(self):
         body = (
-            _FAIL_OBSERVATIONS_EKS_PLATFORM
+            _UNAVAILABLE_OBSERVATIONS
             + "\n"
             "scope_registry_pre_destroy_guard_workload_identity() { verify_workload_identity_pre_destroy \"$@\"; }\n"
             "LAST_RC=0\n"
@@ -636,11 +660,13 @@ class WorkloadIdentityGuardFailureTests(EksGuardRuntimeFixture):
 
 
 class PlatformControllersGuardFailureTests(EksGuardRuntimeFixture):
-    """platform-controllers guard: failure path (protection absent)."""
+    """platform-controllers guard: failure path (live observations
+    unavailable). Protection state is no longer a precondition -- see the
+    note on _UNAVAILABLE_OBSERVATIONS above and #159."""
 
     def _run_failure(self):
         body = (
-            _FAIL_OBSERVATIONS_EKS_PLATFORM
+            _UNAVAILABLE_OBSERVATIONS
             + "\n"
             "scope_registry_pre_destroy_guard_platform_controllers() { verify_platform_controllers_pre_destroy \"$@\"; }\n"
             "LAST_RC=0\n"

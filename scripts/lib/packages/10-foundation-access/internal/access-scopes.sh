@@ -54,6 +54,35 @@ _access_scopes_error() {
   printf 'ERROR: %s\n' "$*" >&2
 }
 
+# Save / restore the caller's INT+TERM trap disposition around a temporary
+# source-patching trap.
+#
+# `_access_scopes_restore_signal_traps` clears the handler for the WHOLE shell, not just
+# this function, so a patching site that cleared it also deleted the
+# orchestrator's own INT/TERM handler (orchestrator.sh, single-pass destroy)
+# for the remainder of the run -- after which a Ctrl-C leaked the
+# orchestration lock instead of releasing it. These helpers restore exactly
+# what was installed before, so the outer handler survives.
+_access_scopes_save_signal_traps() {
+  _ACCESS_SCOPES_SAVED_INT_TRAP="$(trap -p INT)"
+  _ACCESS_SCOPES_SAVED_TERM_TRAP="$(trap -p TERM)"
+}
+
+_access_scopes_restore_signal_traps() {
+  trap - EXIT
+  if [[ -n "${_ACCESS_SCOPES_SAVED_INT_TRAP:-}" ]]; then
+    eval "$_ACCESS_SCOPES_SAVED_INT_TRAP"
+  else
+    trap - INT
+  fi
+  if [[ -n "${_ACCESS_SCOPES_SAVED_TERM_TRAP:-}" ]]; then
+    eval "$_ACCESS_SCOPES_SAVED_TERM_TRAP"
+  else
+    trap - TERM
+  fi
+  unset _ACCESS_SCOPES_SAVED_INT_TRAP _ACCESS_SCOPES_SAVED_TERM_TRAP
+}
+
 # Progress/status reporting. Kept on stderr alongside _access_scopes_error so
 # stdout stays clean for command output, but labelled honestly: a successful
 # destroy previously ended with three ERROR:-prefixed lines that all described
@@ -246,9 +275,26 @@ provision_eks_platform_scope() {
 #
 # Destroys the eks-platform Terraform root. Called only after
 # eks_internal_eks_platform_destroy_handler's foundation guards and drift
-# recheck have already passed (identity/region/context verified, backup
-# retention/lock/deletion-protection confirmed, no live drift since the
-# pre-destroy guard ran).
+# recheck have already passed (identity/region/context verified, no live
+# drift since the pre-destroy guard ran) and, above that, only after the
+# operator typed yes at the orchestrator's single-pass gate against a real
+# enumerated resource list (UNIFIED_DESTROY_CONFIRMED).
+#
+# Lifting protections is therefore automatic here -- there are no
+# --confirm-remove-protected / --confirm-disable-deletion-protection flags
+# any more. Both lifts remain strictly CONDITIONAL on the resource actually
+# being present and actually protected:
+#
+#   * live EKS deletionProtection is disabled only if the cluster still
+#     exists and still has it enabled (an already-absent cluster or an
+#     already-false flag is a success, not a failure);
+#   * Terraform lifecycle.prevent_destroy is source-patched only for the
+#     protected addresses actually present in this root's state and
+#     actually declaring prevent_destroy = true.
+#
+# Both conditions matter: hardcoding module.efs[0] as mandatory, or
+# unconditionally pushing deletion_protection=false, recreates the #159
+# deadlock the moment one of those resources is already gone.
 destroy_eks_platform_scope() {
   local var_file
 
@@ -258,26 +304,103 @@ destroy_eks_platform_scope() {
     return 1
   }
 
-  provision_backend_scope "eks-platform" || return 1
-
-  if [[ -n "${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION:-}" ]]; then
-    _eks_platform_disable_live_deletion_protection "$var_file" || return 1
+  if [[ "${UNIFIED_DESTROY_CONFIRMED:-}" != "yes" ]]; then
+    _access_scopes_error "eks-platform: destroy was not confirmed at the interactive typed-yes gate; refusing to destroy or to lift any protection"
+    return 1
   fi
 
-  local -a confirmed_addresses=()
-  local confirm_line
-  while IFS= read -r confirm_line; do
-    [[ -n "$confirm_line" ]] && confirmed_addresses+=("$confirm_line")
-  done <<< "${UNIFIED_CONFIRM_REMOVE_PROTECTED:-}"
+  provision_backend_scope "eks-platform" || return 1
 
-  if [[ "${#confirmed_addresses[@]}" -eq 0 ]]; then
+  _eks_platform_disable_live_deletion_protection "$var_file" || return 1
+
+  local -a protected_addresses=()
+  local address_line
+  while IFS= read -r address_line; do
+    [[ -n "$address_line" ]] && protected_addresses+=("$address_line")
+  done <<< "$(_eks_platform_present_protected_addresses "$EKS_PLATFORM_TF_DIR")"
+
+  if [[ "${#protected_addresses[@]}" -eq 0 ]]; then
+    _access_scopes_info "eks-platform: no prevent_destroy-protected resources are present in state; destroying without any source override"
     _run_terraform_destroy_or_report_prevent_destroy \
       "eks-platform" "$EKS_PLATFORM_TF_DIR" "$var_file"
     return $?
   fi
 
   _run_eks_platform_destroy_with_confirmed_overrides \
-    "$EKS_PLATFORM_TF_DIR" "$var_file" "${confirmed_addresses[@]}"
+    "$EKS_PLATFORM_TF_DIR" "$var_file" "${protected_addresses[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# _eks_platform_present_protected_addresses <tf_dir>
+# ---------------------------------------------------------------------------
+#
+# Prints, one per line, the resource addresses that are BOTH present in
+# this root's Terraform state AND still declare lifecycle.prevent_destroy =
+# true in their own source block. Prints nothing (status 0) when there are
+# none -- an empty result is the normal, expected outcome on a stack whose
+# protected resources have already been destroyed.
+#
+# Derived from live state rather than a hardcoded address list on purpose:
+# a hardcoded `module.efs[0]...` entry fails as soon as EFS is gone, which
+# is precisely the #159 deadlock. The module-file registry
+# (_eks_platform_protected_resource_module_file) is still consulted, so an
+# address whose module file is unknown is skipped rather than guessed at --
+# Terraform will then refuse that resource explicitly and
+# _run_terraform_destroy_or_report_prevent_destroy will name it.
+_eks_platform_present_protected_addresses() {
+  local tf_dir="$1"
+  local state_addresses address parsed module_name resource_ref
+  local resource_type resource_name module_file
+
+  state_addresses="$(terraform -chdir="$tf_dir" state list 2>/dev/null)" || return 0
+
+  while IFS= read -r address; do
+    [[ -n "$address" ]] || continue
+    parsed="$(_eks_platform_parse_module_resource_address "$address")" || continue
+    module_name="$(printf '%s' "$parsed" | sed -n '1p')"
+    resource_ref="$(printf '%s' "$parsed" | sed -n '2p')"
+    resource_type="${resource_ref%%.*}"
+    resource_name="${resource_ref#*.}"
+
+    module_file="$(_eks_platform_protected_resource_module_file "$module_name")" || continue
+    [[ -f "$module_file" ]] || continue
+
+    if _eks_platform_resource_block_declares_prevent_destroy \
+      "$module_file" "$resource_type" "$resource_name"; then
+      printf '%s\n' "$address"
+    fi
+  done <<< "$state_addresses"
+}
+
+# Returns 0 when the named resource's own block in <module_file> contains
+# `prevent_destroy = true`. Block-scoped (an awk brace-depth range), so a
+# file holding several resources -- e.g. modules/kms/main.tf's cluster and
+# backup keys -- is answered per resource rather than per file.
+_eks_platform_resource_block_declares_prevent_destroy() {
+  local module_file="$1"
+  local resource_type="$2"
+  local resource_name="$3"
+
+  awk -v type="$resource_type" -v name="$resource_name" '
+    BEGIN { in_block = 0; depth = 0; found = 0 }
+    {
+      if (!in_block && $0 ~ ("resource \"" type "\" \"" name "\" \\{")) {
+        in_block = 1
+        depth = 1
+        next
+      }
+      if (in_block) {
+        for (i = 1; i <= length($0); i++) {
+          c = substr($0, i, 1)
+          if (c == "{") depth++
+          if (c == "}") depth--
+        }
+        if ($0 ~ /prevent_destroy[[:space:]]*=[[:space:]]*true/) found = 1
+        if (depth == 0) in_block = 0
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$module_file"
 }
 
 # ---------------------------------------------------------------------------
@@ -297,9 +420,10 @@ destroy_eks_platform_scope() {
 # assertion that blocks this narrow, explicitly-confirmed destroy-time
 # override.
 #
-# Only called when UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION is non-empty
-# (validated in orchestrator.sh against EKS_CLUSTER_NAME before this ever
-# runs). Backs up the tfvars file on disk, patches deletion_protection to
+# Called unconditionally on a confirmed eks-platform destroy, and is itself
+# responsible for doing nothing when there is nothing to do: an absent
+# cluster and an already-false flag both return success without an apply.
+# Backs up the tfvars file on disk, patches deletion_protection to
 # false, applies -target=module.eks.aws_eks_cluster.this to push that one
 # attribute live, restores the tfvars unconditionally via a trap on
 # EXIT/INT/TERM (mirroring _run_eks_platform_destroy_with_confirmed_overrides
@@ -348,7 +472,7 @@ _eks_platform_disable_live_deletion_protection() {
   # AWS CLI renders the boolean as True/False; accept either case.
   case "$live_deletion_protection" in
     False|false)
-      _access_scopes_info "eks-platform: deletion protection is already disabled on the live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); skipping the apply"
+      _access_scopes_info "eks-platform: deletion protection is already disabled on the live cluster ; skipping the apply"
       return 0
       ;;
     True|true) ;;
@@ -365,26 +489,27 @@ _eks_platform_disable_live_deletion_protection() {
     cp "$backup_file" "$var_file"
     rm -f "$backup_file"
   }
+  _access_scopes_save_signal_traps
   trap _eks_platform_restore_deletion_protection_tfvars EXIT INT TERM
 
   if ! grep -qE '^deletion_protection[[:space:]]*=[[:space:]]*true' "$var_file"; then
     _access_scopes_error "eks-platform: expected 'deletion_protection = true' in ${var_file}; refusing to patch an unexpected tfvars shape"
     _eks_platform_restore_deletion_protection_tfvars
-    trap - EXIT INT TERM
+    _access_scopes_restore_signal_traps
     return 1
   fi
 
   sed -i.bak -E 's/^deletion_protection([[:space:]]*=[[:space:]]*)true/deletion_protection\1false/' "$var_file"
   rm -f "${var_file}.bak"
 
-  _access_scopes_info "eks-platform: applying deletion_protection=false to live cluster (explicitly confirmed: ${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION}); tfvars restored on any exit path, including interruption"
+  _access_scopes_info "eks-platform: applying deletion_protection=false to live cluster (confirmed at the interactive typed-yes gate); tfvars restored on any exit path, including interruption"
 
   terraform -chdir="$EKS_PLATFORM_TF_DIR" apply -input=false -auto-approve \
     -target=module.eks.aws_eks_cluster.this -var-file="$var_file"
   local apply_rc=$?
 
   _eks_platform_restore_deletion_protection_tfvars
-  trap - EXIT INT TERM
+  _access_scopes_restore_signal_traps
   _access_scopes_info "eks-platform: deletion_protection tfvars restored"
 
   if [[ "$apply_rc" -ne 0 ]]; then
@@ -407,8 +532,8 @@ _eks_platform_disable_live_deletion_protection() {
 # a generic Terraform-address-to-file resolver: adding a new
 # prevent_destroy resource anywhere in eks-platform requires updating this
 # map, by design -- an override path that silently "discovers" newly
-# protected resources would defeat the point of requiring an explicit
-# --confirm-remove-protected per address.
+# protected resources in arbitrary files would be an unreviewed widening
+# of what a destroy is allowed to unprotect.
 _eks_platform_protected_resource_module_file() {
   local module_name="$1"
   case "$module_name" in
@@ -419,7 +544,7 @@ _eks_platform_protected_resource_module_file() {
 }
 
 # Parses a Terraform resource address (as printed in `has lifecycle.
-# prevent_destroy set` errors and as passed to --confirm-remove-protected)
+# prevent_destroy set` errors and as listed by `terraform state list`)
 # into its module name and `type.name` resource reference. Handles an
 # optional module index, e.g. `module.efs[0].aws_efs_file_system.this` ->
 # module_name=efs, resource_ref=aws_efs_file_system.this.
@@ -443,7 +568,7 @@ _eks_platform_parse_module_resource_address() {
 # _run_eks_platform_destroy_with_confirmed_overrides
 # ---------------------------------------------------------------------------
 #
-# For each --confirm-remove-protected address, resolves its module file and
+# For each still-protected, still-present address, resolves its module file and
 # resource block, backs the file up to <file>.prevent_destroy_override_backup
 # (an on-disk backup, not just an in-memory copy, so a restore is still
 # possible after a SIGINT/SIGTERM/crash mid-destroy -- a trap registered
@@ -455,7 +580,10 @@ _eks_platform_parse_module_resource_address() {
 # backed-up file before returning the destroy's real exit status. An
 # address that doesn't resolve to a known module/resource aborts before any
 # file is touched -- never silently skipped, never silently expanded to
-# "disable everything in this file".
+# "disable everything in this file". Callers derive the address list from
+# live state (_eks_platform_present_protected_addresses), never from a
+# hardcoded list, so an already-destroyed protected resource simply does
+# not appear here.
 _run_eks_platform_destroy_with_confirmed_overrides() {
   local tf_dir="$1"
   local var_file="$2"
@@ -475,11 +603,12 @@ _run_eks_platform_destroy_with_confirmed_overrides() {
       rm -f "$backup_file"
     done
   }
+  _access_scopes_save_signal_traps
   trap _eks_platform_restore_prevent_destroy_backups EXIT INT TERM
 
   for address in "${confirmed_addresses[@]}"; do
     parsed="$(_eks_platform_parse_module_resource_address "$address")" || {
-      _access_scopes_error "eks-platform: unrecognized --confirm-remove-protected address (expected module.<name>.<type>.<resource>): ${address}"
+      _access_scopes_error "eks-platform: unrecognized protected resource address (expected module.<name>.<type>.<resource>): ${address}"
       return 1
     }
     module_name="$(printf '%s' "$parsed" | sed -n '1p')"
@@ -488,15 +617,15 @@ _run_eks_platform_destroy_with_confirmed_overrides() {
     resource_name="${resource_ref#*.}"
 
     module_file="$(_eks_platform_protected_resource_module_file "$module_name")" || {
-      _access_scopes_error "eks-platform: no known protected-resource module file for --confirm-remove-protected address: ${address} (module: ${module_name})"
+      _access_scopes_error "eks-platform: no known protected-resource module file for address: ${address} (module: ${module_name})"
       return 1
     }
     [[ -f "$module_file" ]] || {
-      _access_scopes_error "eks-platform: module file for --confirm-remove-protected does not exist: ${module_file}"
+      _access_scopes_error "eks-platform: protected-resource module file does not exist: ${module_file}"
       return 1
     }
     if ! grep -q "resource \"${resource_type}\" \"${resource_name}\"" "$module_file"; then
-      _access_scopes_error "eks-platform: resource ${resource_type}.${resource_name} not found in ${module_file} (from --confirm-remove-protected address: ${address})"
+      _access_scopes_error "eks-platform: resource ${resource_type}.${resource_name} not found in ${module_file} (from protected resource address: ${address})"
       return 1
     fi
 
@@ -539,7 +668,7 @@ _run_eks_platform_destroy_with_confirmed_overrides() {
     printf '%s\n' "$patched" > "$module_file"
   done
 
-  _access_scopes_info "eks-platform: temporarily disabling prevent_destroy for ${#confirmed_addresses[@]} explicitly confirmed resource(s) in ${#backup_files[@]} file(s) -- restored on any exit path, including interruption"
+  _access_scopes_info "eks-platform: temporarily disabling prevent_destroy for ${#confirmed_addresses[@]} still-protected resource(s) in ${#backup_files[@]} file(s) -- restored on any exit path, including interruption"
 
   local destroy_rc
   _run_terraform_destroy_or_report_prevent_destroy \
@@ -547,7 +676,7 @@ _run_eks_platform_destroy_with_confirmed_overrides() {
   destroy_rc=$?
 
   _eks_platform_restore_prevent_destroy_backups
-  trap - EXIT INT TERM
+  _access_scopes_restore_signal_traps
   _access_scopes_info "eks-platform: prevent_destroy override restored on ${#backup_files[@]} file(s)"
 
   return "$destroy_rc"

@@ -32,8 +32,10 @@ set -euo pipefail
 #     deliberate, audited) rather than special-casing which one is "more"
 #     load-bearing.
 #
-# Confirmation ceremony (distinct from destroy.sh's --confirm/
-# --confirmation-artifact two-pass protocol on purpose -- this is a
+# Confirmation ceremony. destroy.sh's unified path now uses its own
+# single-pass typed-yes gate (which superseded the --confirm/
+# --confirmation-artifact two-pass protocol this comment used to contrast
+# against); the two remain deliberately separate ceremonies -- this is a
 # different, rarer, higher-stakes action and should not share machinery
 # that makes the routine path convenient):
 #   1. --env <dev|uat|prod> and a scope (backend|access-governance) are

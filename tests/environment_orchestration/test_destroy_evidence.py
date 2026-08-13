@@ -1,32 +1,37 @@
-"""Task 4 ("Add Explicit Unified Entrypoints Without Changing Legacy Dev
-Behavior") tests for the two foundation-only, standard-library-only Python
-modules that implement the destroy confirmation/evidence protocol:
-`scripts/lib/confirmation-artifact.py` and `scripts/lib/destroy-evidence.py`.
+"""Tests for `scripts/lib/destroy-evidence.py`, the foundation-only,
+standard-library-only Python module that implements the durable destroy
+evidence record, and for the parts of `scripts/lib/orchestrator.sh` that
+drive it.
+
+The former companion module `scripts/lib/confirmation-artifact.py` and the
+two-pass copy-paste confirmation-artifact protocol it implemented are gone:
+destroy is now a single interactive pass that enumerates the real resources,
+runs the read-only pre-destroy guards, writes this evidence record, and then
+requires the operator to type `yes` on /dev/tty. Areas 2, 3, 6 and 10 below
+tested only that removed protocol and were deleted with it; the evidence
+trail (areas 1, 4, 5, 7, 8) and the guard callback contract (area 9) are
+unchanged and still covered here. The single-pass gate itself is covered by
+tests/environment_orchestration/test_destroy_gate.py.
 
 This file covers these 10 areas (see
 docs/superpowers/plans/2026-07-22-phase2-environment-orchestration-foundation.md,
 Task 4 Step 5, from line 1072 onward, for the exact schema/safety
 requirements each test below maps to):
 
-  1. Canonical JSON bytes (both modules)   -> CanonicalBytesAndDuplicateKeyRejectionTests
-  2. Confirmation artifact schema/safety   -> ConfirmationArtifactSchemaAndSafetyTests
-  3. Confirmation grammar validation       -> ConfirmationGrammarValidationTests
+  1. Canonical JSON bytes                  -> CanonicalBytesAndDuplicateKeyRejectionTests
   4. Guard-failure record schema/safety    -> GuardFailureRecordSchemaAndSafetyTests
   5. All-pass evidence schema/safety       -> AllPassEvidenceSchemaAndSafetyTests
-  6. Consumption                           -> ConsumptionTests,
-                                               ConsumedPathRejectedAsFreshInputTests
   7. Status lifecycle                      -> StatusLifecycleTests
   8. Retention / cleanup eligibility       -> RetentionAndCleanupEligibilityTests
   9. Five-argument guard callback contract -> GuardCallbackContractTests
-  10. Handler confirmation-subset passing  -> HandlerConfirmationSubsetPassingTests
 
-Areas 9 and 10 additionally source scripts/lib/orchestrator.sh (and its 5
+Area 9 additionally sources scripts/lib/orchestrator.sh (and its 5
 declared foundation dependencies) into real bash subprocesses, following the
 same from-scratch-clean-environment, no-RepositoryFixture-reuse pattern
 established by tests/environment_orchestration/test_guards_and_paths.py's
 `GuardsAndPathsFixture` and tests/environment_orchestration/
 test_entrypoints.py's `OrchestratorFixture` -- see `_OrchestratorGuardCallbackFixture`
-and `_OrchestratorDestroyDispatchFixture` below for the exact technique
+below for the exact technique
 (sourcing, then redefining one real registry-mapped guard/handler function
 name per test, exactly as bash's ordinary function-redefinition semantics
 allow).
@@ -57,18 +62,6 @@ report):
     above), but via two new from-scratch fixtures local to this file rather
     than by importing `RepositoryFixture` or `test_entrypoints.py`'s
     `OrchestratorFixture`.
-  * The "rejects non-regular file" case for confirmation-artifact.py uses a
-    directory rather than a FIFO/special file: opening a FIFO for reading
-    with no writer present blocks indefinitely, which would hang the test
-    suite. A directory opens without blocking and still reliably produces
-    the `S_ISREG` failure path.
-  * The "no-follow open rejects a symlink" assertion checks only that a
-    `ConfirmationArtifactError` is raised and that its message contains the
-    substring "confirmation artifact" -- both possible failure paths (the
-    `os.O_NOFOLLOW`-triggered `OSError` caught at open time, or the
-    defense-in-depth `stat.S_ISLNK` check reached if `O_NOFOLLOW` were ever
-    unavailable) produce a message containing that substring, so the
-    assertion is correct on any POSIX platform the suite might run on.
 
 Nothing in this file was executed while writing it (no python, no
 `bash -n`, no git, no test runs) -- only read_file and
@@ -90,7 +83,6 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIRMATION_ARTIFACT_PATH = REPO_ROOT / "scripts" / "lib" / "confirmation-artifact.py"
 DESTROY_EVIDENCE_PATH = REPO_ROOT / "scripts" / "lib" / "destroy-evidence.py"
 
 
@@ -101,7 +93,6 @@ def _load_module(name, path):
     return module
 
 
-confirmation_artifact = _load_module("confirmation_artifact_under_test", CONFIRMATION_ARTIFACT_PATH)
 destroy_evidence = _load_module("destroy_evidence_under_test", DESTROY_EVIDENCE_PATH)
 
 # Fixed, arbitrary epoch (2027-01-14T17:20:00Z) used for every deterministic
@@ -120,23 +111,6 @@ def _write_raw_file(path, text, mode=0o600):
     finally:
         os.close(fd)
     os.chmod(str(path), mode)
-
-
-def _valid_confirmation_kwargs(**overrides):
-    kwargs = dict(
-        operation_id="a" * 16,
-        created_at=confirmation_artifact.format_timestamp(BASE_EPOCH),
-        expires_at=confirmation_artifact.format_timestamp(BASE_EPOCH + confirmation_artifact.LIFETIME_SECONDS),
-        environment="uat",
-        account_id="672172129937",
-        requested_scope="eks-platform",
-        resolved_scopes=["eks-platform"],
-        confirmations=[
-            "destroy:uat:672172129937:eks-platform:EKS-boomi-runtime-cluster:delete-cluster",
-        ],
-    )
-    kwargs.update(overrides)
-    return kwargs
 
 
 def _valid_guard_result(**overrides):
@@ -209,22 +183,11 @@ class _TempDirFixture(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Area 1: Canonical JSON bytes (both modules).
+# Area 1: Canonical JSON bytes.
 # ---------------------------------------------------------------------------
 
 
 class CanonicalBytesAndDuplicateKeyRejectionTests(_TempDirFixture):
-    def test_confirmation_artifact_canonical_bytes_are_sorted_compact_ascii_with_one_trailing_newline(self):
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        data = confirmation_artifact.canonical_bytes(payload)
-        text = data.decode("ascii")
-
-        self.assertEqual(text.count("\n"), 1)
-        self.assertTrue(text.endswith("\n"))
-        body = text[:-1]
-        self.assertEqual(body, json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
-        self.assertNotIn(" ", body)
-
     def test_destroy_evidence_canonical_bytes_are_sorted_compact_ascii_with_one_trailing_newline(self):
         payload = destroy_evidence.build_all_pass_evidence_payload(**_valid_all_pass_kwargs())
         data = destroy_evidence.canonical_bytes(payload)
@@ -236,14 +199,6 @@ class CanonicalBytesAndDuplicateKeyRejectionTests(_TempDirFixture):
         self.assertEqual(body, json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
         self.assertNotIn(" ", body)
 
-    def test_confirmation_artifact_rejects_duplicate_keys_on_read(self):
-        path = self.root / "dup-confirmation.json"
-        _write_raw_file(path, '{"a":1,"a":2}\n')
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.read_confirmation_artifact(path)
-        self.assertIn("duplicate key", str(ctx.exception))
-
     def test_destroy_evidence_rejects_duplicate_keys_on_read(self):
         path = self.root / "dup-evidence.json"
         _write_raw_file(path, '{"a":1,"a":2}\n')
@@ -251,16 +206,6 @@ class CanonicalBytesAndDuplicateKeyRejectionTests(_TempDirFixture):
         with self.assertRaises(destroy_evidence.DestroyEvidenceError) as ctx:
             destroy_evidence.read_evidence_document(path, kind="all-pass")
         self.assertIn("duplicate key", str(ctx.exception))
-
-    def test_confirmation_artifact_read_reserialize_round_trip_is_byte_identical(self):
-        path = self.root / "confirmation.json"
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        written = confirmation_artifact.create_artifact(path, payload)
-
-        read_payload, raw = confirmation_artifact.read_confirmation_artifact(path)
-
-        self.assertEqual(raw, written)
-        self.assertEqual(confirmation_artifact.canonical_bytes(read_payload), written)
 
     def test_destroy_evidence_read_reserialize_round_trip_is_byte_identical(self):
         path = self.root / "evidence.json"
@@ -271,197 +216,6 @@ class CanonicalBytesAndDuplicateKeyRejectionTests(_TempDirFixture):
 
         self.assertEqual(raw, written)
         self.assertEqual(destroy_evidence.canonical_bytes(read_payload), written)
-
-
-# ---------------------------------------------------------------------------
-# Area 2: Confirmation artifact exact schema/safety.
-# ---------------------------------------------------------------------------
-
-
-class ConfirmationArtifactSchemaAndSafetyTests(_TempDirFixture):
-    def test_valid_payload_has_exactly_9_keys(self):
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-
-        self.assertEqual(len(confirmation_artifact.REQUIRED_KEYS), 9)
-        self.assertEqual(set(payload.keys()), set(confirmation_artifact.REQUIRED_KEYS))
-
-    def test_create_artifact_exclusive_creation_fails_if_path_exists(self):
-        path = self.root / "confirmation.json"
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        confirmation_artifact.create_artifact(path, payload)
-
-        with self.assertRaises(FileExistsError):
-            confirmation_artifact.create_artifact(path, payload)
-
-    def test_create_artifact_mode_exactly_0600(self):
-        path = self.root / "confirmation.json"
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        confirmation_artifact.create_artifact(path, payload)
-
-        mode = stat.S_IMODE(os.stat(path).st_mode)
-        self.assertEqual(mode, 0o600)
-
-    def test_read_rejects_symlink_at_target_path(self):
-        real_path = self.root / "real.json"
-        _write_raw_file(real_path, "{}\n")
-        link_path = self.root / "link.json"
-        os.symlink(str(real_path), str(link_path))
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.read_confirmation_artifact(link_path)
-        self.assertIn("confirmation artifact", str(ctx.exception))
-
-    def test_read_rejects_non_regular_file(self):
-        path = self.root / "not-a-file"
-        os.mkdir(path)
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.read_confirmation_artifact(path)
-        self.assertIn("must be a regular file", str(ctx.exception))
-
-    def test_read_rejects_wrong_mode(self):
-        path = self.root / "wrong-mode.json"
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        data = confirmation_artifact.canonical_bytes(payload)
-        _write_raw_file(path, data.decode("ascii"), mode=0o644)
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.read_confirmation_artifact(path)
-        self.assertIn("mode 0600", str(ctx.exception))
-
-    def test_validate_schema_rejects_unknown_key(self):
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        payload["unexpected_extra_field"] = "x"
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.validate_schema(payload)
-        self.assertIn("key set mismatch", str(ctx.exception))
-
-    def test_validate_schema_rejects_missing_key(self):
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        del payload["confirmations"]
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.validate_schema(payload)
-        self.assertIn("key set mismatch", str(ctx.exception))
-
-    def test_validate_schema_rejects_malformed_timestamp(self):
-        kwargs = _valid_confirmation_kwargs(created_at="2026-07-23 00:00:00Z")
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.build_payload(**kwargs)
-        self.assertIn("created_at", str(ctx.exception))
-
-    def test_validate_schema_rejects_malformed_operation_id(self):
-        kwargs = _valid_confirmation_kwargs(operation_id="A" * 16)
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.build_payload(**kwargs)
-        self.assertIn("operation_id", str(ctx.exception))
-
-    def test_validate_schema_rejects_wrong_creation_to_expiry_interval(self):
-        kwargs = _valid_confirmation_kwargs(
-            expires_at=confirmation_artifact.format_timestamp(BASE_EPOCH + 800)
-        )
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.build_payload(**kwargs)
-        self.assertIn("immutable 15-minute lifetime", str(ctx.exception))
-
-    def test_validate_against_request_rejects_filename_payload_operation_id_mismatch(self):
-        kwargs = _valid_confirmation_kwargs()
-        payload = confirmation_artifact.build_payload(**kwargs)
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.validate_against_request(
-                payload,
-                now_epoch=BASE_EPOCH + 100,
-                path_operation_id="b" * 16,
-                environment=kwargs["environment"],
-                account_id=kwargs["account_id"],
-                requested_scope=kwargs["requested_scope"],
-                resolved_scopes=kwargs["resolved_scopes"],
-                confirmations=kwargs["confirmations"],
-            )
-        self.assertIn("operation_id disagreement", str(ctx.exception))
-
-    def test_validate_against_request_rejects_expiry_at_or_before_now(self):
-        kwargs = _valid_confirmation_kwargs()
-        payload = confirmation_artifact.build_payload(**kwargs)
-        expires_epoch = BASE_EPOCH + confirmation_artifact.LIFETIME_SECONDS
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.validate_against_request(
-                payload,
-                now_epoch=expires_epoch,
-                path_operation_id=kwargs["operation_id"],
-                environment=kwargs["environment"],
-                account_id=kwargs["account_id"],
-                requested_scope=kwargs["requested_scope"],
-                resolved_scopes=kwargs["resolved_scopes"],
-                confirmations=kwargs["confirmations"],
-            )
-        self.assertIn("has expired", str(ctx.exception))
-
-    def test_validate_against_request_rejects_future_creation_time(self):
-        future_created_epoch = BASE_EPOCH + 1000
-        kwargs = _valid_confirmation_kwargs(
-            created_at=confirmation_artifact.format_timestamp(future_created_epoch),
-            expires_at=confirmation_artifact.format_timestamp(
-                future_created_epoch + confirmation_artifact.LIFETIME_SECONDS
-            ),
-        )
-        payload = confirmation_artifact.build_payload(**kwargs)
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.validate_against_request(
-                payload,
-                now_epoch=BASE_EPOCH + 500,
-                path_operation_id=kwargs["operation_id"],
-                environment=kwargs["environment"],
-                account_id=kwargs["account_id"],
-                requested_scope=kwargs["requested_scope"],
-                resolved_scopes=kwargs["resolved_scopes"],
-                confirmations=kwargs["confirmations"],
-            )
-        self.assertIn("is in the future", str(ctx.exception))
-
-
-# ---------------------------------------------------------------------------
-# Area 3: Confirmation grammar validation
-# (destroy:<env>:<account-id>:<scope>:<resource>:<consequence>).
-# ---------------------------------------------------------------------------
-
-
-class ConfirmationGrammarValidationTests(unittest.TestCase):
-    def test_accepts_well_formed_confirmation_value(self):
-        confirmation_artifact.validate_confirmation_value(
-            "destroy:uat:672172129937:eks-platform:EKS-boomi-runtime-cluster:delete-cluster"
-        )
-
-    def test_rejects_component_containing_colon(self):
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError):
-            confirmation_artifact.validate_confirmation_value(
-                "destroy:uat:672172129937:eks-platform:EKS-boomi-runtime-cluster:delete:cluster"
-            )
-
-    def test_rejects_component_containing_whitespace(self):
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError):
-            confirmation_artifact.validate_confirmation_value(
-                "destroy:uat:672172129937:eks-platform:EKS boomi runtime cluster:delete-cluster"
-            )
-
-    def test_rejects_empty_component(self):
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError):
-            confirmation_artifact.validate_confirmation_value(
-                "destroy:uat::eks-platform:EKS-boomi-runtime-cluster:delete-cluster"
-            )
-
-    def test_rejects_component_containing_shell_metacharacter(self):
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError):
-            confirmation_artifact.validate_confirmation_value(
-                "destroy:uat:672172129937:eks-platform:EKS-boomi-runtime-cluster:delete-cluster;rm"
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -544,19 +298,31 @@ class AllPassEvidenceSchemaAndSafetyTests(_TempDirFixture):
         self.assertEqual(set(destroy_evidence.EVIDENCE_KEYS), set(expected_keys))
         self.assertEqual(set(payload.keys()), set(expected_keys))
 
-    def test_confirmation_artifact_sha256_is_real_sha256_of_artifact_bytes(self):
-        artifact_path = self.root / "confirmation.json"
-        confirmation_payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        written_bytes = confirmation_artifact.create_artifact(artifact_path, confirmation_payload)
-        expected_digest = hashlib.sha256(written_bytes).hexdigest()
+    def test_confirmation_artifact_sha256_field_carries_the_gate_context_digest(self):
+        """The field keeps its schema name but now holds the digest of the
+        exact gate context the operator was shown (environment, account,
+        scopes, operation id, created_at, and the rendered resource
+        listing) rather than a digest of a separate artifact file, which no
+        longer exists. It is still required to be a real 64-hex SHA-256."""
+        gate_context = (
+            "gate\nenvironment=uat\naccount=672172129937\nrequested_scope=eks-platform\n"
+            "operation_id=aaaaaaaaaaaaaaaa\ncreated_at="
+            + destroy_evidence.format_timestamp(BASE_EPOCH)
+            + "\nresolved_scopes=eks-platform,\n  aws_eks_cluster  module.eks.aws_eks_cluster.this\n"
+        )
+        expected_digest = hashlib.sha256(gate_context.encode("utf-8")).hexdigest()
 
         evidence_payload = destroy_evidence.build_all_pass_evidence_payload(
             **_valid_all_pass_kwargs(confirmation_artifact_sha256=expected_digest)
         )
 
-        on_disk_bytes = artifact_path.read_bytes()
-        self.assertEqual(written_bytes, on_disk_bytes)
-        self.assertEqual(hashlib.sha256(on_disk_bytes).hexdigest(), evidence_payload["confirmation_artifact_sha256"])
+        self.assertEqual(evidence_payload["confirmation_artifact_sha256"], expected_digest)
+
+    def test_all_pass_evidence_rejects_a_non_sha256_gate_digest(self):
+        with self.assertRaises(destroy_evidence.DestroyEvidenceError):
+            destroy_evidence.build_all_pass_evidence_payload(
+                **_valid_all_pass_kwargs(confirmation_artifact_sha256="not-a-digest")
+            )
 
     def test_write_all_pass_evidence_mode_exactly_0600(self):
         path = self.root / "pre-destroy-guards.json"
@@ -588,87 +354,6 @@ class AllPassEvidenceSchemaAndSafetyTests(_TempDirFixture):
         with self.assertRaises(destroy_evidence.DestroyEvidenceError) as ctx:
             destroy_evidence.validate_all_pass_evidence_schema(missing_key)
         self.assertIn("key set mismatch", str(ctx.exception))
-
-
-# ---------------------------------------------------------------------------
-# Area 6: Consumption (confirmation-artifact.py's atomic "consumed" rename).
-# ---------------------------------------------------------------------------
-
-
-class ConsumptionTests(_TempDirFixture):
-    def test_consume_artifact_atomically_renames_to_the_consumed_suffix(self):
-        path = self.root / "destroy-confirmation.aaaaaaaaaaaaaaaa.json"
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        written = confirmation_artifact.create_artifact(path, payload)
-
-        consumed_path, raw = confirmation_artifact.consume_artifact(path)
-
-        self.assertEqual(consumed_path, str(path) + ".consumed")
-        self.assertFalse(path.exists())
-        self.assertTrue(Path(consumed_path).exists())
-        self.assertEqual(raw, written)
-
-    def test_consume_artifact_rejects_if_the_consumed_path_already_exists(self):
-        path = self.root / "destroy-confirmation.aaaaaaaaaaaaaaaa.json"
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        confirmation_artifact.create_artifact(path, payload)
-        _write_raw_file(Path(str(path) + ".consumed"), "{}\n")
-
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-            confirmation_artifact.consume_artifact(path)
-        self.assertIn("already exists", str(ctx.exception))
-        # No rename was attempted (the already-exists check runs first), so
-        # the original unconsumed artifact must still be present.
-        self.assertTrue(path.exists())
-
-    def test_consume_artifact_aborts_and_never_renames_back_if_post_rename_identity_check_fails(self):
-        path = self.root / "destroy-confirmation.aaaaaaaaaaaaaaaa.json"
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        confirmation_artifact.create_artifact(path, payload)
-        consumed_path = str(path) + ".consumed"
-        real_lstat = os.lstat
-
-        class _TamperedStatResult:
-            def __init__(self, real_result):
-                self.st_dev = real_result.st_dev + 1
-                self.st_ino = real_result.st_ino
-                self.st_mode = real_result.st_mode
-
-        def fake_lstat(target, *args, **kwargs):
-            result = real_lstat(target, *args, **kwargs)
-            if str(target) == consumed_path:
-                return _TamperedStatResult(result)
-            return result
-
-        # The real post-rename identity check compares (st_dev, st_ino)
-        # captured before the rename against a fresh os.lstat() of the
-        # consumed name; forcing a mismatch deterministically (rather than
-        # relying on an unreproducible OS-level race) requires patching
-        # os.lstat for exactly this one call.
-        with mock.patch("os.lstat", side_effect=fake_lstat):
-            with self.assertRaises(confirmation_artifact.ConfirmationArtifactError) as ctx:
-                confirmation_artifact.consume_artifact(path)
-        self.assertIn("identity changed across rename", str(ctx.exception))
-
-        # The rename to the consumed name already happened before the
-        # identity check runs; the artifact is never renamed back to its
-        # original name even though this consumption attempt is a failure.
-        self.assertFalse(path.exists())
-        self.assertTrue(Path(consumed_path).exists())
-
-    def test_consume_artifact_on_an_already_consumed_original_path_fails(self):
-        path = self.root / "destroy-confirmation.aaaaaaaaaaaaaaaa.json"
-        payload = confirmation_artifact.build_payload(**_valid_confirmation_kwargs())
-        confirmation_artifact.create_artifact(path, payload)
-
-        confirmation_artifact.consume_artifact(path)
-
-        # The original filename no longer exists (it was renamed away), so
-        # a second consumption attempt on the same original path is
-        # rejected -- a consumed path is never accepted as fresh input
-        # again under its original name either.
-        with self.assertRaises(confirmation_artifact.ConfirmationArtifactError):
-            confirmation_artifact.consume_artifact(path)
 
 
 # ---------------------------------------------------------------------------
@@ -1214,257 +899,6 @@ class GuardCallbackContractTests(_OrchestratorGuardCallbackFixture):
         self.assertEqual(state["RETURN_CODE"], "1")
         self.assertEqual(state["FAILURE_CODE"], "GUARD_OUT_OF_ORDER")
         self.assertEqual(state["FAILURE_EXPECTED_SCOPE"], "mongodb")
-
-
-_DESTROY_DISPATCH_MOCK_AWS_SCRIPT = """#!/usr/bin/env bash
-printf 'aws %s\\n' "$*" >> "$MOCK_COMMAND_LOG"
-if [ "$1" = "sts" ] && [ "$2" = "get-caller-identity" ]; then
-  printf '%s\\n' "${MOCK_AWS_ACCOUNT_ID:-000000000000}"
-  exit 0
-fi
-if [ "$1" = "configure" ] && [ "$2" = "get" ]; then
-  printf '%s\\n' "${MOCK_AWS_CONFIGURED_REGION:-}"
-  exit 0
-fi
-printf 'unhandled mock aws invocation: %s\\n' "$*" >&2
-exit 1
-"""
-
-
-def _guard_override(function_name, scope, resource_identity="RESOURCE-PLACEHOLDER"):
-    return (
-        function_name + "() { record_pre_destroy_guard_result " + scope + " PASS "
-        + resource_identity + " " + DIGEST_ALL_ZEROS + " SCOPE_GUARD_PASSED; }\n"
-    )
-
-
-def _handler_override(function_name):
-    return (
-        function_name + "() {\n"
-        "  printf '%s\\n' \"$#\" > \"$HANDLER_ARGS_FILE\"\n"
-        "  if [ \"$#\" -gt 0 ]; then printf '%s\\n' \"$@\" >> \"$HANDLER_ARGS_FILE\"; fi\n"
-        "  return 0\n"
-        "}\n"
-    )
-
-
-class _OrchestratorDestroyDispatchFixture(unittest.TestCase):
-    """Drives the real `run_unified_command destroy --env uat <scope> ...`
-    two-pass protocol end to end through scripts/lib/orchestrator.sh, always
-    against a single narrow-scope destroy target -- never "all", which
-    scope-registry.sh's `resolve_destroy_order` deliberately does not expand
-    for an ordinary named scope (confirmed by reading it: "Ordinary destroy
-    of a single narrow scope destroys exactly that scope"). The one
-    canonical pre-destroy guard function and one canonical destroy handler
-    function for the scope under test are redefined, after sourcing, to an
-    always-PASS guard and an argument-recording handler respectively --
-    the same "override a real registry-mapped function name after
-    sourcing" technique `GuardCallbackContractTests` above uses, extended
-    here through the complete confirmation-artifact + guard-evidence +
-    consumption + dispatch flow.
-
-    `ORCHESTRATOR_TEST_CLOCK_EPOCH`/`ORCHESTRATOR_TEST_OPERATION_ID`
-    (orchestrator.sh's own documented test seams) make the confirmation
-    artifact's path, every timestamp, and every derived confirmation value
-    fully deterministic and computable in Python ahead of time, so no test
-    here needs to parse the preparation pass's own stdout.
-
-    Judgment call (flagged in the final chat report): proving a handler
-    receives *only* its own subset -- "not the full confirmation set" -- is
-    tested here via distinct single-scope runs (each selecting exactly one
-    scope, so there is only ever one handler's own value in play) rather
-    than one real multi-scope run. `resolve_destroy_order` never cascades
-    dependents for an ordinary named scope, and reaching two real
-    confirmation-requiring scopes in one dispatch would require selecting
-    "all" (dragging in all 13 real destroy scopes and needing 13 guard and
-    13 handler overrides) for no added assertion strength, since the
-    subset-selection loop inside `_orchestrator_destroy_second_pass` is a
-    simple per-step scope-equality filter that is independent of how many
-    other scopes exist in the request.
-    """
-
-    FIXED_CLOCK_EPOCH = BASE_EPOCH
-    FIXED_OPERATION_ID = "a" * 16
-
-    def setUp(self):
-        self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name).resolve() / "repository"
-        self.mock_bin = Path(self._temporary.name) / "bin"
-        self.command_log = Path(self._temporary.name) / "commands.log"
-        self.root.mkdir(parents=True)
-        self.mock_bin.mkdir(parents=True)
-
-        aws_path = self.mock_bin / "aws"
-        aws_path.write_text(_DESTROY_DISPATCH_MOCK_AWS_SCRIPT, encoding="ascii")
-        aws_path.chmod(aws_path.stat().st_mode | stat.S_IXUSR)
-
-        for relative in (
-            "scripts/lib/orchestrator.sh",
-            "scripts/lib/terraform-destroy-scope.sh",
-            "scripts/lib/environment-contracts.sh",
-            "scripts/lib/platform-env.sh",
-            "scripts/lib/platform-guards.sh",
-            "scripts/lib/orchestration-paths.sh",
-            "scripts/lib/scope-registry.sh",
-            "scripts/lib/confirmation-artifact.py",
-            "scripts/lib/destroy-evidence.py",
-            "config/environment-schema/base.manifest",
-            "config/environments/dev.env",
-            "config/environments/uat.env",
-        ):
-            source = REPO_ROOT / relative
-            destination = self.root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-
-        python3_path = shutil.which("python3")
-        self.assertIsNotNone(python3_path, "python3 must be resolvable on PATH to run these tests")
-        # Keep the environment otherwise clean/explicit (following
-        # test_entrypoints.py's OrchestratorFixture rather than
-        # helpers.py's os.environ.copy()-based RepositoryFixture), but add
-        # python3's real directory so orchestrator.sh's `_ORCHESTRATOR_PYTHON`
-        # (bare "python3") actually resolves regardless of host layout.
-        self._clean_path = f"{self.mock_bin}:{Path(python3_path).parent}:/usr/bin:/bin"
-
-    def artifact_relative_path(self):
-        return f".local/uat/generated/destroy-confirmation.{self.FIXED_OPERATION_ID}.json"
-
-    def run_destroy(self, override_script, scope_args, handler_args_file):
-        environment = {
-            "PATH": self._clean_path,
-            "MOCK_COMMAND_LOG": str(self.command_log),
-            "MOCK_AWS_ACCOUNT_ID": "672172129937",
-            "MOCK_AWS_CONFIGURED_REGION": "ap-east-1",
-            "ORCHESTRATOR_TEST_CLOCK_EPOCH": str(self.FIXED_CLOCK_EPOCH),
-            "ORCHESTRATOR_TEST_OPERATION_ID": self.FIXED_OPERATION_ID,
-            "HANDLER_ARGS_FILE": str(handler_args_file),
-        }
-        script = (
-            "source scripts/lib/orchestrator.sh\n"
-            + override_script
-            + "\nrun_unified_command \"$@\"\n"
-        )
-        return subprocess.run(
-            ["bash", "-c", script, "bash", "destroy", "--env", "uat", *scope_args],
-            cwd=self.root,
-            env=environment,
-            text=True,
-            capture_output=True,
-        )
-
-    def tearDown(self):
-        self._temporary.cleanup()
-
-
-# ---------------------------------------------------------------------------
-# Area 6 (continued): a `.consumed`-suffixed path is never accepted as fresh
-# `--confirmation-artifact` input again, enforced by orchestrator.sh's own
-# second-pass path grammar (confirmation-artifact.py itself has no
-# filename-suffix awareness -- see ConsumptionTests below for its half of
-# Area 6).
-# ---------------------------------------------------------------------------
-
-
-class ConsumedPathRejectedAsFreshInputTests(_OrchestratorDestroyDispatchFixture):
-    def test_a_dot_consumed_suffixed_path_is_rejected_by_the_real_second_pass_path_grammar(self):
-        fake_consumed_path = (
-            f".local/uat/generated/destroy-confirmation.{self.FIXED_OPERATION_ID}.json.consumed"
-        )
-        handler_args_file = Path(self._temporary.name) / "unused-handler-args.txt"
-
-        result = self.run_destroy(
-            "", ["eks-access", "--confirmation-artifact", fake_consumed_path, "--auto-approve"], handler_args_file
-        )
-
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("invalid --confirmation-artifact path", result.stderr)
-
-
-# ---------------------------------------------------------------------------
-# Area 10: handler confirmation-subset passing.
-# ---------------------------------------------------------------------------
-
-
-class HandlerConfirmationSubsetPassingTests(_OrchestratorDestroyDispatchFixture):
-    def test_handler_for_a_scope_with_a_confirmation_requirement_receives_exactly_its_own_ordered_value(self):
-        scope = "eks-platform"
-        confirmation_value = "destroy:uat:672172129937:eks-platform:EKS-boomi-runtime-cluster:delete-cluster"
-        override = (
-            _guard_override("scope_registry_pre_destroy_guard_eks_platform", "eks-platform")
-            + _handler_override("scope_registry_deferred_eks_platform_destroy")
-        )
-        handler_args_file = Path(self._temporary.name) / "handler-args-eks-platform.txt"
-
-        prep = self.run_destroy(override, [scope], handler_args_file)
-        self.assertNotEqual(prep.returncode, 0, prep.stdout + prep.stderr)
-        artifact_path = self.artifact_relative_path()
-        self.assertTrue((self.root / artifact_path).exists(), prep.stdout + prep.stderr)
-
-        second = self.run_destroy(
-            override,
-            [scope, "--confirmation-artifact", artifact_path, "--confirm", confirmation_value, "--auto-approve"],
-            handler_args_file,
-        )
-        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-
-        lines = handler_args_file.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(lines[0], "1")
-        self.assertEqual(lines[1:], [confirmation_value])
-
-    def test_handler_for_a_scope_with_no_confirmation_requirement_receives_zero_confirmation_arguments(self):
-        scope = "eks-access"
-        override = (
-            _guard_override("scope_registry_pre_destroy_guard_eks_access", "eks-access")
-            + _handler_override("scope_registry_deferred_eks_access_destroy")
-        )
-        handler_args_file = Path(self._temporary.name) / "handler-args-eks-access.txt"
-
-        prep = self.run_destroy(override, [scope], handler_args_file)
-        self.assertNotEqual(prep.returncode, 0, prep.stdout + prep.stderr)
-        artifact_path = self.artifact_relative_path()
-        self.assertTrue((self.root / artifact_path).exists(), prep.stdout + prep.stderr)
-
-        second = self.run_destroy(
-            override, [scope, "--confirmation-artifact", artifact_path, "--auto-approve"], handler_args_file
-        )
-        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-
-        lines = handler_args_file.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(lines[0], "0")
-        self.assertEqual(lines[1:], [])
-
-    def test_handler_for_a_different_confirmation_requiring_scope_receives_its_own_distinct_value(self):
-        scope = "postgresql-brand"
-        created_at = destroy_evidence.format_timestamp(self.FIXED_CLOCK_EPOCH)
-        snapshot_timestamp = created_at.replace(":", "").replace("-", "")
-        confirmation_value = (
-            "destroy:uat:672172129937:postgresql-brand:db/oms-uat-branddb:"
-            f"final-snapshot=oms-uat-branddb-final-{snapshot_timestamp}"
-        )
-        override = (
-            _guard_override("scope_registry_pre_destroy_guard_postgresql_brand", "postgresql-brand")
-            + _handler_override("scope_registry_deferred_postgresql_brand_destroy")
-        )
-        handler_args_file = Path(self._temporary.name) / "handler-args-postgresql-brand.txt"
-
-        prep = self.run_destroy(override, [scope], handler_args_file)
-        self.assertNotEqual(prep.returncode, 0, prep.stdout + prep.stderr)
-        artifact_path = self.artifact_relative_path()
-        self.assertTrue((self.root / artifact_path).exists(), prep.stdout + prep.stderr)
-
-        second = self.run_destroy(
-            override,
-            [scope, "--confirmation-artifact", artifact_path, "--confirm", confirmation_value, "--auto-approve"],
-            handler_args_file,
-        )
-        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-
-        lines = handler_args_file.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(lines[0], "1")
-        self.assertEqual(lines[1:], [confirmation_value])
-        self.assertNotEqual(
-            confirmation_value, "destroy:uat:672172129937:eks-platform:EKS-boomi-runtime-cluster:delete-cluster"
-        )
 
 
 if __name__ == "__main__":
