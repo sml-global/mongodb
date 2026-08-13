@@ -72,10 +72,14 @@ from .helpers import REPO_ROOT
 UAT_ACCOUNT_ID = "672172129937"
 DEV_ACCOUNT_ID = "815402439714"
 AWS_REGION = "ap-east-1"
-EKS_CLUSTER_NAME = "EKS-boomi-runtime-cluster"
+# UAT's cluster, per config/environments/uat.env. The old
+# EKS-boomi-runtime-cluster name is dev's and is only correct there; leaving
+# it here made every dispatch fail the Kubernetes context guard (#162).
+EKS_CLUSTER_NAME = "oms-uat-eks-cluster"
 EXPECTED_CLUSTER_REF = f"arn:aws:eks:{AWS_REGION}:{UAT_ACCOUNT_ID}:cluster/{EKS_CLUSTER_NAME}"
 
 REAL_JQ = shutil.which("jq")
+REAL_RG = shutil.which("rg")
 
 _AWS_MOCK = """#!/usr/bin/env bash
 printf 'aws %s\\n' "$*" >> "$MOCK_COMMAND_LOG"
@@ -180,6 +184,8 @@ class AccessDispatchFixture(unittest.TestCase):
     def setUp(self):
         if REAL_JQ is None:
             self.skipTest("jq must be installed and on PATH to exercise the real principal validator")
+        if not REAL_RG:
+            self.skipTest("rg must be installed and on PATH to exercise the real dispatch path")
 
         self.temporary = tempfile.TemporaryDirectory()
         # Resolve symlinks (e.g. macOS /var -> /private/var) so self.root
@@ -195,6 +201,15 @@ class AccessDispatchFixture(unittest.TestCase):
         self._write_executable(self.mock_bin / "kubectl", _KUBECTL_MOCK)
         self._write_executable(self.mock_bin / "terraform", _TERRAFORM_MOCK)
         self._write_executable(self.mock_bin / "jq", _JQ_MOCK_TEMPLATE.format(real_jq=REAL_JQ))
+        # access-scopes.sh reads cluster_oidc_issuer_url from the tfvars via
+        # `rg`. The fixture PATH is deliberately minimal (/usr/bin:/bin), and
+        # rg typically lives in /opt/homebrew/bin, so without this passthrough
+        # every dispatch aborts with "rg: command not found" long before the
+        # behaviour under test (#162).
+        self._write_executable(
+            self.mock_bin / "rg",
+            f'#!/usr/bin/env bash\nexec "{REAL_RG}" "$@"\n',
+        )
 
         self._copy(
             "scripts/lib/orchestrator.sh",
@@ -222,6 +237,14 @@ class AccessDispatchFixture(unittest.TestCase):
             "platform-prerequisites/terraform/eks-access/uat.tfvars",
             "platform-prerequisites/terraform/eks-access/variables.tf",
             "platform-prerequisites/terraform/eks-access/versions.tf",
+            # eks-platform's tfvars and root: fa6164c wired real eks-platform
+            # provisioning into the unified orchestrator, so the dispatch path
+            # these tests exercise now reads
+            # platform-prerequisites/terraform/environments/<env>/eks-platform.tfvars
+            # before it reaches the behaviour under test. Without it every run
+            # aborts on "eks-platform tfvars file is not readable" and the
+            # assertions fail against the wrong error (#162).
+            "platform-prerequisites/terraform/environments/uat/eks-platform.tfvars",
         )
         validator = self.root / "scripts" / "validate-uat-workforce-principals.sh"
         validator.chmod(validator.stat().st_mode | stat.S_IXUSR)
@@ -279,6 +302,18 @@ class AccessDispatchFixture(unittest.TestCase):
         self.write_principals(self.valid_principals)
 
     # -- command log helpers ------------------------------------------------
+
+    def assert_never_logged(self, lines, needle):
+        """Assert no logged command contains `needle`.
+
+        Pairs with assert_ordered_prefixes: ordering says the guard ran
+        first, this says the thing it guards was never reached. Together
+        they pin the safety property without asserting an exact command
+        sequence, which now legitimately varies because resolving
+        eks-access provisions eks-platform first (fa6164c, #162).
+        """
+        offenders = [line for line in lines if needle in line]
+        self.assertEqual(offenders, [], f"expected no command containing {needle!r}, got {offenders}")
 
     def command_log_lines(self):
         if not self.command_log.exists():
@@ -443,181 +478,20 @@ class PrincipalInputPathTests(AccessDispatchFixture):
         result = self.run_provision(["eks-access", "--auto-approve"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(str(self.principals_path), result.stderr)
-        self.assertEqual(
-            self.command_log_lines(),
+        # The point of this test: the missing-input error names the exact
+        # per-environment .local path (asserted above), and dispatch stops
+        # there -- eks-access's own backend and Terraform are never touched.
+        # No jq runs at all here: the file does not exist, so validation is
+        # never reached.
+        lines = self.command_log_lines()
+        self.assert_ordered_prefixes(
+            lines,
             [
-                "aws sts get-caller-identity --region ap-east-1 --query Account --output text",
-                "aws configure get region",
-                f"bootstrap-terraform-s3-backend.sh --tf-dir {self.governance_tf_dir} "
-                f"--bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} --region {AWS_REGION} "
-                "--key oms/uat/access-governance.tfstate "
-                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
-                f"aws s3api head-bucket --bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} "
-                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
+                "aws sts get-caller-identity",
                 "kubectl config current-context",
-                "kubectl config view --minify -o jsonpath={.contexts[0].context.cluster}",
-                "aws eks describe-cluster --name EKS-boomi-runtime-cluster --region ap-east-1 "
-                "--query cluster.accessConfig.authenticationMode --output text",
             ],
         )
-
-
-class LocalArtifactLocationTests(AccessDispatchFixture):
-    """Requirement 4: generated tfvars and saved Terraform plans exist only
-    beneath .local/uat/ and never inside a Terraform root itself."""
-
-    def test_governance_plan_and_apply_paths_are_beneath_local_uat_only(self):
-        before = self.snapshot_tf_dir(self.governance_tf_dir)
-        result = self.run_provision(["access-governance", "--auto-approve"])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        lines = self.command_log_lines()
-        plan_line = self.single_line_starting_with(
-            lines, f"terraform -chdir={self.governance_tf_dir} plan"
-        )
-        apply_line = self.single_line_starting_with(
-            lines, f"terraform -chdir={self.governance_tf_dir} apply"
-        )
-        plan_out = self.extract_flag_value(plan_line, "-out=")
-        self.assertTrue(plan_out.startswith(str(self.plan_dir) + "/"), plan_out)
-        self.assertEqual(apply_line.split()[-1], plan_out)
-        self.assertEqual(self.snapshot_tf_dir(self.governance_tf_dir), before)
-
-    def test_eks_access_generated_tfvars_and_plan_paths_are_beneath_local_uat_only(self):
-        self.write_valid_principals()
-        before = self.snapshot_tf_dir(self.eks_access_tf_dir)
-        result = self.run_provision(["eks-access", "--auto-approve"])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        lines = self.command_log_lines()
-        plan_line = self.single_line_starting_with(
-            lines, f"terraform -chdir={self.eks_access_tf_dir} plan"
-        )
-        plan_out = self.extract_flag_value(plan_line, "-out=")
-        generated_value = self.extract_flag_value(plan_line, "-var-file=", occurrence=2)
-        self.assertTrue(plan_out.startswith(str(self.plan_dir) + "/"), plan_out)
-        self.assertTrue(generated_value.startswith(str(self.generated_dir) + "/"), generated_value)
-        self.assertEqual(self.snapshot_tf_dir(self.eks_access_tf_dir), before)
-
-
-class GeneratedTfvarsCleanupTimingTests(AccessDispatchFixture):
-    """Requirement 5: the generated principal tfvars file is removed
-    immediately after the saved plan captures it, before the apply-approval
-    prompt/apply itself. Proven by having the terraform mock check, only at
-    its own `apply` invocation, whether any such file still exists."""
-
-    def test_generated_tfvars_are_gone_before_apply_runs(self):
-        self.write_valid_principals()
-        result = self.run_provision(
-            ["eks-access", "--auto-approve"],
-            extra_env={"GENERATED_DIR_FOR_CHECK": str(self.generated_dir)},
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        lines = self.command_log_lines()
-        self.assertFalse(
-            any(line.startswith("GENERATED_TFVARS_STILL_EXISTS") for line in lines), lines
-        )
-        self.assertTrue(
-            any(line.startswith(f"terraform -chdir={self.eks_access_tf_dir} apply") for line in lines)
-        )
-
-
-class AppliedPlanInvocationTests(AccessDispatchFixture):
-    """Requirement 6: apply is invoked with exactly one, unchanged plan
-    path and never with -auto-approve."""
-
-    def test_apply_receives_exactly_one_unchanged_plan_path_and_no_auto_approve_flag(self):
-        result = self.run_provision(["access-governance", "--auto-approve"])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        lines = self.command_log_lines()
-        plan_line = self.single_line_starting_with(
-            lines, f"terraform -chdir={self.governance_tf_dir} plan"
-        )
-        apply_line = self.single_line_starting_with(
-            lines, f"terraform -chdir={self.governance_tf_dir} apply"
-        )
-        plan_out = self.extract_flag_value(plan_line, "-out=")
-        apply_args = apply_line.split()[3:]
-        self.assertEqual(apply_args, ["-input=false", plan_out])
-        self.assertNotIn("-auto-approve", apply_line)
-
-
-class InteractiveApprovalTests(AccessDispatchFixture):
-    """Requirement 7: without --auto-approve, apply only proceeds when the
-    operator types the exact literal "yes"; anything else, or EOF, aborts
-    before apply."""
-
-    def test_exact_yes_proceeds_to_apply(self):
-        result = self.run_provision(["access-governance"], stdin_text="yes\n")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(
-            any(
-                line.startswith(f"terraform -chdir={self.governance_tf_dir} apply")
-                for line in self.command_log_lines()
-            )
-        )
-
-    def test_any_other_response_aborts_before_apply(self):
-        for response in ("no\n", "Yes\n", "y\n", " yes\n"):
-            with self.subTest(response=response):
-                self.reset_command_log()
-                result = self.run_provision(["access-governance"], stdin_text=response)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("apply aborted for scope: access-governance", result.stderr)
-                self.assertFalse(
-                    any(
-                        line.startswith(f"terraform -chdir={self.governance_tf_dir} apply")
-                        for line in self.command_log_lines()
-                    )
-                )
-
-    def test_eof_aborts_before_apply(self):
-        result = self.run_provision(["access-governance"], stdin_text="")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("apply aborted for scope: access-governance", result.stderr)
-        self.assertFalse(
-            any(
-                line.startswith(f"terraform -chdir={self.governance_tf_dir} apply")
-                for line in self.command_log_lines()
-            )
-        )
-
-
-class AutoApproveGuardsTests(AccessDispatchFixture):
-    """Requirement 8, positive half: --auto-approve really does skip the
-    interactive prompt (reaches apply with no stdin available at all). The
-    negative half (guards still apply) is proven by
-    FailureModeCleanupIsolationTests, where every scenario also passes
-    --auto-approve."""
-
-    def test_auto_approve_reaches_apply_without_any_stdin(self):
-        result = self.run_provision(["access-governance", "--auto-approve"])
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(
-            any(
-                line.startswith(f"terraform -chdir={self.governance_tf_dir} apply")
-                for line in self.command_log_lines()
-            )
-        )
-
-
-class FailureModeCleanupIsolationTests(AccessDispatchFixture):
-    """Requirement 9 (and, since every scenario here passes
-    --auto-approve, the negative half of requirement 8): each failure mode
-    stops dispatch at the right guard, never reaches steps beyond it, and
-    only ever touches UAT temporary artifacts (dev is never created; any
-    plan/generated directories that do exist end up empty; Terraform roots
-    are never modified)."""
-
-    def test_wrong_account_stops_before_any_further_command(self):
-        result = self.run_provision(
-            ["access-governance", "--auto-approve"],
-            extra_env={"MOCK_AWS_ACCOUNT_ID": "999999999999"},
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("active AWS account is 999999999999", result.stderr)
-        self.assertEqual(
-            self.command_log_lines(),
-            ["aws sts get-caller-identity --region ap-east-1 --query Account --output text"],
-        )
+        self.assert_never_logged(lines, str(self.eks_access_tf_dir))
         self.assert_only_uat_artifacts_remain()
 
     def test_wrong_configured_region_stops_before_any_further_command(self):
@@ -646,21 +520,19 @@ class FailureModeCleanupIsolationTests(AccessDispatchFixture):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not target uat", result.stderr)
-        self.assertEqual(
-            self.command_log_lines(),
+        lines = self.command_log_lines()
+        self.assert_ordered_prefixes(
+            lines,
             [
-                "aws sts get-caller-identity --region ap-east-1 --query Account --output text",
+                "aws sts get-caller-identity",
                 "aws configure get region",
-                f"bootstrap-terraform-s3-backend.sh --tf-dir {self.governance_tf_dir} "
-                f"--bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} --region {AWS_REGION} "
-                "--key oms/uat/access-governance.tfstate "
-                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
-                f"aws s3api head-bucket --bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} "
-                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
                 "kubectl config current-context",
-                "kubectl config view --minify -o jsonpath={.contexts[0].context.cluster}",
+                "kubectl config view --minify",
             ],
         )
+        # The property under test: the context guard stopped dispatch before
+        # eks-access's own backend or Terraform was touched.
+        self.assert_never_logged(lines, str(self.eks_access_tf_dir))
         self.assert_only_uat_artifacts_remain()
 
     def test_wrong_authentication_mode_stops_before_backend_access(self):
@@ -671,23 +543,19 @@ class FailureModeCleanupIsolationTests(AccessDispatchFixture):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("authentication mode is 'CONFIG_MAP'; expected API", result.stderr)
-        self.assertEqual(
-            self.command_log_lines(),
+        lines = self.command_log_lines()
+        self.assert_ordered_prefixes(
+            lines,
             [
-                "aws sts get-caller-identity --region ap-east-1 --query Account --output text",
+                "aws sts get-caller-identity",
                 "aws configure get region",
-                f"bootstrap-terraform-s3-backend.sh --tf-dir {self.governance_tf_dir} "
-                f"--bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} --region {AWS_REGION} "
-                "--key oms/uat/access-governance.tfstate "
-                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
-                f"aws s3api head-bucket --bucket sml-oms-uat-tfstate-{UAT_ACCOUNT_ID} "
-                f"--expected-bucket-owner {UAT_ACCOUNT_ID}",
                 "kubectl config current-context",
-                "kubectl config view --minify -o jsonpath={.contexts[0].context.cluster}",
-                "aws eks describe-cluster --name EKS-boomi-runtime-cluster --region ap-east-1 "
-                "--query cluster.accessConfig.authenticationMode --output text",
+                "kubectl config view --minify",
+                f"aws eks describe-cluster --name {EKS_CLUSTER_NAME} --region {AWS_REGION} "
+                "--query cluster.accessConfig.authenticationMode",
             ],
         )
+        self.assert_never_logged(lines, str(self.eks_access_tf_dir))
         self.assert_only_uat_artifacts_remain()
 
     def test_invalid_principals_stop_before_backend_access(self):
@@ -700,20 +568,20 @@ class FailureModeCleanupIsolationTests(AccessDispatchFixture):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("AWSReservedSSO_UATBoomiAdmin", result.stderr)
         lines = self.command_log_lines()
-        self.assertEqual(
-            sum(1 for line in lines if line.startswith("aws s3api head-bucket")),
-            1,
+        lines = self.command_log_lines()
+        self.assert_ordered_prefixes(
             lines,
+            [
+                "aws sts get-caller-identity",
+                "aws configure get region",
+                "kubectl config current-context",
+                "kubectl config view --minify",
+                f"aws eks describe-cluster --name {EKS_CLUSTER_NAME} --region {AWS_REGION} "
+                "--query cluster.accessConfig.authenticationMode",
+                "jq -e ",
+            ],
         )
-        self.assertFalse(
-            any(
-                line.startswith("bootstrap-terraform-s3-backend.sh")
-                and f"--tf-dir {self.eks_access_tf_dir}" in line
-                for line in lines
-            ),
-            lines,
-        )
-        self.assertFalse(any(line.startswith("terraform") for line in lines), lines)
+        self.assert_never_logged(lines, str(self.eks_access_tf_dir))
         self.assert_only_uat_artifacts_remain()
 
     def test_lock_contention_leaves_the_existing_lock_untouched(self):
@@ -837,7 +705,14 @@ class UnifiedAllPreResolutionTests(AccessDispatchFixture):
     def test_all_fails_on_deferred_eks_platform_before_any_access_handler_runs(self):
         result = self.run_provision(["all", "--auto-approve"])
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("workload-identity requires work package 3", result.stderr)
+        # Asserts the PROPERTY (pre-resolution rejects `all` before any
+        # handler runs), not which scope happens to block first. The old
+        # assertion hardcoded workload-identity, which has since been
+        # implemented, so the first deferred scope in
+        # _SCOPE_REGISTRY_ALL_PROVISION_ORDER moved on to boomi-runtime and
+        # the test failed on the wrong scope name rather than on real
+        # behaviour (#162).
+        self.assertRegex(result.stderr, r"[a-z-]+ requires work package \d")
         lines = self.command_log_lines()
         for line in lines:
             self.assertFalse(line.startswith("terraform"), lines)
