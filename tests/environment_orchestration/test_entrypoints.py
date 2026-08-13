@@ -72,6 +72,7 @@ from pathlib import Path
 from .helpers import REPO_ROOT
 
 REAL_JQ = shutil.which("jq")
+REAL_RG = shutil.which("rg")
 
 # ---------------------------------------------------------------------------
 # Task 4 Step 1: representative legacy argument vectors (verbatim from the
@@ -899,7 +900,7 @@ if [[ "$1" == "config" && "$2" == "current-context" ]]; then
     exit "${MOCK_KUBECTL_CONTEXT_EXIT:-0}"
 fi
 if [[ "$1" == "config" && "$2" == "view" ]]; then
-    printf '%s\\n' "${MOCK_KUBECTL_CLUSTER_REF:-arn:aws:eks:ap-east-1:672172129937:cluster/EKS-boomi-runtime-cluster}"
+    printf '%s\\n' "${MOCK_KUBECTL_CLUSTER_REF:-arn:aws:eks:ap-east-1:672172129937:cluster/oms-uat-eks-cluster}"
     exit "${MOCK_KUBECTL_VIEW_EXIT:-0}"
 fi
 exit 97
@@ -971,6 +972,11 @@ class UatEksAccessEntrypointFixture(_BaseFixture):
             "platform-prerequisites/terraform/eks-access/uat.tfvars",
             "platform-prerequisites/terraform/eks-access/variables.tf",
             "platform-prerequisites/terraform/eks-access/versions.tf",
+            # See the note in test_access_dispatch.py: fa6164c wired real
+            # eks-platform provisioning into the unified orchestrator, so an
+            # eks-access dispatch now reads this tfvars before reaching the
+            # behaviour under test (#162).
+            "platform-prerequisites/terraform/environments/uat/eks-platform.tfvars",
         )
 
         self._write_executable(self.mock_bin / "aws", _UAT_AWS_MOCK)
@@ -979,6 +985,13 @@ class UatEksAccessEntrypointFixture(_BaseFixture):
         self._write_executable(
             self.mock_bin / "jq", _UAT_JQ_MOCK_TEMPLATE.format(real_jq=REAL_JQ)
         )
+        # access-scopes.sh reads cluster_oidc_issuer_url via `rg`, which is
+        # not on the fixture's minimal PATH (#162).
+        if REAL_RG:
+            self._write_executable(
+                self.mock_bin / "rg",
+                f'#!/usr/bin/env bash\nexec "{REAL_RG}" "$@"\n',
+            )
         self._write_executable(
             self.root / "scripts" / "bootstrap-terraform-s3-backend.sh",
             _UAT_BACKEND_BOOTSTRAP_STUB,
@@ -1046,7 +1059,16 @@ class UatEksAccessBypassTests(UatEksAccessEntrypointFixture):
             ),
             lines,
         )
-        self.assertFalse(any(line.startswith("terraform ") for line in lines), lines)
+        # The property this test is named for: EKS-ACCESS's own Terraform is
+        # never reached. eks-platform's Terraform legitimately runs first --
+        # resolving eks-access provisions eks-platform (fa6164c) -- so a
+        # blanket "no terraform ran" assertion no longer describes the
+        # guarantee, only the old dispatch shape (#162).
+        eks_access_tf_dir = str(
+            self.root / "platform-prerequisites" / "terraform" / "eks-access"
+        )
+        offending = [line for line in lines if eks_access_tf_dir in line]
+        self.assertEqual(offending, [], f"eks-access Terraform was reached: {offending}")
 
         self.assertFalse((self.root / ".local" / "dev").exists())
         if self.plan_dir.exists():
