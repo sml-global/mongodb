@@ -206,38 +206,92 @@ acting against the wrong account or cluster.
 > confusing, and credential-leaking setup. Re-running the steps is the
 > intended workflow.
 
-Substitute the target environment throughout: UAT is account `672172129937`
-with cluster `oms-uat-eks-cluster`; Production is account `632674123947` with
-cluster `oms-prod-eks-cluster`.
+Set the two variables below once per session; every command after them is
+environment-agnostic, so nothing has to be hand-edited (and nothing can be
+half-edited, which is how a "UAT" command ends up pointed at Production).
+
+| Environment | `ACCOUNT_ID` | `CLUSTER` |
+|---|---|---|
+| UAT | `672172129937` | `oms-uat-eks-cluster` |
+| Production | `632674123947` | `oms-prod-eks-cluster` |
 
 ```bash
+# 0. Choose the target environment. Everything below reads these two.
+ACCOUNT_ID=672172129937          # UAT; use 632674123947 for Production
+CLUSTER=oms-uat-eks-cluster      # UAT; use oms-prod-eks-cluster for Production
+
 # 1. Authenticate (opens a browser; re-run when the SSO session expires)
-aws sso login --profile AdministratorAccess-632674123947
+aws sso login --profile "AdministratorAccess-${ACCOUNT_ID}"
 
 # 2. Export those credentials into the shell as the *default* identity, and
 #    clear AWS_PROFILE — the orchestrator's
 #    reject_execution_environment_overrides guard blocks AWS_PROFILE as an
 #    environment variable and reads the default AWS CLI identity instead.
-eval "$(aws configure export-credentials --profile AdministratorAccess-632674123947 --format env)"
+eval "$(aws configure export-credentials --profile "AdministratorAccess-${ACCOUNT_ID}" --format env)"
 unset AWS_PROFILE
 
 # 3. Verify the identity actually resolves to the target account before
-#    running anything destructive.
-aws sts get-caller-identity      # expect "Account": "632674123947"
+#    running anything destructive. This COMPARES rather than just printing:
+#    a printed account id is something a tired operator skims past, and
+#    "it looked right" is how a prod command gets run from a uat session.
+ACTIVE_ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+if [ "$ACTIVE_ACCOUNT" = "$ACCOUNT_ID" ]; then
+  echo "OK: authenticated to $ACTIVE_ACCOUNT (target $ACCOUNT_ID)"
+else
+  echo "STOP: authenticated to $ACTIVE_ACCOUNT but target is $ACCOUNT_ID" >&2
+fi
 
 # 4. Point kubectl at that environment's cluster. The context guard compares
 #    the current context's resolved cluster ARN against the environment
 #    contract's expected ARN and fails closed on mismatch.
-aws eks update-kubeconfig --name oms-prod-eks-cluster --region ap-east-1 --alias oms-prod-eks-cluster
-kubectl config use-context oms-prod-eks-cluster
+#
+#    SKIP THIS STEP IF THE CLUSTER DOES NOT EXIST YET — when you are about to
+#    provision `eks-platform` for the first time there is no cluster to point
+#    at, and update-kubeconfig fails with ResourceNotFoundException. Run
+#    steps 4–5 after `eks-platform` completes; scopes that need a cluster
+#    (`workload-identity`, `platform-controllers`, `mongodb`, destroys) are
+#    the ones the context guard gates.
+aws eks update-kubeconfig --name "$CLUSTER" --region ap-east-1 --alias "$CLUSTER"
+kubectl config use-context "$CLUSTER"
 
-# 5. Verify the context.
-kubectl config current-context   # expect oms-prod-eks-cluster
+# 5. Verify the context, again by comparison rather than by eye.
+ACTIVE_CONTEXT="$(kubectl config current-context)"
+if [ "$ACTIVE_CONTEXT" = "$CLUSTER" ]; then
+  echo "OK: kubectl context is $ACTIVE_CONTEXT"
+else
+  echo "STOP: kubectl context is $ACTIVE_CONTEXT but target is $CLUSTER" >&2
+fi
 ```
+
+### Re-check before anything destructive
+
+Session state drifts: SSO expires, another window repoints `kubectl`, a
+long gap passes between provisioning and teardown. Before a destroy — or
+any command you would not want aimed at the wrong account — re-run this in
+the working shell. It reports both facts together and names the mismatch
+rather than leaving you to compare ids by eye:
+
+```bash
+printf 'target      : %s / %s\n' "$ACCOUNT_ID" "$CLUSTER"
+printf 'aws account : %s\n' "$(aws sts get-caller-identity --query Account --output text 2>&1)"
+printf 'kube context: %s\n' "$(kubectl config current-context 2>&1)"
+```
+
+All three must agree before you proceed. If `aws account` errors or is
+empty the session has expired — re-run steps 1–3. If `kube context`
+disagrees, re-run steps 4–5. The orchestrator enforces both of these
+itself and fails closed, so this is about finding out *before* a command
+half-runs, not about replacing the guards.
+
+**Every command in the rest of this section must be run in that same shell.**
+The credentials from step 2 live only in it — a command run in another
+terminal, or prefixed by its own `eval` in a different shell, does not
+inherit them.
 
 Skipping step 2 surfaces as `unable to read the active AWS account with sts
 get-caller-identity`, or a `reject_execution_environment_overrides` rejection
-if `AWS_PROFILE` is still set. Skipping step 4 surfaces as:
+if `AWS_PROFILE` is still set. Skipping step 4 (when the cluster *does*
+exist) surfaces as:
 
 ```
 ERROR: current Kubernetes context '...oms-uat-eks-cluster' does not target prod; expected 'arn:aws:eks:ap-east-1:632674123947:cluster/oms-prod-eks-cluster'
@@ -255,6 +309,14 @@ one before it (substitute `uat` for `prod` to target Production):
 bash scripts/provision.sh --env uat backend --auto-approve
 bash scripts/provision.sh --env uat access-governance --auto-approve
 bash scripts/provision.sh --env uat eks-platform --auto-approve
+
+# The cluster exists only now, so this is the point at which session-setup
+# steps 4-5 become possible. Everything below is gated by the Kubernetes
+# context guard and will fail closed without them.
+aws eks update-kubeconfig --name "$CLUSTER" --region ap-east-1 --alias "$CLUSTER"
+kubectl config use-context "$CLUSTER"
+kubectl config current-context   # expect $CLUSTER
+
 bash scripts/provision.sh --env uat workload-identity --auto-approve
 bash scripts/provision.sh --env uat platform-controllers --auto-approve
 ```
