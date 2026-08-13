@@ -103,28 +103,14 @@ mongodb_internal_mongodb_pre_destroy_guard() {
         ;;
     esac
 
-    # Protection-state checks
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$pvc_protection_enabled" in
-        enabled|true) ;;
-        *)
-          mongodb_internal_guard_error "mongodb: PVC deletion protection is not enabled"
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$pbm_backup_enabled" in
-        enabled|true|absent) ;;
-        *)
-          mongodb_internal_guard_error "mongodb: PBM backup is not enabled"
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
+    # ---- Protection-state observations ----
+    #
+    # Deliberately NOT preconditions. Requiring protections to still be ON
+    # is what deadlocked a partially-completed teardown in #159: it blocks
+    # the operator from finishing the destroy they already started, while
+    # adding no safety once a human has seen the real enumerated resource
+    # list and typed yes. The values are still read, still hashed into the
+    # guard digest, and still recorded in the durable evidence record.
   fi
 
   # ---- Step 3: derive canonical identity from validated platform contract ----
@@ -202,25 +188,10 @@ mongodb_internal_mongodb_access_pre_destroy_guard() {
       esac
     done <<< "$observations"
 
-    case "$pvc_protection_enabled" in
-      enabled|true) ;;
-      *)
-        mongodb_internal_guard_error "mongodb-access: PVC deletion protection is not enabled"
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-        ;;
-    esac
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$pbm_backup_enabled" in
-        enabled|true|absent) ;;
-        *)
-          mongodb_internal_guard_error "mongodb-access: PBM backup is not enabled"
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
+    # ---- Protection-state observations ----
+    #
+    # Deliberately NOT preconditions (see the note on the mongodb guard
+    # above and #159): observed, digested and recorded, never required.
   fi
 
   # ---- Step 3: derive canonical identity from validated platform contract ----

@@ -19,7 +19,9 @@
 #
 # Each guard:
 #   1. Reads observations from the seam
-#   2. Validates protection state and dependent-scope absence
+#   2. Validates dependent-scope absence (destroy ordering). Protection
+#      state is OBSERVED and recorded, never required -- see the extended
+#      note at the first guard below and #159.
 #   3. Derives canonical resource identity from the validated platform_contract
 #      (in-memory env vars; never from live AWS lookup or evidence artifact)
 #   4. Computes a deterministic SHA-256 digest over the canonical observations
@@ -40,8 +42,9 @@
 #
 # Identity: cluster ARN (e.g. arn:aws:eks:ap-east-1:672172129937:cluster/...)
 # Dependents that must be absent: workload-identity, platform-controllers
-# Protection checks: EKS deletion protection, EFS prevent_destroy,
-#   backup retention >= 35 days, vault lock state
+# Protection state observed (recorded in evidence, never a precondition):
+#   EKS deletion protection, EFS prevent_destroy, backup retention,
+#   vault lock state
 
 eks_internal_eks_platform_pre_destroy_guard() {
   local scope="eks-platform"
@@ -107,73 +110,24 @@ eks_internal_eks_platform_pre_destroy_guard() {
       esac
     fi
 
-    # Protection-state checks
+    # ---- Protection-state observations ----
     #
-    # eks_deletion_protection may be 'disabled' here even on a fully
-    # intended destroy, in exactly one case: an operator has already run
-    # --confirm-disable-deletion-protection (validated against
-    # EKS_CLUSTER_NAME in orchestrator.sh, carried here as
-    # UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION) -- either in this same
-    # invocation (the disable step runs inside destroy_eks_platform_scope,
-    # which this guard gates access to) or in an earlier, interrupted
-    # destroy attempt that already pushed deletionProtection=false live
-    # before failing on something else (observed live in #142's UAT
-    # teardown). Only eks-platform's own guard honors this -- workload-
-    # identity's and platform-controllers' guards below still require
-    # deletion_protection enabled unconditionally, since disabling it is
-    # only ever confirmed for the eks-platform scope itself.
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$eks_deletion_protection" in
-        enabled|true) ;;
-        *)
-          if [[ -n "${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION:-}" ]]; then
-            :
-          else
-            printf 'ERROR: %s\n' "eks-platform: EKS deletion protection is not enabled" >&2
-            guard_status="FAIL"
-            summary_code="PROTECTION_ABSENT"
-          fi
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$efs_protection" in
-        enabled|true) ;;
-        *)
-          printf 'ERROR: %s\n' "eks-platform: EFS prevent_destroy protection is not enabled" >&2
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$vault_lock_state" in
-        locked|effective|absent) ;;
-        *)
-          printf 'ERROR: %s\n' "eks-platform: backup vault lock is not effective" >&2
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      local minimum_retention_days="35"
-      if [[ -n "${UAT_MIN_BACKUP_RETENTION_DAYS:-}" ]]; then
-        minimum_retention_days="${UAT_MIN_BACKUP_RETENTION_DAYS}"
-      fi
-      if [[ ! "$backup_retention_days" =~ ^[0-9]+$ ]]; then
-        printf 'ERROR: %s\n' "eks-platform: backup retention days is not numeric" >&2
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-      elif (( backup_retention_days < minimum_retention_days )); then
-        printf 'ERROR: %s\n' "eks-platform: backup retention (${backup_retention_days}d) is below required minimum (${minimum_retention_days}d)" >&2
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-      fi
-    fi
+    # Deliberately NOT preconditions.
+    #
+    # These four observations (EKS deletionProtection, EFS prevent_destroy,
+    # backup retention, vault lock) used to FAIL the guard unless every
+    # protection was still fully in place. That inverted rail is what
+    # deadlocked #159: a partially-completed teardown leaves protections
+    # already lifted and resources already gone, so the guard refused to
+    # let the operator finish the very destroy they had already started,
+    # and the only way out was a break-glass script.
+    #
+    # Once a human has been shown the real enumerated resource list and
+    # has typed yes, requiring protections to still be ON adds no safety
+    # whatsoever -- it only decides whether the operator is allowed to
+    # finish. The values are still read, still hashed into the guard
+    # digest, and still land in the durable evidence record, so the
+    # observed state at destroy time remains auditable.
   fi
 
   # ---- Step 3: derive canonical identity from validated platform_contract ----
@@ -220,8 +174,9 @@ ${observations}"
 # Identity: cluster ARN + /workload-identity
 # No dependent-absence check for this guard (it is itself a dependent of
 # eks-platform; platform-controllers and eks-platform must be destroyed later)
-# Protection checks: EKS deletion protection, EFS prevent_destroy,
-#   backup retention >= 35 days, vault lock state
+# Protection state observed (recorded in evidence, never a precondition):
+#   EKS deletion protection, EFS prevent_destroy, backup retention,
+#   vault lock state
 
 eks_internal_workload_identity_pre_destroy_guard() {
   local scope="workload-identity"
@@ -262,53 +217,24 @@ eks_internal_workload_identity_pre_destroy_guard() {
       esac
     done <<< "$observations"
 
-    # Protection-state checks
-    case "$eks_deletion_protection" in
-      enabled|true) ;;
-      *)
-        printf 'ERROR: %s\n' "workload-identity: EKS deletion protection is not enabled" >&2
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-        ;;
-    esac
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$efs_protection" in
-        enabled|true) ;;
-        *)
-          printf 'ERROR: %s\n' "workload-identity: EFS prevent_destroy protection is not enabled" >&2
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$vault_lock_state" in
-        locked|effective|absent) ;;
-        *)
-          printf 'ERROR: %s\n' "workload-identity: backup vault lock is not effective" >&2
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      local minimum_retention_days="35"
-      if [[ -n "${UAT_MIN_BACKUP_RETENTION_DAYS:-}" ]]; then
-        minimum_retention_days="${UAT_MIN_BACKUP_RETENTION_DAYS}"
-      fi
-      if [[ ! "$backup_retention_days" =~ ^[0-9]+$ ]]; then
-        printf 'ERROR: %s\n' "workload-identity: backup retention days is not numeric" >&2
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-      elif (( backup_retention_days < minimum_retention_days )); then
-        printf 'ERROR: %s\n' "workload-identity: backup retention (${backup_retention_days}d) is below required minimum (${minimum_retention_days}d)" >&2
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-      fi
-    fi
+    # ---- Protection-state observations ----
+    #
+    # Deliberately NOT preconditions.
+    #
+    # These four observations (EKS deletionProtection, EFS prevent_destroy,
+    # backup retention, vault lock) used to FAIL the guard unless every
+    # protection was still fully in place. That inverted rail is what
+    # deadlocked #159: a partially-completed teardown leaves protections
+    # already lifted and resources already gone, so the guard refused to
+    # let the operator finish the very destroy they had already started,
+    # and the only way out was a break-glass script.
+    #
+    # Once a human has been shown the real enumerated resource list and
+    # has typed yes, requiring protections to still be ON adds no safety
+    # whatsoever -- it only decides whether the operator is allowed to
+    # finish. The values are still read, still hashed into the guard
+    # digest, and still land in the durable evidence record, so the
+    # observed state at destroy time remains auditable.
   fi
 
   # ---- Step 3: derive canonical identity from validated platform_contract ----
@@ -355,8 +281,9 @@ ${observations}"
 # Identity: cluster ARN + /platform-controllers
 # No dependent-absence check for this guard (it is itself a dependent of
 # eks-platform; eks-platform must be destroyed later)
-# Protection checks: EKS deletion protection, EFS prevent_destroy,
-#   backup retention >= 35 days, vault lock state
+# Protection state observed (recorded in evidence, never a precondition):
+#   EKS deletion protection, EFS prevent_destroy, backup retention,
+#   vault lock state
 
 eks_internal_platform_controllers_pre_destroy_guard() {
   local scope="platform-controllers"
@@ -397,53 +324,24 @@ eks_internal_platform_controllers_pre_destroy_guard() {
       esac
     done <<< "$observations"
 
-    # Protection-state checks
-    case "$eks_deletion_protection" in
-      enabled|true) ;;
-      *)
-        printf 'ERROR: %s\n' "platform-controllers: EKS deletion protection is not enabled" >&2
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-        ;;
-    esac
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$efs_protection" in
-        enabled|true) ;;
-        *)
-          printf 'ERROR: %s\n' "platform-controllers: EFS prevent_destroy protection is not enabled" >&2
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$vault_lock_state" in
-        locked|effective|absent) ;;
-        *)
-          printf 'ERROR: %s\n' "platform-controllers: backup vault lock is not effective" >&2
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      local minimum_retention_days="35"
-      if [[ -n "${UAT_MIN_BACKUP_RETENTION_DAYS:-}" ]]; then
-        minimum_retention_days="${UAT_MIN_BACKUP_RETENTION_DAYS}"
-      fi
-      if [[ ! "$backup_retention_days" =~ ^[0-9]+$ ]]; then
-        printf 'ERROR: %s\n' "platform-controllers: backup retention days is not numeric" >&2
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-      elif (( backup_retention_days < minimum_retention_days )); then
-        printf 'ERROR: %s\n' "platform-controllers: backup retention (${backup_retention_days}d) is below required minimum (${minimum_retention_days}d)" >&2
-        guard_status="FAIL"
-        summary_code="PROTECTION_ABSENT"
-      fi
-    fi
+    # ---- Protection-state observations ----
+    #
+    # Deliberately NOT preconditions.
+    #
+    # These four observations (EKS deletionProtection, EFS prevent_destroy,
+    # backup retention, vault lock) used to FAIL the guard unless every
+    # protection was still fully in place. That inverted rail is what
+    # deadlocked #159: a partially-completed teardown leaves protections
+    # already lifted and resources already gone, so the guard refused to
+    # let the operator finish the very destroy they had already started,
+    # and the only way out was a break-glass script.
+    #
+    # Once a human has been shown the real enumerated resource list and
+    # has typed yes, requiring protections to still be ON adds no safety
+    # whatsoever -- it only decides whether the operator is allowed to
+    # finish. The values are still read, still hashed into the guard
+    # digest, and still land in the durable evidence record, so the
+    # observed state at destroy time remains auditable.
   fi
 
   # ---- Step 3: derive canonical identity from validated platform_contract ----

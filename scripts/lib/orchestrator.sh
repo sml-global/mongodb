@@ -26,10 +26,13 @@
 #   - `require_environment_mutation_authorized`, the sole environment-
 #     mutation gate (reads PROMOTION_MODE from the loaded contract).
 #   - Unified provision/destroy/verify option parsing and dispatch.
-#   - The full two-pass destroy confirmation-artifact + guard-evidence
-#     protocol, implemented via scripts/lib/confirmation-artifact.py and
-#     scripts/lib/destroy-evidence.py (both standard-library-only Python,
-#     invoked only through their small CLIs -- never imported as a package).
+#   - The single-pass interactive destroy gate: enumerate the real
+#     resources, run the read-only pre-destroy guards, write the durable
+#     guard-evidence record via scripts/lib/destroy-evidence.py (standard-
+#     library-only Python, invoked only through its small CLI -- never
+#     imported as a package), then drain the terminal input buffer and
+#     require the operator to type `yes` on /dev/tty. It replaced the
+#     former two-pass copy-paste confirmation-artifact protocol.
 #   - `record_pre_destroy_guard_result`, the five-argument foundation
 #     callback that is the only channel through which a pre-destroy guard
 #     wrapper may report a result.
@@ -535,15 +538,18 @@ _orchestrator_run_verify() {
 # Unified destroy: confirmation-requirement map
 # ---------------------------------------------------------------------------
 #
-# The immutable, foundation-owned closed confirmation-requirement map.
-# Populates REQUIRED_CONFIRMATION_SCOPES and REQUIRED_CONFIRMATIONS (globals,
-# Bash 3.2 has no namerefs) in the exact given order for exactly the
-# persistent scopes this map covers that are present in that order. The
-# PostgreSQL final-snapshot identifier is derived from the given timestamp
-# (the confirmation artifact's own immutable created_at on every
-# recomputation, so the value is byte-identical on the preparation pass and
-# every later validation of the same artifact) rather than the wall clock at
-# validation time.
+# The immutable, foundation-owned closed map of the destructive acts a
+# destroy of each persistent scope performs. Populates
+# REQUIRED_CONFIRMATION_SCOPES and REQUIRED_CONFIRMATIONS (globals; Bash 3.2
+# has no namerefs) in the exact given order.
+#
+# These are no longer values an operator has to retype: since the gate
+# became a single interactive pass, they are the human-readable "this is
+# what will actually happen" lines printed immediately above the typed-yes
+# prompt (and, for PostgreSQL, they name the exact final-snapshot
+# identifier the destroy will create). The identifier is still derived from
+# the operation's own created_at rather than the wall clock, so what is
+# displayed is what is recorded in the evidence record.
 
 REQUIRED_CONFIRMATION_SCOPES=()
 REQUIRED_CONFIRMATIONS=()
@@ -819,11 +825,6 @@ _orchestrator_run_destroy() {
   shift || true
 
   local auto_approve="false"
-  local confirmation_artifact_given="false"
-  local confirmation_artifact_path=""
-  local -a cli_confirmations=()
-  local -a confirm_remove_protected=()
-  local confirm_disable_deletion_protection=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -831,50 +832,25 @@ _orchestrator_run_destroy() {
         auto_approve="true"
         shift
         ;;
-      --confirm-disable-deletion-protection)
-        if [[ $# -lt 2 || -z "${2:-}" ]]; then
-          _orchestrator_error "--confirm-disable-deletion-protection requires a value"
-          return 1
-        fi
-        if [[ -n "$confirm_disable_deletion_protection" ]]; then
-          _orchestrator_error "--confirm-disable-deletion-protection may be given at most once"
-          return 1
-        fi
-        confirm_disable_deletion_protection="$2"
-        shift 2
-        ;;
-      --confirm-remove-protected)
-        if [[ $# -lt 2 || -z "${2:-}" ]]; then
-          _orchestrator_error "--confirm-remove-protected requires a value"
-          return 1
-        fi
-        confirm_remove_protected+=("$2")
-        shift 2
-        ;;
-      --confirmation-artifact)
-        if [[ "$confirmation_artifact_given" == "true" ]]; then
-          _orchestrator_error "--confirmation-artifact may be given at most once"
-          return 1
-        fi
-        if [[ $# -lt 2 || -z "${2:-}" ]]; then
-          _orchestrator_error "--confirmation-artifact requires a value"
-          return 1
-        fi
-        confirmation_artifact_path="$2"
-        confirmation_artifact_given="true"
-        shift 2
-        ;;
-      --confirmation-artifact=*)
-        _orchestrator_error "--confirmation-artifact must be given as two separate arguments, not --confirmation-artifact=<path>"
+      # ----------------------------------------------------------------
+      # Retired two-pass flags.
+      #
+      # These are rejected loudly rather than ignored: a stale runbook,
+      # shell-history entry, or allow-list entry that still carries them
+      # must fail visibly, never "succeed" with a silently different
+      # meaning than the operator expects.
+      # ----------------------------------------------------------------
+      --confirmation-artifact|--confirmation-artifact=*|--confirm|--confirm=*)
+        _orchestrator_error "${1%%=*} has been removed: destroy is now a single interactive pass that enumerates the real resources and asks you to type yes at the terminal. Re-run without it."
         return 1
         ;;
-      --confirm)
-        if [[ $# -lt 2 || -z "${2:-}" ]]; then
-          _orchestrator_error "--confirm requires a value"
-          return 1
-        fi
-        cli_confirmations+=("$2")
-        shift 2
+      --confirm-remove-protected|--confirm-remove-protected=*)
+        _orchestrator_error "--confirm-remove-protected has been removed: Terraform lifecycle.prevent_destroy is now lifted automatically, and only for resources that are actually present and actually protected, after you type yes. Re-run without it."
+        return 1
+        ;;
+      --confirm-disable-deletion-protection|--confirm-disable-deletion-protection=*)
+        _orchestrator_error "--confirm-disable-deletion-protection has been removed: live EKS deletion protection is now disabled automatically, and only when the cluster still exists and still has it enabled, after you type yes. Re-run without it."
+        return 1
         ;;
       *)
         _orchestrator_error "unknown unified destroy argument: $1"
@@ -882,38 +858,6 @@ _orchestrator_run_destroy() {
         ;;
     esac
   done
-
-  local -a seen_confirmations=()
-  local candidate_confirmation
-  for candidate_confirmation in "${cli_confirmations[@]:-}"; do
-    [[ -n "$candidate_confirmation" ]] || continue
-    if _orchestrator_in_list "$candidate_confirmation" "${seen_confirmations[@]:-}"; then
-      _orchestrator_error "duplicate --confirm value: ${candidate_confirmation}"
-      return 1
-    fi
-    seen_confirmations+=("$candidate_confirmation")
-  done
-
-  local -a seen_remove_protected=()
-  local candidate_remove_protected
-  for candidate_remove_protected in "${confirm_remove_protected[@]:-}"; do
-    [[ -n "$candidate_remove_protected" ]] || continue
-    if _orchestrator_in_list "$candidate_remove_protected" "${seen_remove_protected[@]:-}"; then
-      _orchestrator_error "duplicate --confirm-remove-protected value: ${candidate_remove_protected}"
-      return 1
-    fi
-    seen_remove_protected+=("$candidate_remove_protected")
-  done
-
-  # --confirm-disable-deletion-protection must name the exact cluster it
-  # will affect (the same "spell out what you're unprotecting" pattern as
-  # --confirm-remove-protected), validated against the immutable
-  # environment contract's EKS_CLUSTER_NAME -- never inferred, never a
-  # bare boolean flag.
-  if [[ -n "$confirm_disable_deletion_protection" && "$confirm_disable_deletion_protection" != "$EKS_CLUSTER_NAME" ]]; then
-    _orchestrator_error "--confirm-disable-deletion-protection value (${confirm_disable_deletion_protection}) does not match this environment's cluster name (${EKS_CLUSTER_NAME})"
-    return 1
-  fi
 
   require_environment_mutation_authorized "$environment_name" || return 1
 
@@ -967,10 +911,10 @@ _orchestrator_run_destroy() {
   # `backend` and `access-governance` are the only ordinary destroy targets
   # with no pre-destroy guard at all (their destroy handlers are hard-
   # blocked, not a guarded conditional destroy; see scope-registry.sh). For
-  # exactly that case there is nothing for the confirmation-artifact/guard-
-  # evidence protocol to gate, and the evidence schema requires a non-empty
-  # guard_results array, so this narrow case dispatches its (always-failing)
-  # handler directly without the two-pass protocol.
+  # exactly that case there is nothing for the gate to gate -- the handler
+  # always refuses -- and the evidence schema requires a non-empty
+  # guard_results array, so this narrow case dispatches its (always-
+  # failing) handler directly.
   if [[ "${#guardable_steps[@]}" -eq 0 ]]; then
     initialize_orchestration_paths "$environment_name" || return 1
     acquire_orchestration_lock || return 1
@@ -984,57 +928,150 @@ _orchestrator_run_destroy() {
     return $?
   fi
 
-  if [[ "$confirmation_artifact_given" == "false" ]]; then
-    _orchestrator_destroy_preparation_pass \
-      "$environment_name" "$scope" "$expected_account_id" "${#cli_confirmations[@]}" "${order[@]}"
-    return $?
-  fi
-
-  # UNIFIED_CONFIRM_REMOVE_PROTECTED carries --confirm-remove-protected
-  # resource addresses to destroy handlers as a newline-separated env var,
-  # mirroring the UNIFIED_AUTO_APPROVE pattern below. It is exported here
-  # (not inside _orchestrator_destroy_second_pass) because this is the
-  # single call site for both the with-artifact and preparation paths, and
-  # the flag only ever matters once dispatch actually runs.
-  local remove_protected_newline=""
-  local remove_protected_item
-  for remove_protected_item in "${confirm_remove_protected[@]:-}"; do
-    [[ -n "$remove_protected_item" ]] || continue
-    remove_protected_newline+="${remove_protected_item}"$'\n'
-  done
-  export UNIFIED_CONFIRM_REMOVE_PROTECTED="$remove_protected_newline"
-
-  # UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION carries the already-
-  # validated (matches EKS_CLUSTER_NAME) --confirm-disable-deletion-
-  # protection value through to destroy_eks_platform_scope. Empty means
-  # "not confirmed" -- the flag was never given.
-  export UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION="$confirm_disable_deletion_protection"
-
-  _orchestrator_destroy_second_pass \
-    "$environment_name" "$scope" "$expected_account_id" "$auto_approve" \
-    "$confirmation_artifact_path" "${#cli_confirmations[@]}" "${order[@]}" -- "${cli_confirmations[@]:-}"
+  _orchestrator_destroy_single_pass \
+    "$environment_name" "$scope" "$expected_account_id" "$auto_approve" "${order[@]}"
 }
 
-_orchestrator_destroy_preparation_pass() {
-  local environment_name="$1"
-  local scope="$2"
-  local expected_account_id="$3"
-  local cli_confirmation_count="$4"
-  shift 4
-  local -a order=("$@")
+# ---------------------------------------------------------------------------
+# Interactive typed-yes gate
+# ---------------------------------------------------------------------------
+#
+# Reads the operator's answer from the controlling terminal (/dev/tty on a
+# dedicated file descriptor), never from stdin.
+#
+# Two properties this exists for, both learned the hard way:
+#
+#   1. DRAIN BEFORE READ. Operators paste multi-line blocks. Pasting
+#
+#          scripts/destroy.sh --env prod eks-platform
+#          yes
+#
+#      leaves "yes" sitting in the terminal's input buffer while line 1
+#      runs. A naive `read` consumes it the instant it is reached -- the
+#      prompt is answered before the resource list has even finished
+#      drawing, and the human never sees what they just agreed to. So
+#      everything already buffered is discarded first, and only then does
+#      the read begin. The drain uses a short-timeout `read` loop; the
+#      timeout is chosen per Bash version because Bash 3.2 (macOS
+#      /bin/bash) REJECTS a fractional `-t` outright ("invalid timeout
+#      specification") and its integer minimum is 1 second. Verified on
+#      3.2.57 -- swallowing that error instead would silently turn the
+#      drain into a no-op, which is the exact bug this gate exists to
+#      prevent, so the loop below must never hide read's stderr.
+#
+#   2. READ FROM /dev/tty, NOT STDIN. Piping or redirecting into the
+#      script must not be able to answer the prompt either.
+#
+# Fails closed with an explicit message when there is no controlling
+# terminal (CI, nohup, cron, a pipeline). It never hangs on a read and
+# never proceeds unconfirmed.
+_orchestrator_prompt_typed_yes() {
+  local prompt="$1"
+  local answer=""
 
-  if [[ "$cli_confirmation_count" -gt 0 ]]; then
-    _orchestrator_error "the preparation pass does not accept --confirm without --confirmation-artifact"
+  # Probe in a subshell first: a failed `exec 3</dev/tty` in a script
+  # running under `set -e`-less semantics would print a raw redirection
+  # error and leave fd 3 unopened, and under some shells abort outright.
+  if [[ ! -r /dev/tty ]] || ! ( exec 3</dev/tty ) 2>/dev/null; then
+    _orchestrator_error "no controlling terminal is available, so the typed-yes destroy gate cannot be shown"
+    _orchestrator_error "destroy refuses to run unattended (CI, nohup, cron, or a redirected/piped invocation); run it from an interactive terminal"
     return 1
   fi
 
-  local created_epoch
+  exec 3</dev/tty || {
+    _orchestrator_error "unable to open the controlling terminal for the typed-yes destroy gate"
+    return 1
+  }
+
+  # Discard anything already buffered (a pasted answer, a stray newline,
+  # an impatient keypress) so the read below genuinely waits for an answer
+  # given after the resource list was displayed.
+  #
+  # This MUST flush the terminal driver's input queue, not merely read
+  # whole lines off it. `read` consumes COMPLETED LINES ONLY: a trailing
+  # partial line with no newline sits in the kernel line discipline,
+  # is invisible to `read -t` (which times out and returns 1 without
+  # discarding it), and is then prepended to the next read. Verified on
+  # bash 3.2.57 against a real pty:
+  #
+  #   paste "scripts/destroy.sh --env prod eks-platform\nyes"   (no \n)
+  #   operator presses Enter
+  #   -> a line-based drain yields answer="yes"  == ACCEPTED, list unseen
+  #   -> tcflush + read      yields answer=""    == correctly rejected
+  #
+  # That is the exact multi-line-paste bite this gate exists to prevent,
+  # so the flush and the read happen in the SAME process, immediately
+  # adjacent, with nothing in between: flushing earlier (or from a
+  # separate process) leaves the window open for the paste's tail to
+  # arrive after the flush but before the read.
+  #
+  # Note `read -t 0` is NOT usable here: on bash 3.2.57 it returns 1
+  # unconditionally, and fractional timeouts are rejected outright
+  # ("read: 0.2: invalid timeout specification"), so a timeout-based
+  # drain silently becomes a no-op on macOS.
+  printf '%s' "$prompt" >&2
+  answer="$("${_ORCHESTRATOR_PYTHON}" -c '
+import os, sys, termios
+
+fd = 3
+try:
+    termios.tcflush(fd, termios.TCIFLUSH)
+except Exception as exc:            # noqa: BLE001 - must fail closed
+    sys.stderr.write("unable to flush the terminal input queue: %s\n" % exc)
+    raise SystemExit(2)
+
+data = os.read(fd, 256)
+sys.stdout.write(data.decode("utf-8", "replace").strip())
+' 3<&3)" || {
+    exec 3<&-
+    _orchestrator_error "unable to read a confirmation from the controlling terminal; destroy aborted"
+    return 1
+  }
+  exec 3<&-
+
+  printf '\n' >&2
+  [[ "$answer" == "yes" ]]
+}
+
+# ---------------------------------------------------------------------------
+# Single-pass destroy
+# ---------------------------------------------------------------------------
+#
+# Replaces the former two-pass copy-paste confirmation-artifact protocol
+# (see docs/guides/operator-runbook.md). The sequence is:
+#
+#   1. Enumerate the real resources from real Terraform/cluster state and
+#      print them. Enumeration failure aborts -- it never degrades to a
+#      plausible-looking static list, which is what #163 removed.
+#   2. Run every mapped read-only pre-destroy guard and write the durable
+#      all-pass (or guard-failure) evidence record under
+#      .local/<env>/evidence/, exactly as before.
+#   3. Drain the terminal input buffer, then require the operator to type
+#      the exact word `yes`.
+#   4. Only then dispatch the destroy handlers, recording the consumed and
+#      terminal evidence statuses.
+#
+# --auto-approve does NOT skip step 3, in ANY environment. It retains its
+# other meaning only (UNIFIED_AUTO_APPROVE: don't prompt again inside the
+# handlers/Terraform). The typed-yes gate exists so a human sees the real
+# resource list before it disappears; that reason is identical in dev, uat
+# and prod, and dev/uat teardowns have produced the same "I didn't know
+# that was still there" incidents as prod. A per-environment exemption
+# would also mean the one code path behaves differently per environment,
+# which is exactly what this repository's environment-awareness rule
+# forbids.
+_orchestrator_destroy_single_pass() {
+  local environment_name="$1"
+  local scope="$2"
+  local expected_account_id="$3"
+  local auto_approve="$4"
+  shift 4
+  local -a order=("$@")
+
+  local created_epoch created_at expires_at snapshot_timestamp
   created_epoch="$(_orchestrator_now_epoch)"
-  local expires_epoch=$((created_epoch + 900))
-  local created_at expires_at
   created_at="$(_orchestrator_format_timestamp "$created_epoch")"
-  expires_at="$(_orchestrator_format_timestamp "$expires_epoch")"
-  local snapshot_timestamp
+  expires_at="$(_orchestrator_format_timestamp "$((created_epoch + 900))")"
   snapshot_timestamp="$(printf '%s' "$created_at" | tr -d ':-')"
 
   _orchestrator_compute_required_confirmations \
@@ -1046,230 +1083,55 @@ _orchestrator_destroy_preparation_pass() {
   initialize_orchestration_paths "$environment_name" || return 1
   acquire_orchestration_lock || return 1
 
-  local artifact_path="${GENERATED_DIR}/destroy-confirmation.${operation_id}.json"
-  local artifact_relative_path=".local/${environment_name}/generated/destroy-confirmation.${operation_id}.json"
-
-  local -a create_args=(
-    create
-    --path "$artifact_path"
-    --operation-id "$operation_id"
-    --created-at "$created_at"
-    --expires-at "$expires_at"
-    --environment "$environment_name"
-    --account-id "$expected_account_id"
-    --requested-scope "$scope"
-  )
-  local step
-  for step in "${order[@]}"; do
-    create_args+=(--resolved-scope "$step")
-  done
-  for step in "${REQUIRED_CONFIRMATIONS[@]:-}"; do
-    [[ -n "$step" ]] && create_args+=(--confirmation "$step")
-  done
-
-  # Enumerate resources that will be destroyed (preview for infra admin)
-  if [[ -f "${_ORCHESTRATOR_LIB_DIR}/enumerate-destroy-resources.sh" ]]; then
-    # shellcheck disable=SC1091
-    source "${_ORCHESTRATOR_LIB_DIR}/enumerate-destroy-resources.sh"
-
-    if type -t enumerate_destroy_resources_for_scope >/dev/null 2>&1; then
-      # Show preview for each scope in the destroy order
-      for step in "${order[@]}"; do
-        if type -t format_destroy_preview_header >/dev/null 2>&1; then
-          format_destroy_preview_header "$step" "$environment_name"
-        fi
-
-        if ! enumerate_destroy_resources_for_scope "$step" "$environment_name"; then
-          printf "  (Resource enumeration not available for scope '%s')\n" "$step"
-          printf "  Run with --confirmation-artifact to proceed with destroy.\n"
-        fi
-
-        if type -t format_destroy_preview_footer >/dev/null 2>&1; then
-          format_destroy_preview_footer
-        fi
-      done
-    fi
-  fi
-
-  if ! "$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/confirmation-artifact.py" "${create_args[@]}"; then
-    _orchestrator_error "unable to create confirmation artifact"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-
-  printf 'Confirmation artifact: %s\n' "$artifact_relative_path"
-  printf 'Expires: %s (15 minutes)\n\n' "$expires_at"
-  printf '⚠️  Review the resources listed above before proceeding.\n\n'
-  printf 'Re-run with:\n'
-  printf '  --confirmation-artifact %s \\\n' "$artifact_relative_path"
-  for step in "${REQUIRED_CONFIRMATIONS[@]:-}"; do
-    [[ -n "$step" ]] && printf '  --confirm %s \\\n' "$step"
-  done
-
-  # The artifact write is the sole mutation permitted on this pass and must
-  # survive this intentional nonzero exit, so it is never registered with
-  # `register_orchestration_artifact`; cleanup only releases the lock.
-  cleanup_orchestration_artifacts 1
-}
-
-_orchestrator_destroy_second_pass() {
-  local environment_name="$1"
-  local scope="$2"
-  local expected_account_id="$3"
-  local auto_approve="$4"
-  local confirmation_artifact_path="$5"
-  local cli_confirmation_count="$6"
-  shift 6
-
-  local -a order=()
-  local -a cli_confirmations=()
-  local collecting_confirmations="false"
-  local arg
-  for arg in "$@"; do
-    if [[ "$collecting_confirmations" == "true" ]]; then
-      cli_confirmations+=("$arg")
-      continue
-    fi
-    if [[ "$arg" == "--" ]]; then
-      collecting_confirmations="true"
-      continue
-    fi
-    order+=("$arg")
-  done
-
-  case "$confirmation_artifact_path" in
-    /*|*..*)
-      _orchestrator_error "invalid --confirmation-artifact path: ${confirmation_artifact_path}"
-      return 1
-      ;;
-    ".local/${environment_name}/generated/destroy-confirmation."*".json") ;;
-    *)
-      _orchestrator_error "invalid --confirmation-artifact path: ${confirmation_artifact_path}"
-      return 1
-      ;;
-  esac
-
-  initialize_orchestration_paths "$environment_name" || return 1
-  acquire_orchestration_lock || return 1
-
-  local absolute_artifact_path="${_ORCHESTRATOR_ROOT_DIR}/${confirmation_artifact_path}"
-  local artifact_dirname
-  artifact_dirname="$(dirname "$absolute_artifact_path")"
-  local resolved_parent
-  resolved_parent="$(cd "$artifact_dirname" 2>/dev/null && pwd)" || {
-    _orchestrator_error "confirmation artifact directory does not exist: ${artifact_dirname}"
-    cleanup_orchestration_artifacts 1
-    return 1
-  }
-  if [[ "$resolved_parent" != "$GENERATED_DIR" ]]; then
-    _orchestrator_error "confirmation artifact must be located directly beneath ${GENERATED_DIR}"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-  if [[ -L "$absolute_artifact_path" ]]; then
-    _orchestrator_error "confirmation artifact must not be a symlink: ${absolute_artifact_path}"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-
-  local artifact_operation_id
-  artifact_operation_id="$(basename "$absolute_artifact_path")"
-  artifact_operation_id="${artifact_operation_id#destroy-confirmation.}"
-  artifact_operation_id="${artifact_operation_id%.json}"
-
-  local artifact_fields
-  if ! artifact_fields="$("$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/confirmation-artifact.py" fields --path "$absolute_artifact_path" 2>/dev/null)"; then
-    _orchestrator_error "unable to read confirmation artifact: ${confirmation_artifact_path}"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-
-  local artifact_created_at="" artifact_resolved_scopes_csv="" artifact_confirmations_csv=""
-  local field_key field_value
-  while IFS='=' read -r field_key field_value; do
-    case "$field_key" in
-      created_at) artifact_created_at="$field_value" ;;
-      resolved_scopes) artifact_resolved_scopes_csv="$field_value" ;;
-      confirmations) artifact_confirmations_csv="$field_value" ;;
-    esac
-  done <<< "$artifact_fields"
-
-  if [[ -z "$artifact_created_at" ]]; then
-    _orchestrator_error "confirmation artifact is missing created_at: ${confirmation_artifact_path}"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-
-  local snapshot_timestamp
-  snapshot_timestamp="$(printf '%s' "$artifact_created_at" | tr -d ':-')"
-
-  _orchestrator_compute_required_confirmations \
-    "$environment_name" "$expected_account_id" "$snapshot_timestamp" "${order[@]}"
-
-  if [[ "${#REQUIRED_CONFIRMATIONS[@]}" -ne "$cli_confirmation_count" ]]; then
-    _orchestrator_error "confirmation set is incomplete for this destroy request"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-
-  local index
-  for ((index = 0; index < ${#REQUIRED_CONFIRMATIONS[@]}; index++)); do
-    if [[ "${REQUIRED_CONFIRMATIONS[$index]}" != "${cli_confirmations[$index]:-}" ]]; then
-      _orchestrator_error "confirmation value at position $((index + 1)) does not match the required value for this destroy request"
-      cleanup_orchestration_artifacts 1
-      return 1
-    fi
-  done
-
-  local step
-
-  # `_orchestrator_build_validate_args <now-timestamp>` builds the fixed
-  # request-binding argument vector for confirmation-artifact.py's
-  # `validate` subcommand; only the `--now` value changes between the
-  # initial validation and the immediately-pre-consumption revalidation
-  # below, so both call sites share this builder instead of risking a
-  # positional-index mistake from mutating a previously built array.
-  _orchestrator_build_validate_args() {
-    local now_timestamp="$1"
-    _ORCHESTRATOR_VALIDATE_ARGS=(
-      validate
-      --path "$absolute_artifact_path"
-      --now "$now_timestamp"
-      --operation-id "$artifact_operation_id"
-      --environment "$environment_name"
-      --account-id "$expected_account_id"
-      --requested-scope "$scope"
-    )
-    local builder_step
-    for builder_step in "${order[@]}"; do
-      _ORCHESTRATOR_VALIDATE_ARGS+=(--resolved-scope "$builder_step")
-    done
-    for builder_step in "${cli_confirmations[@]:-}"; do
-      if [[ -n "$builder_step" ]]; then
-        _ORCHESTRATOR_VALIDATE_ARGS+=(--confirmation "$builder_step")
-      fi
-    done
-  }
-
-  local now_epoch
-  now_epoch="$(_orchestrator_now_epoch)"
-  _orchestrator_build_validate_args "$(_orchestrator_format_timestamp "$now_epoch")"
-
-  local confirmation_sha256
-  if ! confirmation_sha256="$("$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/confirmation-artifact.py" "${_ORCHESTRATOR_VALIDATE_ARGS[@]}")"; then
-    _orchestrator_error "confirmation artifact failed validation against the current request"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-  confirmation_sha256="${confirmation_sha256#sha256:}"
+  # A Ctrl-C at the prompt (or any SIGTERM while the gate is open) must
+  # release the orchestration lock rather than leave a stale lock behind.
+  # Source-patching of Terraform's lifecycle.prevent_destroy happens later,
+  # inside the destroy handlers, and each patching site installs its own
+  # EXIT/INT/TERM restore trap (see
+  # scripts/lib/packages/10-foundation-access/internal/access-scopes.sh) --
+  # so an interrupt at any point restores the patched source and then
+  # unwinds through this trap.
+  trap '_orchestrator_error "interrupted; releasing the orchestration lock"; cleanup_orchestration_artifacts 1; exit 130' INT TERM
 
   # ------------------------------------------------------------------
-  # Guard-capture phase: dispatch every mapped read-only pre-destroy
-  # guard in exact reverse destroy order.
+  # Step 1: enumerate the real resources and show them.
+  # ------------------------------------------------------------------
+
+  local enumeration_text=""
+  if ! enumeration_text="$(_orchestrator_render_destroy_enumeration "$environment_name" "${order[@]}")"; then
+    _orchestrator_error "unable to enumerate the resources this destroy would remove; destroy aborted before any prompt or dispatch"
+    _orchestrator_error "a destroy is never offered against an unverified resource list"
+    trap - INT TERM
+    cleanup_orchestration_artifacts 1
+    return 1
+  fi
+  printf '%s\n' "$enumeration_text"
+
+  # ------------------------------------------------------------------
+  # Gate digest: binds the durable evidence record to the exact bytes
+  # that were shown to the operator. It occupies the evidence schema's
+  # `confirmation_artifact_sha256` slot, which previously bound evidence
+  # to the (now removed) confirmation artifact file.
+  # ------------------------------------------------------------------
+
+  local gate_digest
+  gate_digest="$(printf 'gate\nenvironment=%s\naccount=%s\nrequested_scope=%s\noperation_id=%s\ncreated_at=%s\nresolved_scopes=%s\n%s' \
+    "$environment_name" "$expected_account_id" "$scope" "$operation_id" "$created_at" \
+    "$(printf '%s,' "${order[@]}")" "$enumeration_text" | _orchestrator_sha256_hex)" || {
+    _orchestrator_error "unable to compute the destroy gate digest"
+    trap - INT TERM
+    cleanup_orchestration_artifacts 1
+    return 1
+  }
+
+  # ------------------------------------------------------------------
+  # Step 2: dispatch every mapped read-only pre-destroy guard in exact
+  # reverse destroy order, then write the durable evidence record.
   # ------------------------------------------------------------------
 
   _orchestrator_reset_guard_state
 
+  local step
   local guard_index=0
   for step in "${order[@]}"; do
     if _scope_registry_scope_requires_pre_destroy_guard "$step"; then
@@ -1279,9 +1141,8 @@ _orchestrator_destroy_second_pass() {
   done
 
   if [[ "$_ORCHESTRATOR_GUARD_ABORTED" == "true" ]]; then
-    local received_results_json
+    local received_results_json failure_json
     received_results_json="$(_orchestrator_build_guard_results_json)"
-    local failure_json
     failure_json="$(_orchestrator_build_failure_json \
       "$_ORCHESTRATOR_GUARD_FAILURE_CODE" \
       "$_ORCHESTRATOR_GUARD_FAILURE_EXPECTED_SCOPE" \
@@ -1291,15 +1152,15 @@ _orchestrator_destroy_second_pass() {
 
     local -a failure_args=(
       write-guard-failure
-      --path "${EVIDENCE_DIR}/destroy-guard-failure.${artifact_operation_id}.json"
-      --operation-id "$artifact_operation_id"
+      --path "${EVIDENCE_DIR}/destroy-guard-failure.${operation_id}.json"
+      --operation-id "$operation_id"
       --environment "$environment_name"
       --account-id "$expected_account_id"
       --requested-scope "$scope"
       --received-results-json "$received_results_json"
       --failure-json "$failure_json"
       --created-at "$(_orchestrator_format_timestamp "$(_orchestrator_now_epoch)")"
-      --confirmation-artifact-sha256 "$confirmation_sha256"
+      --confirmation-artifact-sha256 "$gate_digest"
     )
     for step in "${order[@]}"; do
       failure_args+=(--resolved-scope "$step")
@@ -1308,30 +1169,27 @@ _orchestrator_destroy_second_pass() {
     "$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/destroy-evidence.py" "${failure_args[@]}" \
       || _orchestrator_error "unable to write guard-failure record (additional foundation failure)"
 
-    _orchestrator_error "pre-destroy guard failure (${_ORCHESTRATOR_GUARD_FAILURE_CODE}); destroy aborted before evidence, approval, or dispatch"
+    _orchestrator_error "pre-destroy guard failure (${_ORCHESTRATOR_GUARD_FAILURE_CODE}); destroy aborted before approval or dispatch"
+    trap - INT TERM
     cleanup_orchestration_artifacts 1
     return 1
   fi
 
-  # ------------------------------------------------------------------
-  # All guards passed: write and re-read all-pass evidence.
-  # ------------------------------------------------------------------
-
   local guard_results_json
   guard_results_json="$(_orchestrator_build_guard_results_json)"
 
-  local evidence_path="${EVIDENCE_DIR}/pre-destroy-guards.${artifact_operation_id}.json"
+  local evidence_path="${EVIDENCE_DIR}/pre-destroy-guards.${operation_id}.json"
   local -a evidence_args=(
     write-evidence
     --path "$evidence_path"
-    --operation-id "$artifact_operation_id"
+    --operation-id "$operation_id"
     --environment "$environment_name"
     --account-id "$expected_account_id"
     --requested-scope "$scope"
     --guard-results-json "$guard_results_json"
-    --created-at "$artifact_created_at"
-    --expires-at "$(_orchestrator_format_timestamp "$(( $(_orchestrator_parse_timestamp_to_epoch "$artifact_created_at") + 900 ))")"
-    --confirmation-artifact-sha256 "$confirmation_sha256"
+    --created-at "$created_at"
+    --expires-at "$expires_at"
+    --confirmation-artifact-sha256 "$gate_digest"
   )
   for step in "${order[@]}"; do
     evidence_args+=(--resolved-scope "$step")
@@ -1339,6 +1197,7 @@ _orchestrator_destroy_second_pass() {
 
   if ! "$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/destroy-evidence.py" "${evidence_args[@]}"; then
     _orchestrator_error "unable to write all-pass guard evidence; destroy aborted before approval or dispatch"
+    trap - INT TERM
     cleanup_orchestration_artifacts 1
     return 1
   fi
@@ -1346,108 +1205,69 @@ _orchestrator_destroy_second_pass() {
   local evidence_sha256
   evidence_sha256="$("$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/destroy-evidence.py" digest --path "$evidence_path")" || {
     _orchestrator_error "unable to compute all-pass guard evidence digest"
+    trap - INT TERM
     cleanup_orchestration_artifacts 1
     return 1
   }
   evidence_sha256="${evidence_sha256#sha256:}"
 
   # ------------------------------------------------------------------
-  # Interactive approval unless auto-approved.
+  # Step 3: the typed-yes gate.
   # ------------------------------------------------------------------
 
-  if [[ "$auto_approve" != "true" ]]; then
-    local reply=""
-    printf 'Type the exact word yes to proceed with destroying %s in %s: ' "$scope" "$environment_name"
-    read -r reply || reply=""
-    if [[ "$reply" != "yes" ]]; then
-      _orchestrator_error "destroy approval was not given; destroy aborted before consumption or dispatch"
-      cleanup_orchestration_artifacts 1
-      return 1
-    fi
-  fi
+  printf '\n'
+  printf 'Destroy request : %s (resolved order: %s)\n' "$scope" "$(printf '%s ' "${order[@]}")"
+  printf 'Environment     : %s (account %s)\n' "$environment_name" "$expected_account_id"
+  printf 'Evidence record : %s\n' "$evidence_path"
+  local requirement_index
+  for ((requirement_index = 0; requirement_index < ${#REQUIRED_CONFIRMATIONS[@]}; requirement_index++)); do
+    printf 'Destructive act : %s\n' "${REQUIRED_CONFIRMATIONS[$requirement_index]}"
+  done
+  printf '\n'
+  printf 'Terraform lifecycle.prevent_destroy and live EKS deletion protection will be\n'
+  printf 'lifted automatically for the resources above that still have them, and only\n'
+  printf 'for those. This is irreversible.\n'
+  printf '\n'
 
-  # ------------------------------------------------------------------
-  # Revalidate the confirmation artifact and the all-pass evidence
-  # (through a fresh no-follow read of each), then atomically consume the
-  # confirmation artifact. Approval can take arbitrary human time, so both
-  # are re-read here rather than trusting the earlier reads.
-  # ------------------------------------------------------------------
-
-  local revalidated_evidence_sha256
-  revalidated_evidence_sha256="$("$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/destroy-evidence.py" digest --path "$evidence_path")" || {
-    _orchestrator_error "unable to revalidate all-pass guard evidence immediately before consumption"
-    cleanup_orchestration_artifacts 1
-    return 1
-  }
-  if [[ "$revalidated_evidence_sha256" != "sha256:${evidence_sha256}" ]]; then
-    _orchestrator_error "all-pass guard evidence changed since it was written; destroy aborted before consumption"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-
-  now_epoch="$(_orchestrator_now_epoch)"
-  _orchestrator_build_validate_args "$(_orchestrator_format_timestamp "$now_epoch")"
-  local revalidated_confirmation_sha256
-  if ! revalidated_confirmation_sha256="$("$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/confirmation-artifact.py" "${_ORCHESTRATOR_VALIDATE_ARGS[@]}")"; then
-    _orchestrator_error "confirmation artifact failed revalidation immediately before consumption"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-  if [[ "$revalidated_confirmation_sha256" != "sha256:${confirmation_sha256}" ]]; then
-    _orchestrator_error "confirmation artifact changed since guard evidence was bound to it; destroy aborted before consumption"
-    cleanup_orchestration_artifacts 1
-    return 1
-  fi
-
-  if ! "$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/confirmation-artifact.py" consume --path "$absolute_artifact_path" >/dev/null; then
-    _orchestrator_error "unable to atomically consume confirmation artifact; destroy aborted before dispatch"
+  if ! _orchestrator_prompt_typed_yes \
+    "Type the exact word yes to destroy ${scope} in ${environment_name}: "; then
+    _orchestrator_error "destroy approval was not given; destroy aborted before dispatch"
+    trap - INT TERM
     cleanup_orchestration_artifacts 1
     return 1
   fi
 
   "$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/destroy-evidence.py" write-status \
     --evidence-dir "$EVIDENCE_DIR" \
-    --operation-id "$artifact_operation_id" \
+    --operation-id "$operation_id" \
     --status consumed \
     --evidence-sha256 "$evidence_sha256" \
     --recorded-at "$(_orchestrator_format_timestamp "$(_orchestrator_now_epoch)")" \
     || _orchestrator_error "unable to record consumed evidence status (continuing to dispatch; this is itself a foundation concern)"
 
   # ------------------------------------------------------------------
-  # Dispatch destroy handlers in the same reverse destroy order.
+  # Step 4: dispatch destroy handlers in the same reverse destroy order.
   # ------------------------------------------------------------------
 
   export UNIFIED_AUTO_APPROVE="$auto_approve"
 
-  # Each handler receives only its own ordered, byte-for-byte-unchanged
-  # confirmation subset (the validated CLI values whose REQUIRED_
-  # CONFIRMATION_SCOPES entry equals this handler's scope) as positional
-  # arguments -- never the artifact path or any other operation metadata.
-  # A handler with no confirmation requirement (e.g. eks-access) receives
-  # an empty argument list.
+  # UNIFIED_DESTROY_CONFIRMED is the single signal a destroy handler may
+  # use to decide that lifting a protection (Terraform prevent_destroy
+  # source patching, live EKS deletionProtection) is authorized. It is set
+  # only here, only after a human typed yes against a real enumerated
+  # resource list. Handlers must still apply each lift conditionally, on
+  # the resource actually being present and actually protected -- an
+  # unconditional lift reintroduces the #159 deadlock the moment a
+  # resource is already gone.
+  export UNIFIED_DESTROY_CONFIRMED="yes"
+
   local dispatch_status=0
   for step in "${order[@]}"; do
     local handler_symbol
     handler_symbol="$(destroy_handler_for_scope "$step")"
-
-    local -a handler_confirmations=()
-    local confirmation_index
-    for ((confirmation_index = 0; confirmation_index < ${#REQUIRED_CONFIRMATION_SCOPES[@]}; confirmation_index++)); do
-      if [[ "${REQUIRED_CONFIRMATION_SCOPES[$confirmation_index]}" == "$step" ]]; then
-        handler_confirmations+=("${cli_confirmations[$confirmation_index]}")
-      fi
-    done
-
-    if [[ "${#handler_confirmations[@]}" -gt 0 ]]; then
-      if ! "$handler_symbol" "${handler_confirmations[@]}"; then
-        dispatch_status=1
-        break
-      fi
-    else
-      if ! "$handler_symbol"; then
-        dispatch_status=1
-        break
-      fi
+    if ! "$handler_symbol"; then
+      dispatch_status=1
+      break
     fi
   done
 
@@ -1457,7 +1277,7 @@ _orchestrator_destroy_second_pass() {
   local -a status_args=(
     write-status
     --evidence-dir "$EVIDENCE_DIR"
-    --operation-id "$artifact_operation_id"
+    --operation-id "$operation_id"
     --status "$terminal_status"
     --evidence-sha256 "$evidence_sha256"
     --recorded-at "$(_orchestrator_format_timestamp "$(_orchestrator_now_epoch)")"
@@ -1468,7 +1288,103 @@ _orchestrator_destroy_second_pass() {
   "$_ORCHESTRATOR_PYTHON" "${_ORCHESTRATOR_LIB_DIR}/destroy-evidence.py" "${status_args[@]}" \
     || _orchestrator_error "unable to record terminal evidence status ${terminal_status} (original destroy status is preserved)"
 
+  trap - INT TERM
   cleanup_orchestration_artifacts "$dispatch_status"
+}
+
+# ---------------------------------------------------------------------------
+# _orchestrator_render_destroy_enumeration <environment> <step>...
+# ---------------------------------------------------------------------------
+#
+# Renders the real per-scope resource list to stdout, or fails.
+#
+# Fail-closed contract, distinguishing three cases that must not be
+# conflated:
+#
+#   * enumeration FAILED unexpectedly for a scope that has an enumerator
+#     (state unreadable for a reason we cannot explain) -> return 1.
+#     The destroy is abandoned. Never a static or "plausible" fallback
+#     list: showing a confident fiction at the exact moment a human is
+#     deciding whether to destroy production is the failure #163 removed.
+#
+#   * the backing state is legitimately UNAVAILABLE (status 3): the
+#     Terraform backend is not initialized in this working copy, or the
+#     cluster kubectl would query is already gone. Report it plainly and
+#     CONTINUE. These are normal conditions, not defects:
+#       - `.terraform/` is gitignored, so a fresh clone has never inited;
+#       - a half-finished teardown deletes the cluster before its
+#         Terraform scope, so kubectl necessarily fails afterwards.
+#     Treating either as fatal strands the teardown with no supported
+#     recovery -- which is the #159 deadlock rebuilt on a different
+#     observation, and is explicitly forbidden here.
+#
+#   * NO enumerator is mapped for a scope (status 2) -> say so
+#     explicitly, in those words, and continue. That is an honest absence
+#     rather than an invented list, and the typed-yes gate still stands
+#     between the operator and the destroy.
+#
+# In every non-fatal case the operator still sees exactly what is and is
+# not known before typing `yes`.
+_orchestrator_render_destroy_enumeration() {
+  local environment_name="$1"
+  shift
+  local -a steps=("$@")
+
+  local enumerator="${_ORCHESTRATOR_LIB_DIR}/enumerate-destroy-resources.sh"
+  if [[ ! -f "$enumerator" ]]; then
+    _orchestrator_error "resource enumeration library is missing: ${enumerator}"
+    return 1
+  fi
+  # shellcheck disable=SC1091
+  source "$enumerator" || return 1
+  if ! type -t enumerate_destroy_resources_for_scope >/dev/null 2>&1; then
+    _orchestrator_error "enumerate_destroy_resources_for_scope is not defined by ${enumerator}"
+    return 1
+  fi
+
+  local step scope_output enumerate_status
+  for step in "${steps[@]}"; do
+    format_destroy_preview_header "$step" "$environment_name"
+    scope_output="$(enumerate_destroy_resources_for_scope "$step" "$environment_name")"
+    enumerate_status=$?
+    case "$enumerate_status" in
+      0)
+        printf '%s\n' "$scope_output"
+        ;;
+      2)
+        printf '  No resource enumerator is mapped for scope %s.\n' "$step"
+        printf '  Nothing is being guessed or substituted here; this scope simply has no\n'
+        printf '  enumerator yet. Review the scope by hand before answering the prompt.\n'
+        ;;
+      3)
+        # Backing state legitimately unavailable (backend not initialized
+        # here, or the cluster is already gone). Report and continue --
+        # see the contract note above on why this must not be fatal.
+        printf '%s\n' "$scope_output"
+        printf '  The resource list for %s could not be read (see the reason above).\n' "$step"
+        printf '  Nothing is being guessed or substituted. This is expected on a fresh\n'
+        printf '  clone that has never initialized this backend, or after a partial\n'
+        printf '  teardown that already removed the cluster. Terraform still re-checks\n'
+        printf '  every resource against AWS in the plan shown before it applies.\n'
+        printf '  Review this scope by hand before answering the prompt.\n'
+        ;;
+      *)
+        _orchestrator_error "resource enumeration failed for scope: ${step}"
+        return 1
+        ;;
+    esac
+    format_destroy_preview_footer
+  done
+}
+
+_orchestrator_sha256_hex() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -c1-64
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -c1-64
+  else
+    openssl dgst -sha256 -r | cut -d' ' -f1
+  fi
 }
 
 # ---------------------------------------------------------------------------

@@ -90,58 +90,16 @@ eks_internal_validate_destroy_drift_vector() {
     return 1
   fi
 
-  # eks_deletion_protection may legitimately be 'disabled' here only for
-  # the eks-platform scope itself, only when
-  # UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION was explicitly confirmed
-  # (validated against EKS_CLUSTER_NAME in orchestrator.sh) -- mirrors the
-  # same bypass in eks_internal_eks_platform_pre_destroy_guard. workload-
-  # identity and platform-controllers still require it enabled
-  # unconditionally.
-  case "$eks_deletion_protection" in
-    enabled|true) ;;
-    *)
-      if [[ "$scope_name" == "eks-platform" && -n "${UNIFIED_CONFIRM_DISABLE_DELETION_PROTECTION:-}" ]]; then
-        :
-      else
-        eks_internal_error "EKS deletion protection is not enabled"
-        return 1
-      fi
-      ;;
-  esac
-
-  case "$efs_protection" in
-    enabled|true) ;;
-    *)
-      eks_internal_error "EFS prevent_destroy protection is not enabled"
-      return 1
-      ;;
-  esac
-
-  case "$vault_lock_state" in
-    locked|effective|absent) ;;
-    *)
-      eks_internal_error "backup vault lock is not effective"
-      return 1
-      ;;
-  esac
-
-  [[ "$backup_retention_days" =~ ^[0-9]+$ ]] || {
-    eks_internal_error "backup retention days is not numeric"
-    return 1
-  }
-
-  if [[ -n "${UAT_MIN_BACKUP_RETENTION_DAYS:-}" ]]; then
-    minimum_retention_days="${UAT_MIN_BACKUP_RETENTION_DAYS}"
-  fi
-  [[ "$minimum_retention_days" =~ ^[0-9]+$ ]] || {
-    eks_internal_error "configured minimum retention is not numeric"
-    return 1
-  }
-
-  if (( backup_retention_days < minimum_retention_days )); then
-    eks_internal_error "backup retention is below required minimum"
-    return 1
-  fi
+  # Protection state (eks_deletion_protection, efs_protection,
+  # vault_lock_state, backup_retention_days) is recorded in the drift
+  # vector but is NOT validated as a precondition here.
+  #
+  # This function's job is drift detection: the account/region/environment/
+  # identity comparisons above are the real check -- they prove the thing
+  # about to be destroyed is still the thing the operator was shown.
+  # Requiring protections to still be ENABLED is the inverted rail that
+  # deadlocked the partially-completed teardown in #159, and it adds
+  # nothing once a human has typed yes against the enumerated list.
 
   return 0
 }

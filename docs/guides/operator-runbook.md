@@ -312,126 +312,97 @@ Complete [Session setup](#session-setup-do-this-first-every-session) first —
 destroys run the same identity and `kubectl`-context guards as every other
 command in this path, plus additional pre-destroy guards.
 
-Ordinary destroy for scopes in this path is a two-step confirmation. The
-first pass always exits nonzero and prints the exact re-run command to use —
-including one `--confirm <step>` flag per required confirmation (some scopes,
-e.g. `eks-platform`, require one; others may require none or more than one).
-Copy that printed command verbatim rather than reconstructing it by hand —
-omitting `--confirm` causes the second pass to fail with `confirmation set is
-incomplete for this destroy request`:
+Ordinary destroy for scopes in this path is a **single interactive pass**.
+It enumerates the resources it would actually remove — read from real
+Terraform state, not a canned list — prints them, and then asks you to type
+the exact word `yes`:
 
 ```bash
-bash scripts/destroy.sh --env uat platform-controllers --auto-approve
-# First pass prints a preview, a confirmation artifact path, and the exact
-# re-run command under "Re-run with:", e.g.:
-#   --confirmation-artifact .local/uat/generated/destroy-confirmation.<id>.json \
-#   --confirm destroy:uat:<account>:<scope>:<resource>:<action> \
-# Re-run using that printed command exactly:
-bash scripts/destroy.sh --env uat platform-controllers --auto-approve \
-  --confirmation-artifact .local/uat/generated/destroy-confirmation.<id>.json \
-  --confirm destroy:uat:<account>:<scope>:<resource>:<action>
+bash scripts/destroy.sh --env uat platform-controllers
+# Prints a DESTROY PREVIEW listing the real resources, the resolved scope
+# order, the account, the evidence record path, and each destructive act,
+# then:
+#   Type the exact word yes to destroy platform-controllers in uat:
 ```
 
-Destroy for `workload-identity`/`platform-controllers` runs a real pre-destroy
-guard (verifying live cluster deletion-protection, EFS protection, and AWS
-Backup vault-lock state before proceeding) and writes evidence under
-`.local/uat/evidence/`. The same two-step pattern — including the required
-`--confirm` flag(s) from the first pass's printed output — applies to
-`eks-platform` and every other ordinary-destroy scope in this path.
+Only the exact word `yes` proceeds. Anything else — `y`, `YES`, an empty
+line — aborts before anything is destroyed.
 
-#### `eks-platform`'s KMS keys and EFS filesystem are `prevent_destroy`-protected
+**The prompt cannot be answered by a pasted command block.** Everything
+already sitting in the terminal's input buffer is discarded immediately
+before the prompt is drawn, and the answer is read from `/dev/tty` rather
+than stdin. So pasting
+
+```
+scripts/destroy.sh --env prod eks-platform
+yes
+```
+
+does *not* pre-answer the gate: the stray `yes` is drained, and the script
+waits for one you type after seeing the list. Piping or redirecting into the
+script cannot answer it either.
+
+**There is no unattended destroy.** With no controlling terminal (CI,
+`nohup`, `cron`, a pipeline) the gate cannot be shown, so the destroy
+refuses immediately with an explicit message rather than hanging on a read
+or proceeding unconfirmed.
+
+`--auto-approve` **does not skip the gate**, in any environment. It retains
+only its downstream meaning: don't prompt again inside the handlers and
+Terraform. You will still type `yes` once, in `dev`, `uat` and `prod` alike.
+
+Destroy for `workload-identity`/`platform-controllers` runs a real
+pre-destroy guard before the prompt and writes evidence under
+`.local/<env>/evidence/` — the all-pass guard record, plus `consumed` and
+`success`/`failure` status sidecars. That evidence trail is unchanged. The
+same single-pass pattern applies to `eks-platform` and every other
+ordinary-destroy scope in this path.
+
+If enumeration fails (state unreadable, backend not initialized), the
+destroy **aborts before the prompt**. It never falls back to a static list:
+being shown a confident fiction while deciding whether to destroy
+production is worse than being shown nothing.
+
+#### Removed flags
+
+`--confirmation-artifact`, `--confirm`, `--confirm-remove-protected` and
+`--confirm-disable-deletion-protection` no longer exist. Passing any of them
+fails with an explanatory error rather than silently succeeding, so a stale
+runbook line or shell-history entry cannot quietly mean something different
+than you expect. Delete them from any saved command.
+
+#### Protections are now lifted automatically — and only when actually present
 
 `eks-platform`'s Terraform modules mark the cluster/backup KMS keys
 (`module.kms.aws_kms_key.cluster`, `module.kms.aws_kms_key.backup`) and the
-EFS filesystem (`module.efs[0].aws_efs_file_system.this`) with Terraform's
-`lifecycle.prevent_destroy = true`. This is a deliberate safety rail against
-irreversible data loss (KMS key deletion has a mandatory waiting period and
-destroys anything still encrypted under that key; EFS deletion destroys
-its data outright) — **not a script defect**, and running an ordinary
-`scripts/destroy.sh --env <uat|prod> eks-platform` (even with a valid
-`--confirmation-artifact`/`--confirm`) will refuse with:
+EFS filesystem (`module.efs[0].aws_efs_file_system.this`) with
+`lifecycle.prevent_destroy = true`, and the EKS cluster itself carries a
+live AWS `deletionProtection` attribute. Both used to require their own
+explicit override flag, discoverable only by attempting a destroy and
+reading the failure back out of Terraform's output.
 
-```
-ERROR: eks-platform: destroy refused by Terraform's lifecycle.prevent_destroy guard on N resource(s); no state was changed:
-  - module.kms.aws_kms_key.backup
-  - module.kms.aws_kms_key.cluster
-```
+Once you have typed `yes` against a real resource list, both are lifted for
+you. Each lift is strictly conditional on the resource actually being there
+and actually being protected:
 
-**Note**: unlike `--confirm`, the required `--confirm-remove-protected`
-flags are never printed by the first-pass preview or the "Re-run with:"
-output — the orchestrator only learns a resource is `prevent_destroy`-
-protected by actually attempting the Terraform destroy and parsing this
-error back out of Terraform's output. Expect this ERROR on your first
-real attempt at a full `eks-platform` teardown; it is the signal to add
-the three `--confirm-remove-protected` flags below and re-run (with a
-fresh `--confirmation-artifact` if the original one has since expired).
+- `prevent_destroy` is source-patched only for addresses present in this
+  root's live `terraform state list` whose own resource block still declares
+  `prevent_destroy = true`. The patch is reverted on every exit path —
+  success, failure, or Ctrl-C — so it is never a lasting change to the
+  module.
+- live `deletionProtection` is disabled only if the cluster still exists and
+  still has it enabled. An already-absent cluster, or an already-`false`
+  flag, is a success with nothing to do.
 
-To actually destroy `eks-platform` in full (e.g. for a genuine teardown-and-
-reverify exercise), pass one `--confirm-remove-protected <module.address>`
-per protected resource named in that error, in addition to the ordinary
-`--confirmation-artifact`/`--confirm` flags:
+This conditionality is the point. A partially-completed teardown — the
+common case, since the previous flow routinely failed at the last cluster-
+deletion step after everything else was already gone — must remain
+finishable. Requiring protections to still be *on*, or hardcoding
+`module.efs[0]...` as mandatory, is what deadlocked #159 and forced a
+break-glass script; neither may be reintroduced.
 
-```bash
-bash scripts/destroy.sh --env prod eks-platform --auto-approve \
-  --confirmation-artifact .local/prod/generated/destroy-confirmation.<id>.json \
-  --confirm destroy:prod:<account>:eks-platform:oms-prod-eks-cluster:delete-cluster \
-  --confirm-remove-protected module.kms.aws_kms_key.cluster \
-  --confirm-remove-protected module.kms.aws_kms_key.backup \
-  --confirm-remove-protected 'module.efs[0].aws_efs_file_system.this'
-```
-
-This temporarily patches `prevent_destroy` to `false` in the module source
-file for only the named resource(s), runs the destroy, and restores the
-original `prevent_destroy = true` afterward on every exit path (success,
-failure, or interruption) — it is not a permanent change to the module.
-Treat `--confirm-remove-protected` with the same weight as any other
-irreversible-action override in this repo: only pass it when you have
-independently decided, resource by resource, that destroying that specific
-KMS key or filesystem now is intended, not merely because the error message
-asked for it.
-
-#### `eks-platform`'s EKS cluster also has live `deletionProtection` — a separate guard
-
-Even after every `--confirm-remove-protected` override above clears
-Terraform's `prevent_destroy` guards, a full `eks-platform` destroy can still
-fail at the very end, after most resources are already gone, with:
-
-```
-Error: deleting EKS Cluster (oms-prod-eks-cluster): operation error EKS: DeleteCluster, ...
-InvalidRequestException: Cluster oms-prod-eks-cluster cannot be deleted while DeletionProtection is enabled.
-```
-
-This is a **separate, independent guard** from `prevent_destroy` — it's a
-live AWS API attribute on the EKS cluster itself
-(`aws_eks_cluster.deletion_protection`), not a Terraform lifecycle block, so
-clearing `prevent_destroy` on the KMS keys/EFS does nothing for it. Like
-`--confirm-remove-protected`, this error is only discoverable by actually
-attempting the destroy — it is not surfaced by the first-pass preview.
-
-To clear it, add `--confirm-disable-deletion-protection <cluster-name>` —
-the value must exactly match this environment's real cluster name (e.g.
-`oms-prod-eks-cluster` for Production; the script rejects any other value)
-— alongside the `--confirm-remove-protected` flags:
-
-```bash
-bash scripts/destroy.sh --env prod eks-platform --auto-approve \
-  --confirmation-artifact .local/prod/generated/destroy-confirmation.<id>.json \
-  --confirm destroy:prod:<account>:eks-platform:oms-prod-eks-cluster:delete-cluster \
-  --confirm-disable-deletion-protection oms-prod-eks-cluster \
-  --confirm-remove-protected module.kms.aws_kms_key.cluster \
-  --confirm-remove-protected module.kms.aws_kms_key.backup \
-  --confirm-remove-protected 'module.efs[0].aws_efs_file_system.this'
-```
-
-This flips `deletion_protection` to `false` live on the cluster via a
-targeted `terraform apply -target=module.eks.aws_eks_cluster.this` before
-the destroy proceeds — it does not touch the committed tfvars file (backed
-up and restored on every exit path). **A prior destroy attempt that failed
-only on this last step (cluster deletion) has already destroyed everything
-else** — VPC, node group, IAM roles, KMS keys, EFS, AWS Backup vault, all
-addons — so a re-run with this flag added will show a much smaller plan
-(often just the cluster and a couple of leftover dependents), not a repeat
-of the full 71-resource destroy.
+A destroy interrupted at the prompt with Ctrl-C releases the orchestration
+lock and restores any patched module source before exiting.
 
 ---
 

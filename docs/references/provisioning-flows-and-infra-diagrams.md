@@ -20,7 +20,7 @@ out explicitly with a **⚠ Gap** note.
    - [3d. `signoz-observability`](#3d-signoz-observability--dashboards-alerts-as-code)
 4. [Destroy Flow](#4-destroy-flow)
    - [4a. Legacy destroy — scope granularity](#4a-legacy-destroy--scope-granularity-answers-can-i-destroy-just-one-component)
-   - [4b. Unified orchestrator destroy — two-pass evidence protocol](#4b-unified-orchestrator-destroy--two-pass-evidence-protocol)
+   - [4b. Unified orchestrator destroy — single-pass interactive gate](#4b-unified-orchestrator-destroy--single-pass-interactive-gate)
 5. [Scope Implementation Status](#5-scope-implementation-status-unified-orchestrator---env-devuat)
 6. [AWS Account-ID Guard Chain](#6-aws-account-id-guard-chain-verified-defense-in-depth)
 7. [Per-Environment Infrastructure Diagrams](#7-per-environment-infrastructure--whats-actually-different)
@@ -69,7 +69,8 @@ is the original, frozen, dev-only implementation — it is the one that
 *actually provisions real infrastructure today*. The unified orchestrator
 (`scripts/lib/orchestrator.sh`) is a newer system built to eventually run
 `dev` and `uat` through one shared code path, with much stronger safety
-guarantees (account-ID guards, two-pass destroy evidence). It is being built
+guarantees (account-ID guards, the single-pass destroy gate and its
+evidence trail). It is being built
 incrementally — some scopes are real, some are still stubs (§5).
 
 **As of this change**, a bare invocation with no `--env` now prints an
@@ -271,31 +272,46 @@ flowchart TD
   I -->|operators| Q["kubectl delete -k gitops/operators/base<br/>⚠ Run LAST — orphans live CRs' Pods if run before overlay teardown"]
 ```
 
-### 4b. Unified orchestrator destroy — two-pass evidence protocol
+### 4b. Unified orchestrator destroy — single-pass interactive gate
 
 This is real, implemented logic (unlike the data-layer provision/verify
-stubs in §5) — it gates any `--env dev|uat` destroy, regardless of whether
-the underlying scope's own destroy handler is a stub or real. **Why it
-exists:** to prevent an operator from destroying the wrong scope/environment
-by mistake, with a tamper-evident, single-use confirmation artifact instead
-of just a typed prompt.
+stubs in §5) — it gates any `--env dev|uat|prod` destroy, regardless of
+whether the underlying scope's own destroy handler is a stub or real.
+**Why it exists:** so an operator sees the resources that will actually be
+removed, read from real Terraform state, immediately before deciding.
+
+It replaced a two-pass copy-paste confirmation-artifact protocol. That
+protocol proved the operator could copy a hash; it did not make them look
+at a resource list, and its protection-state preconditions deadlocked
+partially-completed teardowns (#159).
+
+Three properties carry the safety:
+
+- **Drain before read.** Everything already buffered on the terminal is
+  discarded immediately before the prompt, so a pasted `<command>\nyes`
+  block cannot answer a prompt the human never saw. The answer is read from
+  `/dev/tty`, never stdin, so piping cannot answer it either.
+- **No tty → fail closed.** Under CI/`nohup`/a pipeline the gate cannot be
+  shown, so the destroy refuses. It never hangs and never proceeds
+  unconfirmed. `--auto-approve` does not skip the gate in any environment.
+- **Enumeration failure → abort.** No fallback list, ever.
 
 ```mermaid
 flowchart TD
-  A["orchestrator destroy --env <env> <scope>"] --> B[Pass 1: Preparation]
-  B --> C["confirmation-artifact.py create<br/>(binds request args, writes artifact file)"]
-  C --> D[Operator reviews plan / confirms]
-  D --> E[Pass 2: Second pass]
-  E --> F["confirmation-artifact.py validate<br/>SHA-256 over request-binding args"]
-  F --> G{Hash matches artifact?}
-  G -->|No| ABORT[FAIL — abort, no destroy]
-  G -->|Yes| H["Scope's pre_destroy_guard_* function<br/>(real logic: reads live observations,<br/>checks protection state + dependents,<br/>computes SHA-256 evidence digest)"]
-  H --> I{Guard PASS?}
-  I -->|No| ABORT
-  I -->|Yes| J["destroy-evidence.py write<br/>records evidence + digest"]
-  J --> K["confirmation-artifact.py consume<br/>(artifact single-use, cannot be replayed)"]
-  K --> L["Scope's actual destroy_* handler runs<br/>⚠ STUB for mongodb/postgresql/signoz today — see §5"]
-  L --> M["destroy-evidence.py write-status<br/>+ digest re-validation"]
+  A["orchestrator destroy --env <env> <scope>"] --> B["enumerate_destroy_resources_for_scope<br/>(reads real Terraform/cluster state)"]
+  B --> C{Enumeration OK?}
+  C -->|Failed| ABORT[FAIL — abort, no prompt, no destroy]
+  C -->|Yes| D["Print the real resource list"]
+  D --> E["Scope's pre_destroy_guard_* function<br/>(reads live observations, checks dependent<br/>scopes are absent, computes SHA-256 digest)"]
+  E --> F{Guard PASS?}
+  F -->|No| G["destroy-evidence.py write-guard-failure"] --> ABORT
+  F -->|Yes| H["destroy-evidence.py write-evidence<br/>(binds the record to a digest of exactly<br/>what was displayed)"]
+  H --> I["Drain buffered stdin, then read /dev/tty"]
+  I --> J{Typed exactly 'yes'?}
+  J -->|No / no tty| ABORT
+  J -->|Yes| K["destroy-evidence.py write-status --status consumed"]
+  K --> L["Scope's actual destroy_* handler runs<br/>(prevent_destroy + live deletionProtection<br/>lifted automatically, only where present)<br/>⚠ STUB for mongodb/postgresql/signoz today — see §5"]
+  L --> M["destroy-evidence.py write-status<br/>--status success|failure"]
 ```
 
 ---

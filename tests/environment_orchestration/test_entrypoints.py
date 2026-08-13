@@ -755,7 +755,15 @@ class DestroyOptionGrammarTests(OrchestratorFixture):
     the dev-mutation gate before any command, artifact, or dispatch --
     which is exactly the "before any external command, artifact creation,
     or dispatch" property this requirement asks for, without needing any
-    AWS/backend mocking."""
+    AWS/backend mocking.
+
+    The former two-pass flags (`--confirmation-artifact`, `--confirm`,
+    `--confirm-remove-protected`,
+    `--confirm-disable-deletion-protection`) are gone. They are asserted
+    here to be REJECTED with a specific, explanatory message rather than
+    silently accepted or silently ignored: a stale runbook or shell-history
+    line carrying one must fail loudly, never "succeed" while meaning
+    something different than the operator believes."""
 
     BLOCK_MESSAGE = "unified dev mutation is blocked"
 
@@ -770,66 +778,49 @@ class DestroyOptionGrammarTests(OrchestratorFixture):
         self.assertIn(self.BLOCK_MESSAGE, result.stderr)
         self._assert_no_side_effects()
 
-    def test_single_confirmation_artifact_is_accepted(self):
-        result = self.run_unified(
-            "destroy",
-            [
-                "--env", "dev", "mongodb", "--confirmation-artifact",
-                ".local/dev/generated/destroy-confirmation.abc123.json",
-            ],
-        )
+    def test_bare_scope_is_accepted(self):
+        result = self.run_unified("destroy", ["--env", "dev", "mongodb"])
         self.assertIn(self.BLOCK_MESSAGE, result.stderr)
         self._assert_no_side_effects()
 
-    def test_repeated_confirm_with_distinct_values_is_accepted(self):
-        result = self.run_unified(
-            "destroy",
-            [
-                "--env", "dev", "mongodb",
-                "--confirm", "destroy:dev:815402439714:mongodb:psmdb/mongodb/oms:value-a",
-                "--confirm", "destroy:dev:815402439714:mongodb:psmdb/mongodb/oms:value-b",
-            ],
-        )
-        self.assertIn(self.BLOCK_MESSAGE, result.stderr)
-        self._assert_no_side_effects()
+    # --- retired flags are rejected, loudly --------------------------------
 
-    # --- rejected grammar ---------------------------------------------------
+    RETIRED_FLAGS_WITH_VALUE = (
+        ("--confirmation-artifact", ".local/dev/generated/destroy-confirmation.abc123.json"),
+        ("--confirm", "destroy:dev:815402439714:mongodb:psmdb/mongodb/oms:delete-cluster-and-pvcs"),
+        ("--confirm-remove-protected", "module.efs[0].aws_efs_file_system.this"),
+        ("--confirm-disable-deletion-protection", "oms-dev-eks-cluster"),
+    )
 
-    def test_missing_confirmation_artifact_value_is_rejected(self):
-        result = self.run_unified(
-            "destroy", ["--env", "dev", "mongodb", "--confirmation-artifact"]
-        )
+    def test_every_retired_two_pass_flag_is_rejected_with_an_explanatory_message(self):
+        for flag, value in self.RETIRED_FLAGS_WITH_VALUE:
+            with self.subTest(flag=flag):
+                result = self.run_unified(
+                    "destroy", ["--env", "dev", "mongodb", flag, value]
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"{flag} has been removed", result.stderr)
+                self.assertNotIn(self.BLOCK_MESSAGE, result.stderr)
+                self._assert_no_side_effects()
+
+    def test_retired_flags_are_rejected_in_their_equals_form_too(self):
+        for flag, value in self.RETIRED_FLAGS_WITH_VALUE:
+            with self.subTest(flag=flag):
+                result = self.run_unified(
+                    "destroy", ["--env", "dev", "mongodb", f"{flag}={value}"]
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"{flag} has been removed", result.stderr)
+                self._assert_no_side_effects()
+
+    def test_a_retired_flag_with_no_value_is_still_rejected_not_silently_dropped(self):
+        result = self.run_unified("destroy", ["--env", "dev", "mongodb", "--confirmation-artifact"])
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("--confirmation-artifact requires a value", result.stderr)
+        self.assertIn("--confirmation-artifact has been removed", result.stderr)
         self.assertNotIn(self.BLOCK_MESSAGE, result.stderr)
         self._assert_no_side_effects()
 
-    def test_duplicate_confirmation_artifact_option_is_rejected(self):
-        result = self.run_unified(
-            "destroy",
-            [
-                "--env", "dev", "mongodb",
-                "--confirmation-artifact", "a.json",
-                "--confirmation-artifact", "b.json",
-            ],
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("--confirmation-artifact may be given at most once", result.stderr)
-        self.assertNotIn(self.BLOCK_MESSAGE, result.stderr)
-        self._assert_no_side_effects()
-
-    def test_confirmation_artifact_equals_form_is_rejected(self):
-        result = self.run_unified(
-            "destroy", ["--env", "dev", "mongodb", "--confirmation-artifact=a.json"]
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            "--confirmation-artifact must be given as two separate arguments, "
-            "not --confirmation-artifact=<path>",
-            result.stderr,
-        )
-        self.assertNotIn(self.BLOCK_MESSAGE, result.stderr)
-        self._assert_no_side_effects()
+    # --- retired flags on the other two operations -------------------------
 
     def test_artifact_options_are_rejected_on_provision(self):
         result = self.run_unified(
@@ -861,24 +852,6 @@ class DestroyOptionGrammarTests(OrchestratorFixture):
         result = self.run_unified("verify", ["--env", "dev", "--confirm", "x"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown unified verification argument: --confirm", result.stderr)
-        self._assert_no_side_effects()
-
-    def test_duplicate_confirmation_values_are_rejected(self):
-        value = "destroy:dev:815402439714:mongodb:psmdb/mongodb/oms:delete-cluster-and-pvcs"
-        result = self.run_unified(
-            "destroy",
-            ["--env", "dev", "mongodb", "--confirm", value, "--confirm", value],
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"duplicate --confirm value: {value}", result.stderr)
-        self.assertNotIn(self.BLOCK_MESSAGE, result.stderr)
-        self._assert_no_side_effects()
-
-    def test_confirm_missing_value_is_rejected(self):
-        result = self.run_unified("destroy", ["--env", "dev", "mongodb", "--confirm"])
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("--confirm requires a value", result.stderr)
-        self.assertNotIn(self.BLOCK_MESSAGE, result.stderr)
         self._assert_no_side_effects()
 
     def test_unknown_destroy_option_is_rejected(self):
