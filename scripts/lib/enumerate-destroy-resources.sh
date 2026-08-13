@@ -147,6 +147,47 @@ _enumerate_terraform_state_resources() {
   tf_dir="$(_enumerate_terraform_tf_dir_for_scope "$scope")" || return 2
   [[ -d "$tf_dir" ]] || return 2
 
+  # CROSS-ENVIRONMENT GUARD.
+  #
+  # `terraform show -json` reads whichever backend `.terraform/` was LAST
+  # INITIALIZED to, which has nothing to do with the environment being
+  # destroyed. A working copy previously used against prod leaves
+  # .terraform/terraform.tfstate pointing at the prod bucket, so a
+  # subsequent `destroy.sh --env uat` would enumerate PROD resources and
+  # then ask the operator to type `yes` to destroy UAT -- real resource
+  # ids, wrong account.
+  #
+  # Caught by a live UAT run during #159 review: with a prod-initialized
+  # .terraform/ present, enumeration reached for
+  # "oms/prod/eks-platform.tfstate" while the requested scope was uat. It
+  # only failed safe there because the prod credentials had expired (403).
+  #
+  # So: refuse to trust a backend whose recorded bucket/key does not match
+  # this environment's contract. Status 3 (state unavailable), never a
+  # list from the wrong place.
+  local backend_state="${tf_dir}/.terraform/terraform.tfstate"
+  if [[ -f "$backend_state" ]]; then
+    local recorded_bucket=""
+    recorded_bucket="$("${_ORCHESTRATOR_PYTHON:-python3}" -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as handle:
+        print((json.load(handle).get("backend") or {}).get("config", {}).get("bucket") or "")
+except Exception:
+    print("")
+' "$backend_state" 2>/dev/null)"
+
+    if [[ -n "$recorded_bucket" && -n "${TF_STATE_BUCKET:-}" \
+          && "$recorded_bucket" != "$TF_STATE_BUCKET" ]]; then
+      printf '  Terraform state for %s cannot be read safely from this working copy.\n' "$scope"
+      printf '  The initialized backend points at bucket %s, but %s expects %s.\n' \
+        "$recorded_bucket" "$environment" "$TF_STATE_BUCKET"
+      printf '  Refusing to enumerate: a resource list from another environment is worse\n'
+      printf '  than no list at all. Re-run provisioning for %s to re-initialize.\n' "$environment"
+      return 3
+    fi
+  fi
+
   # Read-only. No bootstrap is ever triggered from a preview path -- a
   # preview must never create or mutate anything (a "preview" that can
   # create an S3 backend bucket is not a preview).
@@ -165,9 +206,25 @@ _enumerate_terraform_state_resources() {
   terraform_status=$?
 
   if [[ "$terraform_status" -ne 0 || -z "$state_json" ]]; then
-    if grep -qiE 'initializ|reconfigure|backend' "$terraform_stderr" 2>/dev/null; then
-      printf '  Terraform state for %s is not readable from this working copy:\n' "$scope"
-      printf '  the backend has not been initialized here (.terraform/ is gitignored).\n'
+    # Conditions where the state is legitimately UNREADABLE rather than
+    # broken. Each is a normal point in a teardown's life, and each must
+    # stay non-fatal or it strands the very teardown it is reporting on:
+    #
+    #   initializ|reconfigure|backend  -- never inited here (.terraform/
+    #                                     is gitignored, so a fresh clone
+    #                                     or new workstation always hits
+    #                                     this)
+    #   NoSuchBucket|does not exist    -- the state bucket itself is gone,
+    #                                     i.e. the environment has already
+    #                                     been torn down. Observed live
+    #                                     against an emptied UAT during
+    #                                     #159 validation.
+    #   NoSuchKey|no state file        -- bucket present, this scope's
+    #                                     state object already removed.
+    if grep -qiE 'initializ|reconfigure|backend|NoSuchBucket|does not exist|NoSuchKey|no state file' \
+         "$terraform_stderr" 2>/dev/null; then
+      printf '  Terraform state for %s is not readable here:\n' "$scope"
+      sed 's/^/    /' "$terraform_stderr" | sed -e 's/\x1b\[[0-9;]*m//g' -e '/^[[:space:]]*$/d' | head -6
       rm -f "$terraform_stderr"
       return 3
     fi

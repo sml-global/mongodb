@@ -15,6 +15,7 @@ split, an unreadable Terraform state and an unmapped scope both returned 1,
 so the only safe reading of "1" was "carry on regardless".
 """
 
+import json
 import shutil
 import subprocess
 import tempfile
@@ -37,7 +38,7 @@ class EnumerationReturnStatusContractTests(unittest.TestCase):
     def tearDown(self):
         self._temporary.cleanup()
 
-    def enumerate(self, scope, environment, extra_path=""):
+    def enumerate(self, scope, environment, extra_path="", extra_env=None):
         script = (
             f"source {LIBRARY}\n"
             f"enumerate_destroy_resources_for_scope {scope} {environment} >/dev/null 2>&1\n"
@@ -46,7 +47,7 @@ class EnumerationReturnStatusContractTests(unittest.TestCase):
         result = subprocess.run(
             ["bash", "-c", script],
             cwd=self.root,
-            env={"PATH": extra_path + "/usr/bin:/bin"},
+            env=dict({"PATH": extra_path + "/usr/bin:/bin"}, **(extra_env or {})),
             text=True,
             capture_output=True,
         )
@@ -102,6 +103,54 @@ class EnumerationReturnStatusContractTests(unittest.TestCase):
 
         self.assertEqual(
             self.enumerate("platform-controllers", "uat", extra_path=f"{failing_bin}:"), 3
+        )
+
+
+class CrossEnvironmentBackendGuardTests(EnumerationReturnStatusContractTests):
+    """A resource list from the WRONG environment is worse than no list.
+
+    `terraform show -json` reads whichever backend `.terraform/` was last
+    initialized to, which is unrelated to the environment being destroyed.
+    Caught by a live UAT run during #159 validation: a working copy
+    previously used against prod still had
+    .terraform/terraform.tfstate pointing at the prod bucket, so
+    `destroy.sh --env uat eks-platform` reached for
+    "oms/prod/eks-platform.tfstate". It failed safe there only because the
+    prod credentials happened to be expired (403). With valid credentials
+    it would have printed PROD resource ids and asked for a `yes` to
+    destroy UAT.
+    """
+
+    def _write_backend(self, scope_dir, bucket):
+        tf_dir = self.root / "platform-prerequisites" / "terraform" / scope_dir
+        (tf_dir / ".terraform").mkdir(parents=True, exist_ok=True)
+        (tf_dir / ".terraform" / "terraform.tfstate").write_text(
+            json.dumps({"backend": {"config": {"bucket": bucket}}}),
+            encoding="utf-8",
+        )
+        return tf_dir
+
+    def test_a_backend_pointing_at_another_environment_returns_3_not_a_list(self):
+        self._write_backend("eks-platform", "sml-oms-prod-tfstate-632674123947")
+        self.assertEqual(
+            self.enumerate(
+                "eks-platform", "uat",
+                extra_env={"TF_STATE_BUCKET": "sml-oms-uat-tfstate-672172129937"},
+            ),
+            3,
+        )
+
+    def test_a_matching_backend_is_not_blocked_by_the_guard(self):
+        # Same bucket => the guard must not fire. terraform is absent from
+        # PATH here, so this still cannot produce a list; the point is only
+        # that it is not rejected as cross-environment.
+        self._write_backend("eks-platform", "sml-oms-uat-tfstate-672172129937")
+        self.assertIn(
+            self.enumerate(
+                "eks-platform", "uat",
+                extra_env={"TF_STATE_BUCKET": "sml-oms-uat-tfstate-672172129937"},
+            ),
+            (1, 3),
         )
 
 
