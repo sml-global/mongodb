@@ -23,12 +23,16 @@ JSON record shapes:
 
 It also owns the append-only lifecycle status sidecars
 (`pre-destroy-guards.<operation-id>.status.<consumed|success|failure>.json`)
-and the 90-day-minimum retention/cleanup helper. It never receives or writes
-a confirmation artifact; `scripts/lib/confirmation-artifact.py` is the sole
-owner of that separate schema. The two files intentionally duplicate the
-small canonical-byte/duplicate-key-rejection helpers rather than importing
-each other, so each remains an independent, self-contained,
-standard-library-only foundation module.
+and the 90-day-minimum retention/cleanup helper.
+
+`confirmation_artifact_sha256` retains its name and its 64-hex-character
+schema, but its meaning moved when the two-pass copy-paste confirmation-
+artifact protocol was replaced by the single-pass interactive typed-yes
+gate: it is now the digest of the exact gate context -- environment,
+account, requested and resolved scopes, operation id, created_at, and the
+enumerated resource listing that was rendered on screen -- so an evidence
+record still proves what the operator was actually shown before they typed
+yes. There is no longer a separate confirmation-artifact file.
 """
 
 import argparse

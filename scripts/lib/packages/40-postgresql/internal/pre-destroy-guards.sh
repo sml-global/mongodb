@@ -103,28 +103,14 @@ postgresql_internal_postgresql_core_pre_destroy_guard() {
         ;;
     esac
 
-    # Protection-state checks
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$pvc_protection_enabled" in
-        enabled|true) ;;
-        *)
-          postgresql_internal_guard_error "postgresql-core: PVC deletion protection is not enabled"
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$backup_enabled" in
-        enabled|true) ;;
-        *)
-          postgresql_internal_guard_error "postgresql-core: backup is not enabled"
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
+    # ---- Protection-state observations ----
+    #
+    # Deliberately NOT preconditions. Requiring protections to still be ON
+    # is what deadlocked a partially-completed teardown in #159: it blocks
+    # the operator from finishing the destroy they already started, while
+    # adding no safety once a human has seen the real enumerated resource
+    # list and typed yes. The values are still read, still hashed into the
+    # guard digest, and still recorded in the durable evidence record.
   fi
 
   # ---- Step 3: derive canonical identity from validated platform contract ----
@@ -214,28 +200,14 @@ postgresql_internal_postgresql_brand_pre_destroy_guard() {
         ;;
     esac
 
-    # Protection-state checks
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$pvc_protection_enabled" in
-        enabled|true) ;;
-        *)
-          postgresql_internal_guard_error "postgresql-brand: PVC deletion protection is not enabled"
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
-
-    if [[ "$guard_status" == "PASS" ]]; then
-      case "$backup_enabled" in
-        enabled|true) ;;
-        *)
-          postgresql_internal_guard_error "postgresql-brand: backup is not enabled"
-          guard_status="FAIL"
-          summary_code="PROTECTION_ABSENT"
-          ;;
-      esac
-    fi
+    # ---- Protection-state observations ----
+    #
+    # Deliberately NOT preconditions. Requiring protections to still be ON
+    # is what deadlocked a partially-completed teardown in #159: it blocks
+    # the operator from finishing the destroy they already started, while
+    # adding no safety once a human has seen the real enumerated resource
+    # list and typed yes. The values are still read, still hashed into the
+    # guard digest, and still recorded in the durable evidence record.
   fi
 
   # ---- Step 3: derive canonical identity from validated platform contract ----
